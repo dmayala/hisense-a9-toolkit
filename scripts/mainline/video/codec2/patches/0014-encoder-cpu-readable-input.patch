@@ -1,0 +1,18 @@
+--- a/components/EncodeInterface.cpp
++++ b/components/EncodeInterface.cpp
+@@ -13,0 +14 @@
++#include <cutils/properties.h>
+@@ -322,0 +324,9 @@
++    // Every input is CPU-mapped, including camera YUV and GPU RGBA conversion.
++    // GraphicBufferSource must request CPU-readable storage before allocation;
++    // This is C2 usage: raw gralloc CPU_READ_OFTEN (3) would add READ_PROTECTED.
++    const bool cpuRead = (caps.codec == VideoCodec::H264 || caps.codec == VideoCodec::HEVC) &&
++            property_get_bool("debug.stagefright.a9.enc_cpu_read", true);
++    const uint64_t inputUsage = static_cast<uint64_t>(BufferUsage::VIDEO_ENCODER) |
++            (cpuRead ? static_cast<uint64_t>(C2MemoryUsage::CPU_READ) : 0);
++    ALOGI("A9_ENC_TRACE op=input_usage phase=end cpu_read=%d usage=%" PRIu64,
++          cpuRead, inputUsage);
+@@ -324,2 +334 @@
+-                         .withConstValue(new C2StreamUsageTuning::input(
+-                                 0u, static_cast<uint64_t>(BufferUsage::VIDEO_ENCODER)))
++                         .withConstValue(new C2StreamUsageTuning::input(0u, inputUsage))

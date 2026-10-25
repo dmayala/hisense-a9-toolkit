@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SM6115 nonsecure video. No performance points asserted before tests.
+     Components are advertised only when Venus reports the matching codec. -->
+<MediaCodecs>
+    <Decoders>
+        <MediaCodec name="c2.v4l2.avc.decoder" type="video/avc" rank="256">
+            <Limit name="size" min="96x96" max="1920x1088" />
+            <Limit name="alignment" value="2x2" />
+            <Limit name="block-size" value="16x16" />
+            <Limit name="block-count" range="1-8160" />
+            <Limit name="blocks-per-second" range="1-244800" />
+            <Limit name="frame-rate" range="1-30" />
+            <Limit name="bitrate" range="1-40000000" />
+            <Limit name="concurrent-instances" max="1" />
+        </MediaCodec>
+        <MediaCodec name="c2.v4l2.hevc.decoder" type="video/hevc" rank="256">
+            <Limit name="size" min="96x96" max="1920x1088" />
+            <Limit name="alignment" value="2x2" />
+            <Limit name="block-size" value="16x16" />
+            <Limit name="block-count" range="1-8160" />
+            <Limit name="blocks-per-second" range="1-244800" />
+            <Limit name="frame-rate" range="1-30" />
+            <Limit name="bitrate" range="1-40000000" />
+            <Limit name="concurrent-instances" max="1" />
+        </MediaCodec>
+    </Decoders>
+    <Encoders>
+        <!-- Quarantined until the Venus encoder hang is fixed. Android 16's
+             Codec2InfoBuilder honours XML rank over the component trait;
+             lower ranks win and software video encoders default to 512.
+             Keep these names available for the explicit row 18 probe. -->
+        <MediaCodec name="c2.v4l2.avc.encoder" type="video/avc" rank="4096">
+            <Limit name="size" min="128x128" max="1920x1088" />
+            <Limit name="alignment" value="2x2" />
+            <Limit name="block-size" value="16x16" />
+            <Limit name="block-count" range="64-8160" />
+            <Limit name="blocks-per-second" range="64-244800" />
+            <Limit name="frame-rate" range="1-120" />
+            <Limit name="bitrate" range="1-60000000" />
+            <Limit name="concurrent-instances" max="1" />
+            <Feature name="bitrate-modes" value="VBR,CBR" />
+        </MediaCodec>
+        <MediaCodec name="c2.v4l2.hevc.encoder" type="video/hevc" rank="4096">
+            <Limit name="size" min="128x128" max="1920x1088" />
+            <Limit name="alignment" value="2x2" />
+            <Limit name="block-size" value="16x16" />
+            <Limit name="block-count" range="64-8160" />
+            <Limit name="blocks-per-second" range="64-244800" />
+            <Limit name="frame-rate" range="1-120" />
+            <Limit name="bitrate" range="1-60000000" />
+            <Limit name="concurrent-instances" max="1" />
+            <Feature name="bitrate-modes" value="VBR,CBR" />
+        </MediaCodec>
+    </Encoders>
+</MediaCodecs>

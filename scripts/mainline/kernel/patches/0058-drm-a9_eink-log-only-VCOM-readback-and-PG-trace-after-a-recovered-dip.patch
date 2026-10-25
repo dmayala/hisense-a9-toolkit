@@ -1,0 +1,346 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: dmayala <dmayala@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 02:47:57 -0700
+Subject: [PATCH 0058] drm/a9_eink: log-only VCOM readback and PG trace after a
+ recovered dip, HV-on rate limit, full_low by this update
+
+Review 89d F6/F6b/F9/item 6.
+- After a recovered wf-end dip (post-unlock path only, lockdep-asserted
+  outside eng_lock, at most 64 per boot): fp9929a_read_vcom(); counters in a
+  new rail_diag line diag_vcom; one log line with the settle reads' PG bit
+  pattern, the vblank count/time at the settle entry and at the recovery
+  (a9x_vblank, read-only), this update's mode, rect and clear, and VCOM; a
+  mismatch is a warning only.
+- Settle limit by a token bucket over HV-on time (pg_settle_rate_n 15 per
+  pg_settle_rate_window_s 600, burst pg_settle_rate_burst 6; diag_rate skip
+  counts the latches it causes); pg_settle_total_max default 30 -> 1000
+  (sanity backstop). The per-session budget of 3 stays.
+- diag_pg_end full_n/full_low classify by THIS update's rect (the engine's),
+  not by the previous update's record.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/a9_eink/a9_eink.h           |  19 +++
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c       | 159 +++++++++++++++++++-
+ drivers/gpu/drm/a9_eink/a9_eink_transport.c |  16 ++
+ 3 files changed, 189 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index 655373058..2290cf322 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -158,6 +158,8 @@ int a9x_attach(struct a9x_transport *t);	/* -EAGAIN: msm not there yet */
+ void a9x_detach(struct a9x_transport *t);
+ int a9x_power_on(struct a9x_transport *t);
+ int a9x_show(struct a9x_transport *t, const u8 *frame);	/* uses byte 0 of each word only */
++/* F6b (review 89d): vblank count and time of the scanout, read-only, no lock; 0 when no vblank reference is held */
++u64 a9x_vblank(struct a9x_transport *t, s64 *at_us);
+ int a9x_show_data(struct a9x_transport *t, const u8 *data);	/* a ring slot (A9R_DATA) */
+ int a9x_power_off(struct a9x_transport *t);
+ int a9x_blank(struct a9x_transport *t);
+@@ -289,6 +291,11 @@ struct a9_eink {
+ 		/* M4 (review 89): per-boot cap and the lows that never reached the settle */
+ 		u64 settle_cap_skip;	/* lows latched because pg_settle_total_max was used up */
+ 		u64 settle_reread_high;	/* wf-end low (0052 read) already high on 0053's re-read: no settle, no budget */
++		u64 settle_rate_skip;	/* F9: lows latched because the HV-on-time token bucket was empty */
++		/* F6 (review 89d): FP9929A VCOM register read back after recovered dips; log only */
++		u64 vcom_reads, vcom_ok, vcom_mismatch, vcom_err;
++		int vcom_last;		/* last value read, -1 none */
++		s64 vcom_last_ms;	/* uptime ms of that read, -1 none */
+ 		/* ring of the last A9_DIAG_PD shutdown traces (healthy baseline) */
+ 		u64 pd_seen_seq, pd_total, pd_missed, pd_skipped_fault;
+ 		unsigned int pd_head;		/* next slot */
+@@ -305,6 +312,18 @@ struct a9_eink {
+ 	 * origin handed over by the wf-end path (0 = use the sample's own read time) */
+ 	unsigned int settle_total;
+ 	s64 settle_first_us;
++	/* F6/F6b (review 89d), worker only: what the last a9_pg_settle saw */
++	bool settle_ok_now;		/* the last call recovered (set at A9_SETTLE_OK, cleared at entry) */
++	u64 settle_trace;		/* bit i = settle read i was good (first 64 reads) */
++	u8 settle_trace_n;		/* reads recorded */
++	u64 vbl_first, vbl_rec;		/* vblank count at the settle entry / at the recovery */
++	s64 vbl_first_us, vbl_rec_us;	/* and their timestamps */
++	unsigned int vcom_reads;	/* F6 reads this boot (A9_VCOM_READS_MAX) */
++	/* F9: token bucket over HV-on time (milli-dips) and the HV-on accounting it refills from */
++	u64 rate_tokens, rate_at_ms;	/* tokens, and the HV-on ms they were last refilled at */
++	bool rate_init;
++	u64 hvon_ms;			/* cumulative HV-on time seen by the worker */
++	ktime_t hvon_since, hvon_mark;	/* the session being counted (on_since) and how far */
+ 	struct notifier_block pm_nb;
+ 	struct task_struct *thread;
+ 
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index 20f702641..023b7d16b 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -163,9 +163,35 @@ MODULE_PARM_DESC(pg_settle_budget, "Recovered PG dips allowed per HV session bef
+  * recovered dips per boot (S4), so the script stops first and this is the
+  * backstop; about 1.5x the 20-dip evidence goal. Not a daily-use tuning.
+  */
+-static unsigned int pg_settle_total_max = 30;
++static unsigned int pg_settle_total_max = 1000;
+ module_param(pg_settle_total_max, uint, 0644);
+-MODULE_PARM_DESC(pg_settle_total_max, "Recovered PG dips allowed per boot (all HV sessions) before every later low latches at once (default 30; 0 = never settle)");
++MODULE_PARM_DESC(pg_settle_total_max, "Recovered PG dips allowed per boot (all HV sessions) before every later low latches at once (default 1000, a sanity backstop; the HV-on rate limit pg_settle_rate_* is the operative limit; 0 = never settle)");
++
++/*
++ * F9 (review 89d): a token bucket over HV-on time instead of relying on the
++ * per-boot cap (a day of normal use would exhaust a cap of 30, after which
++ * every dip latches). The bucket holds pg_settle_rate_burst dips and refills
++ * pg_settle_rate_n dips per pg_settle_rate_window_s seconds of HV-on time; a
++ * recovered dip takes one; a low with less than one token latches as before
++ * (counted in diag_rate skip). The 3-per-HV-session budget stays.
++ * Defaults 15 per 600 s, burst 6: the densest measured window (series b,
++ * 12 recovered dips in 563 s of dense load, 1.28/min, mostly HV-on) needs
++ * 6 + 563 * 15 / 600 = 20 tokens > 12, so the reviewed R0 load does not trip
++ * it; a rail that dips more often than 1.5/min sustained, or more than six in
++ * a burst, latches. Burst 6 = two HV sessions' budget.
++ */
++static unsigned int pg_settle_rate_n = 15;
++module_param(pg_settle_rate_n, uint, 0644);
++MODULE_PARM_DESC(pg_settle_rate_n, "Recovered PG dips refilled per pg_settle_rate_window_s of HV-on time (default 15; 0 = no refill)");
++static unsigned int pg_settle_rate_window_s = 600;
++module_param(pg_settle_rate_window_s, uint, 0644);
++MODULE_PARM_DESC(pg_settle_rate_window_s, "HV-on seconds over which pg_settle_rate_n dips refill (default 600)");
++static unsigned int pg_settle_rate_burst = 6;
++module_param(pg_settle_rate_burst, uint, 0644);
++MODULE_PARM_DESC(pg_settle_rate_burst, "Token bucket size in recovered dips (default 6; 0 = never settle)");
++
++/* F6: at most this many VCOM readbacks per boot (log-only diagnostic) */
++#define A9_VCOM_READS_MAX 64
+ 
+ static unsigned int hv_max_ms = 60000;
+ module_param(hv_max_ms, uint, 0644);
+@@ -1005,6 +1031,11 @@ static ssize_t rail_diag_show(struct device *kdev, struct device_attribute *attr
+ 		d->settle_hist[0], d->settle_hist[1], d->settle_hist[2], d->settle_hist[3],
+ 		d->settle_hist[4], d->settle_max_us,
+ 		READ_ONCE(pg_settle_total_max), d->settle_cap_skip, d->settle_reread_high);
++	n += sysfs_emit_at(buf, n, "diag_rate n %u window_s %u burst %u skip %llu\n",
++		READ_ONCE(pg_settle_rate_n), READ_ONCE(pg_settle_rate_window_s), READ_ONCE(pg_settle_rate_burst),
++		d->settle_rate_skip);
++	n += sysfs_emit_at(buf, n, "diag_vcom reads %llu ok %llu mismatch %llu err %llu last %d last_ms %lld\n",
++		d->vcom_reads, d->vcom_ok, d->vcom_mismatch, d->vcom_err, d->vcom_last, d->vcom_last_ms);
+ 	n += sysfs_emit_at(buf, n, "pd_total %llu pd_missed %llu pd_skipped_fault %llu pd_seen_seq %llu"
+ 		" (newest first)\n",
+ 		d->pd_total, d->pd_missed, d->pd_skipped_fault, d->pd_seen_seq);
+@@ -1371,8 +1402,10 @@ static s64 a9_diag_wf_end(struct a9_eink *a9)
+ 	ret = a9_hv_sample(a9, &st);
+ 	up_ms = ktime_to_ms(ktime_get());
+ 	low = !ret && st.pg_raw == 0;
+-	full = a9->last.rect.x1 == fr.x1 && a9->last.rect.y1 == fr.y1 &&
+-	       a9->last.rect.x2 == fr.x2 && a9->last.rect.y2 == fr.y2;
++	/* review 89d item 6: THIS update's rect (the engine's, prepared under
++	 * eng_lock); a9->last still describes the previous update here */
++	full = a9->e.rect.x1 == fr.x1 && a9->e.rect.y1 == fr.y1 &&
++	       a9->e.rect.x2 == fr.x2 && a9->e.rect.y2 == fr.y2;
+ 	spin_lock_irqsave(&a9->diag.lock, flags);
+ 	if (ret || st.pg_raw < 0) {
+ 		a9->diag.end_err++;
+@@ -1426,6 +1459,60 @@ static s64 a9_diag_wf_end(struct a9_eink *a9)
+  * ends at once if the gate closes, a fault latches, the pipeline goes off or
+  * the FP9929A reports forced/emergency.
+  */
++/*
++ * F9: cumulative HV-on time as the worker observes it (no hook in the power
++ * path). A session is counted from its on_since to "now" while it is on, and
++ * up to its off_since once a later observation finds it ended. Called after
++ * every real waveform and at each settle, so every HV session (each has at
++ * least one waveform) is seen at least once; time not observed is not
++ * credited, which only makes the bucket stricter.
++ */
++static u64 a9_hv_on_ms(struct a9_eink *a9)
++{
++	struct a9x_transport *t = &a9->tx;
++	bool on = READ_ONCE(t->on);
++	ktime_t on_since = READ_ONCE(t->on_since), off_since = READ_ONCE(t->off_since);
++	ktime_t now = ktime_get();
++
++	if (a9->hvon_since && (!on || on_since != a9->hvon_since)) {
++		/* the session counted so far has ended: credit it up to its power-down */
++		if (off_since > a9->hvon_mark)
++			a9->hvon_ms += ktime_ms_delta(off_since, a9->hvon_mark);
++		a9->hvon_since = 0;
++	}
++	if (on) {
++		if (a9->hvon_since != on_since) {
++			a9->hvon_since = on_since;
++			a9->hvon_mark = on_since;
++		}
++		if (now > a9->hvon_mark) {
++			s64 d = ktime_ms_delta(now, a9->hvon_mark);
++
++			a9->hvon_ms += d;
++			a9->hvon_mark = ktime_add_ms(a9->hvon_mark, d);
++		}
++	}
++	return a9->hvon_ms;
++}
++
++/* F9: refill from HV-on time; true when at least one dip's token is available */
++static bool a9_rate_ok(struct a9_eink *a9)
++{
++	u64 cap = (u64)READ_ONCE(pg_settle_rate_burst) * 1000;
++	u64 win = (u64)READ_ONCE(pg_settle_rate_window_s) * 1000;
++	u64 on_ms = a9_hv_on_ms(a9), add = 0;
++
++	if (!a9->rate_init) {
++		a9->rate_init = true;
++		a9->rate_tokens = cap;		/* starts full */
++	} else if (win && on_ms > a9->rate_at_ms) {
++		add = (on_ms - a9->rate_at_ms) * READ_ONCE(pg_settle_rate_n) * 1000 / win;
++	}
++	a9->rate_at_ms = on_ms;
++	a9->rate_tokens = min(a9->rate_tokens + add, cap);
++	return a9->rate_tokens >= 1000;
++}
++
+ static enum a9_settle a9_pg_settle(struct a9_eink *a9, int ret, const struct fp9929a_status *st)
+ {
+ 	unsigned int win = min(READ_ONCE(pg_settle_ms), A9_PG_SETTLE_MAX_MS);
+@@ -1437,6 +1524,10 @@ static enum a9_settle a9_pg_settle(struct a9_eink *a9, int ret, const struct fp9
+ 	enum a9_settle res = A9_SETTLE_TIMEOUT;
+ 	u64 us;
+ 
++	a9->settle_ok_now = false;	/* F6: trace state of this call only */
++	a9->settle_trace = 0;
++	a9->settle_trace_n = 0;
++
+ 	/* M4 (review 89 F2): the window and the reported duration count from the
+ 	 * FIRST low reading (the wf-end path hands over the 0052 read's time; any
+ 	 * other caller's first low reading is this sample), not from entry here. */
+@@ -1464,6 +1555,15 @@ static enum a9_settle a9_pg_settle(struct a9_eink *a9, int ret, const struct fp9
+ 		spin_unlock_irqrestore(&a9->diag.lock, flags);
+ 		return A9_SETTLE_NO;
+ 	}
++	if (!a9_rate_ok(a9)) {		/* F9: HV-on-time token bucket */
++		spin_lock_irqsave(&a9->diag.lock, flags);
++		a9->diag.settle_rate_skip++;
++		spin_unlock_irqrestore(&a9->diag.lock, flags);
++		return A9_SETTLE_NO;
++	}
++	a9->vbl_first = a9x_vblank(&a9->tx, &a9->vbl_first_us);	/* F6b */
++	a9->vbl_rec = 0;
++	a9->vbl_rec_us = 0;
+ 	for (;;) {
+ 		int r2;
+ 
+@@ -1471,6 +1571,10 @@ static enum a9_settle a9_pg_settle(struct a9_eink *a9, int ret, const struct fp9
+ 		if (!READ_ONCE(enable) || a9x_fault_latched() || !READ_ONCE(a9->tx.on))
+ 			break;
+ 		r2 = a9_hv_sample(a9, &s2);
++		if (a9->settle_trace_n < 64) {	/* F6b: the PG pattern of the settle reads */
++			a9->settle_trace |= (u64)a9_hv_good(r2, &s2) << a9->settle_trace_n;
++			a9->settle_trace_n++;
++		}
+ 		if (r2 || !s2.on || s2.forced_off || s2.emergency)
+ 			break;
+ 		if (a9_hv_good(r2, &s2)) {
+@@ -1478,6 +1582,7 @@ static enum a9_settle a9_pg_settle(struct a9_eink *a9, int ret, const struct fp9
+ 				tg = ktime_get();
+ 			if (good >= 2) {
+ 				res = A9_SETTLE_OK;
++				a9->vbl_rec = a9x_vblank(&a9->tx, &a9->vbl_rec_us);	/* F6b */
+ 				break;
+ 			}
+ 		} else {
+@@ -1502,6 +1607,8 @@ static enum a9_settle a9_pg_settle(struct a9_eink *a9, int ret, const struct fp9
+ 	if (res == A9_SETTLE_OK) {
+ 		a9->settle_used++;
+ 		a9->settle_total++;
++		a9->settle_ok_now = true;
++		a9->rate_tokens -= min_t(u64, a9->rate_tokens, 1000);	/* F9: one token per recovered dip */
+ 		dev_warn_ratelimited(a9->dev, "pg-settle: PG low after a waveform came back in %llu us"
+ 			" from the first low reading (recovered dip %u of %u this session, %u of %u this boot;"
+ 			" not a fault)\n",
+@@ -1656,7 +1763,46 @@ static bool a9_pg_wf_end_low(struct a9_eink *a9, s64 first_us, struct fp9929a_st
+  */
+ static bool a9_pg_wf_end(struct a9_eink *a9, const struct fp9929a_status *st)
+ {
+-	return a9_check_rail_sample(a9, true, 0, st) != 0;
++	unsigned long flags;
++	u8 now = 0, prog = 0;
++	int r = -ENODATA;
++
++	if (a9_check_rail_sample(a9, true, 0, st))
++		return true;
++	if (!a9->settle_ok_now)
++		return false;
++	/*
++	 * F6/F6b (review 89d), log only: did the FP9929A keep its VCOM code across
++	 * the dip, which PG pattern did the settle reads see, against which scan
++	 * frames, and which update dipped. Nothing below changes a decision.
++	 */
++	lockdep_assert_not_held(&a9->eng_lock);
++	if (a9->vcom_reads < A9_VCOM_READS_MAX) {
++		a9->vcom_reads++;
++		r = fp9929a_read_vcom(a9->pmic_np, &now, &prog);
++		spin_lock_irqsave(&a9->diag.lock, flags);
++		a9->diag.vcom_reads++;
++		if (r)
++			a9->diag.vcom_err++;
++		else if (now == prog)
++			a9->diag.vcom_ok++;
++		else
++			a9->diag.vcom_mismatch++;
++		if (!r) {
++			a9->diag.vcom_last = now;
++			a9->diag.vcom_last_ms = ktime_to_ms(ktime_get());
++		}
++		spin_unlock_irqrestore(&a9->diag.lock, flags);
++	}
++	dev_info_ratelimited(a9->dev, "pg-settle trace: reads %u bits %016llx, vblank first %llu@%lld rec %llu@%lld,"
++		" update mode %#x rect %d,%d-%d,%d clear %d, VCOM reg 0x%02x (programmed 0x%02x, r %d)\n",
++		a9->settle_trace_n, a9->settle_trace, a9->vbl_first, a9->vbl_first_us,
++		a9->vbl_rec, a9->vbl_rec_us, a9->last.mode, a9->last.rect.x1, a9->last.rect.y1,
++		a9->last.rect.x2, a9->last.rect.y2, a9->last.clear, now, prog, r);
++	if (!r && now != prog)
++		dev_warn(a9->dev, "pg-settle: VCOM register 0x%02x != programmed 0x%02x after a recovered dip"
++			 " (FP9929A reset?); log only, the next power-up rewrites it\n", now, prog);
++	return false;
+ }
+ 
+ /* No-op validation never energizes an off pipeline. */
+@@ -2153,6 +2299,7 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 		ret = a9_run_ring(a9, init_white, bin, hash ? &sc : NULL, &init_shown);
+ 		a9->wf_end = ktime_get();	/* rail-fault diagnosis (0039) */
+ 		a9->wf_ret = ret;
++		a9_hv_on_ms(a9);	/* F9: HV-on time seen after every real waveform */
+ 		pg_first = a9_diag_wf_end(a9);	/* 0052: one recorded, never-acted-on PG read */
+ 		/* 0053 (M4): sample only under eng_lock; settle/latch after the unlock */
+ 		pg_low = !ret && a9_pg_wf_end_low(a9, pg_first, &pg_st);
+@@ -2683,6 +2830,8 @@ static int a9_probe(struct platform_device *pdev)
+ 	spin_lock_init(&a9->diag.lock);
+ 	a9->diag.end_first_low_ms = -1;
+ 	a9->diag.end_last_low_ms = -1;
++	a9->diag.vcom_last = -1;	/* F6: no read yet */
++	a9->diag.vcom_last_ms = -1;
+ 	a9->diag.end_last_pg = -ENODATA;
+ 	init_waitqueue_head(&a9->wq);
+ 	a9->mode = A9_MODE_DEFAULT;
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_transport.c b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+index a741bf0fa..c704f644a 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_transport.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+@@ -720,6 +720,22 @@ int a9x_power_on(struct a9x_transport *t)
+ 	return 0;
+ }
+ 
++/*
++ * F6b (review 89d): the scanout's vblank count and time, for the PG settle
++ * trace. Read-only and lockless: while the transport is on it holds a vblank
++ * reference (vbl_ref), so the count is live; 0 otherwise.
++ */
++u64 a9x_vblank(struct a9x_transport *t, s64 *at_us)
++{
++	ktime_t kt = 0;
++	u64 n = 0;
++
++	if (READ_ONCE(t->vbl_ref))
++		n = drm_crtc_vblank_count_and_time(t->ms->crtc, &kt);
++	*at_us = ktime_to_us(kt);
++	return n;
++}
++
+ int a9x_show(struct a9x_transport *t, const u8 *frame)
+ {
+ 	int back, ret;

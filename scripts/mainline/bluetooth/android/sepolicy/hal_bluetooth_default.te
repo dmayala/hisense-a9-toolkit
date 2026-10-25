@@ -1,0 +1,7 @@
+# Source-tree integration requirements for an enforcing Android vendor.
+# The A6L uses this AOSP domain with the Linux CONTROL and USER channels.
+allow hal_bluetooth_default self:bluetooth_socket create_socket_perms_no_ioctl;
+allow hal_bluetooth_default self:capability net_admin;
+allow hal_bluetooth_default vendor_configs_file:file r_file_perms;
+# Readlink/search of /sys/class/bluetooth/hci0 also needs the actual image's
+# scoped sysfs labels; validate/rebuild enforcing policy on the target tree.

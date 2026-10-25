@@ -1,0 +1,44 @@
+diff --git a/include/libcamera/internal/a9_bionic_child.h b/include/libcamera/internal/a9_bionic_child.h
+new file mode 100644
+--- /dev/null
++++ b/include/libcamera/internal/a9_bionic_child.h
+@@ -0,0 +1,19 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++#pragma once
++
++#ifdef __BIONIC__
++#include <android/fdsan.h>
++#endif
++
++namespace libcamera {
++/* clone3 bypasses bionic fork()'s child hook. Match its pre-exec fdsan
++ * reset before closing inherited FDs. Only the single-threaded child calls
++ * this: the provider's checks and the new exec worker's defaults stay intact.
++ * User/net namespaces, pidfd and the inherited-FD allowlist are unchanged. */
++inline void a9BionicPreExecChild()
++{
++#ifdef __BIONIC__
++	android_fdsan_set_error_level(ANDROID_FDSAN_ERROR_LEVEL_DISABLED);
++#endif
++}
++} /* namespace libcamera */
+diff --git a/src/libcamera/process.cpp b/src/libcamera/process.cpp
+--- a/src/libcamera/process.cpp
++++ b/src/libcamera/process.cpp
+@@ -27,6 +27,8 @@
+ #include <libcamera/base/log.h>
+ #include <libcamera/base/utils.h>
+ 
++#include "libcamera/internal/a9_bionic_child.h"
++
+ /**
+  * \file process.h
+  * \brief Process object
+@@ -173,6 +175,7 @@ int Process::start(const std::string &path,
+ 		LOG(Process, Debug) << this << "[" << childPid << ':' << pidfd << "]"
+ 				    << " forked";
+ 	} else {
++		a9BionicPreExecChild();
+ 		std::vector<int> v(fds.begin(), fds.end());
+ 		v.push_back(STDERR_FILENO);
+ 		closeAllFdsExcept(std::move(v));

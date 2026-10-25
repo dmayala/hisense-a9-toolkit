@@ -1,0 +1,32 @@
+; R8: R7 functional failures. No new permissive domain or physical-store write.
+; OBS confined tqftpserv/diag-router connect QRTR datagram endpoints; the
+; existing domain already creates/binds/sends/receives these sockets.
+(allow a9_wifi_radio self (qipcrtr_socket (connect)))
+; OBS controller's MPSS access checks; no create/add_name/write of new nodes.
+(allow a9_wifi_radio a9ml_sysfs_mpss (dir (write)))
+; OBS strace metadata: pid_max and TIOCGWINSZ on its own output pipe.
+(allow a9_wifi_radio proc_pid_max_202504 (file (read open getattr)))
+(allow a9_wifi_radio self (fifo_file (ioctl)))
+(allowx a9_wifi_radio self (ioctl fifo_file (0x5413)))
+
+; OBS cmd settings from the diagnostic channel inherits its pipe, even when
+; the actual client is a named helper. Target permissiveness does not exempt
+; system_server's access to the inherited descriptor. Existing fd/use retained.
+(allow system_server_202504 a9ml_rootsh (fifo_file (read write getattr)))
+(allow system_app_202504 a9ml_rootsh (fifo_file (read write getattr)))
+; OBS Binder checks the passed shell FD's socket domain with getsockopt;
+; no connect/listen/create or extra data-access permission is added.
+(allow system_server_202504 shell_202504 (unix_stream_socket (getopt)))
+
+; Qualification audit helper: existing auditctl domain, additional vendor
+; entrypoint and AUDIT_GET only. Base already confines AUDIT_SET via nlmsg xperm.
+(type a9ml_audit_exec) (roletype object_r a9ml_audit_exec)
+(typeattributeset file_type (a9ml_audit_exec))
+(typeattributeset exec_type (a9ml_audit_exec))
+(typeattributeset vendor_file_type (a9ml_audit_exec))
+(typetransition init_202504 a9ml_audit_exec process auditctl)
+(allow init_202504 a9ml_audit_exec (file (read open getattr map execute)))
+(allow auditctl a9ml_audit_exec (file (read open getattr map execute entrypoint)))
+(allow auditctl self (netlink_audit_socket (nlmsg_read)))
+(allowx auditctl self (nlmsg netlink_audit_socket (0x3e8 0x3e9)))
+(allow auditctl kmsg_device_202504 (chr_file (write append open getattr)))

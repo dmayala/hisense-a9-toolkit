@@ -1,0 +1,17 @@
+{
+  "boot_log_source": "/home/user/A9-build/mainline/wifi-android/s2-87e-attempt1-evidence/boot.log",
+  "boot_log_sha256": "dc376c1055d1bc86a4d4e18edcd7358fd71aede6c00b05836e8e35199e6bfe06",
+  "stage_excerpt_sha256": "fd39f52f97320ce42e9b24ad53df15de176639cffbea9a9ff3016ac60397c086",
+  "excerpt": "Selected verbatim staging/check lines; no identifiers or credentials retained. No synthetic output in captured excerpt.",
+  "console_source": "/tmp/claude-1000/-home-user-A9/138276b1-32cf-47e9-a654-4be339175015/scratchpad/s2e-run.out",
+  "console_sha256": "685b5c04328f9aed6b345f8c70318ffa548089be6a21b033db6bec9adc508ae7",
+  "vendor_sha256": "2955a1afaa0145c0238346044379c5cdf29a052a55d69e4ba1226c740c51f670",
+  "vendor_symlink_length": 71,
+  "vendor_content_bytes": 300470272,
+  "cause": "87e reuse symlink passed unchanged to stat -c %s in android-boot and lp-write; stat measures the link. 87d used the same bytes at a regular path.",
+  "not_claimed": [
+    "No slot-B boot or session start in 87e",
+    "No captured slot-B audit or network output",
+    "Fake end-to-end rehearsal does not prove hardware Wi-Fi success"
+  ]
+}

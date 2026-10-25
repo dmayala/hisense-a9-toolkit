@@ -1,0 +1,43 @@
+# MAINLINE TEST VENDOR ONLY (slot B, RAM /data).
+# The selected diagnostic system image runs a9-logd-factory as `logd`, which
+# exits 125. A vendor `override` of a system service is ignored across the treble
+# boundary (measured 2026-10-20: init warns, keeps the system definition), so run
+# Lineage's ordinary /system/bin/logd under a vendor service name once the system
+# one has exited. Same sockets; the failed service has already removed its own.
+service vendor.a9ml_logd /system/bin/logd
+    seclabel u:r:logd:s0
+    socket logd stream 0666 logd logd
+    socket logdr seqpacket 0666 logd logd
+    socket logdw dgram+passcred 0222 logd logd
+    file /proc/kmsg r
+    file /dev/kmsg w
+    user logd
+    group logd system package_info readproc
+    capabilities SYSLOG AUDIT_CONTROL
+    priority 10
+    task_profiles ServiceCapacityLow
+    disabled
+    onrestart setprop logd.ready false
+
+on property:init.svc.logd=stopped && property:ro.a9ml.vendor=1
+    start vendor.a9ml_logd
+
+# Start the existing loopback-only root shell as soon as RAM /data is ready.
+# A system_server crash loop may never reach sys.boot_completed. This lets the
+# coordinator read /data/tombstones through the existing root channel without
+# changing tombstone permissions or waiting for a working framework.
+on post-fs-data && property:ro.a9ml.vendor=1
+    start a9ml_rootsh
+
+# Keep boot diagnostics, then avoid synchronous UART backlog flushing at resume.
+# Like the A6L port, change only console_loglevel; /dev/kmsg retains all levels.
+on property:sys.boot_completed=1 && property:ro.a9ml.vendor=1
+    write /proc/sys/kernel/printk 1
+
+# Wrapped-data boot starts adbd before /data and APEX classpath derivation.
+# init has loaded /data/system/environ/classpath by zygote-start. Refresh adbd
+# once at this boot stage so ordinary shell app_process tools (UIAutomator)
+# inherit BOOTCLASSPATH/DEX2OATBOOTCLASSPATH. Keep early diagnostic access until
+# this point; boot_completed and USB-configured deadline disarm remain unchanged.
+on zygote-start && property:ro.a9ml.vendor=1
+    restart adbd

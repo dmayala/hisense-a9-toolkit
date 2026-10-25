@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+#
+# edl — bkerler's edlclient with this handset's defaults filled in.
+#
+# Adds `--loader=$LOADER` and, for storage commands, `--memory=ufs` unless the
+# caller already passed them. Forgetting --memory=ufs is the easy mistake: edl
+# then assumes eMMC/512-byte sectors and reads garbage from a 4096-byte UFS.
+#
+# The binary comes from the system profile (host-config a9-usb.nix installs
+# it, with the udev rule that lets user open 05c6:9008 without root). If it is
+# not on PATH, falls back to `nix shell nixpkgs#edl`.
+#
+# nixpkgs' edl finds libusb itself, so
+# no venv, no gcc-on-PATH, no LD_LIBRARY_PATH.
+#
+# Usage: ./edl <edl args...>      e.g.  ./edl printgpt --lun=4
+#        EDL_RAW=1 ./edl ...      pass arguments through untouched
+#
+set -euo pipefail
+
+# shellcheck source=a9-env.sh
+. "$(dirname "${BASH_SOURCE[0]}")/a9-env.sh"
+
+# Guard against resolving to this wrapper itself if scripts/ is on PATH.
+if command -v edl >/dev/null 2>&1 && [ "$(readlink -f "$(command -v edl)")" != "$(readlink -f "${BASH_SOURCE[0]}")" ]; then
+  BIN=(edl)
+else
+  BIN=(nix shell nixpkgs#edl --command edl)
+fi
+
+# Bare `edl` would sit "Waiting for the device" forever; show usage instead.
+[ "$#" -eq 0 ] && exec "${BIN[@]}" --help
+
+# ---- write guard (2026-10-13, A6L harvest §4). Every EDL write in this repo
+# goes through this wrapper, so the NEVER rules are enforced here, not just in
+# prose. Each class needs an explicit opt-in variable; scripts that are meant
+# to write a class set it themselves, nothing else does.
+#   A9_EDL_ALLOW_NV=1        persist modemst1/2 fsg fsc devinfo diag (rules 6, 13).
+#                            No script sets this. A human decision only.
+#   A9_EDL_ALLOW_BOOTCHAIN=1 xbl abl tz hyp rpm keymaster devcfg qupfw uefisecapp
+#                            imagefv featenabler xbl_config (rule 13). Set by
+#                            sync-slot-a.sh, which copies the phone's own chain.
+#   A9_EDL_ALLOW_RAW=1       ws/wf (raw sectors) and qfil. Set by flash-stock-super.sh,
+#                            restore-factory-gpt-lun4.sh and edl-cli.sh writeraw.
+#   A9_EDL_ALLOW_WHOLE=1     wl (whole-disk write; last resort, rules 1, 7).
+#   A9_EDL_ALLOW_ERASE=1     e/es/ep (erase).
+# EDL_RAW=1 does NOT bypass this; it only skips the --loader/--memory defaults.
+if :; then
+  refuse() { echo "REFUSED by scripts/edl write guard: $1" >&2; echo "  (opt in with $2=1 only if you know why; see CLAUDE.md safety rules)" >&2; exit 3; }
+  case "$1" in
+    w)
+      label="${2:-}"; base="${label%_a}"; base="${base%_b}"
+      case "$base" in
+        persist|modemst1|modemst2|fsg|fsc|devinfo|diag)
+          [ "${A9_EDL_ALLOW_NV:-0}" = 1 ] || refuse "writing '$label' (IMEI/calibration/unlock state/factory record)" A9_EDL_ALLOW_NV ;;
+        xbl|xbl_config|abl|tz|hyp|rpm|keymaster|devcfg|qupfw|uefisecapp|imagefv|featenabler)
+          [ "${A9_EDL_ALLOW_BOOTCHAIN:-0}" = 1 ] || refuse "writing boot-chain partition '$label' (the package chain is OLDER than the phone's)" A9_EDL_ALLOW_BOOTCHAIN ;;
+      esac ;;
+    ws|wf|qfil) [ "${A9_EDL_ALLOW_RAW:-0}" = 1 ] || refuse "'$1' writes raw sectors / a rawprogram set" A9_EDL_ALLOW_RAW ;;
+    wl)         [ "${A9_EDL_ALLOW_WHOLE:-0}" = 1 ] || refuse "'wl' writes the whole disk" A9_EDL_ALLOW_WHOLE ;;
+    e|es|ep)    [ "${A9_EDL_ALLOW_ERASE:-0}" = 1 ] || refuse "'$1' erases" A9_EDL_ALLOW_ERASE ;;
+  esac
+fi
+
+# One USB operation at a time (also reads: edl occupies the 9008 endpoint).
+a9_usb_lock_inherit
+
+args=("$@")
+if [ "${EDL_RAW:-0}" != "1" ] && [ "$#" -gt 0 ]; then
+  have_loader=0; have_memory=0
+  for a in "$@"; do
+    case "$a" in --loader=*) have_loader=1 ;; --memory=*) have_memory=1 ;; esac
+  done
+  # Subcommands whose usage line accepts --memory. Passing it to any other
+  # (reset, xml, nop ...) is a docopt usage error.
+  case "$1" in
+    printgpt|gpt|r|rl|rf|rs|w|wl|wf|ws|e|es|ep|footer|getstorageinfo|getactiveslot|modules|qfil) takes_memory=1 ;;
+    *) takes_memory=0 ;;
+  esac
+  if [ "$have_loader" = 0 ]; then
+    [ -f "$LOADER" ] || { echo "ERROR: loader not found: $LOADER (set LOADER= or A9_DATA=)" >&2; exit 1; }
+    args+=("--loader=$LOADER")
+  fi
+  [ "$takes_memory" = 1 ] && [ "$have_memory" = 0 ] && args+=("--memory=ufs")
+fi
+
+exec "${BIN[@]}" "${args[@]}"

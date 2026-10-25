@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* PROPOSAL ONLY. Include after the board DTS. No charging validation flag. */
+#include <dt-bindings/iio/qcom,spmi-vadc.h>
+
+&pmi632_adc {
+	/* Export voltage, NOT the generic 100k NTC temperature conversion. */
+	channel@2a {
+		reg = <ADC5_BAT_THERM_30K_PU>;
+		qcom,ratiometric;
+		qcom,pre-scaling = <1 1>;
+		qcom,hw-settle-time = <200>;
+		label = "a9_batt_therm_voltage";
+	};
+};
+
+&spmi_bus {
+	pmic@2 {
+		a9_pmi632_power: charger@1000 {
+			compatible = "hisense,hlte556n-pmi632-power";
+			reg = <0x1000>;
+			io-channels = <&pmi632_adc ADC5_BAT_THERM_30K_PU>,
+				      <&pmi632_adc ADC5_USB_IN_V_16>,
+				      <&pmi632_adc ADC5_DIE_TEMP>;
+			io-channel-names = "batt-therm-voltage", "usb-voltage", "die-temp";
+			/* Telemetry copy enables this with CONFIG_CHARGER_PMI632_A9_OBSERVE. */
+			status = "disabled";
+		};
+	};
+};

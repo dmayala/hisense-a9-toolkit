@@ -1,0 +1,77 @@
+From: A9 mainline contributors <a9-mainline@example.invalid>
+Date: Fri, 16 Oct 2026 00:00:00 +0000
+Subject: [PATCH] Bluetooth: qca: require downloaded firmware on the Hisense A9
+
+An explicit A9 Bluetooth build stages a checked golden firmware set and a
+private address. The generic QCA fallback currently turns missing patch/NVM
+errors into success, which can admit an unsupported controller ROM even if
+the separate address gate happens to match. Preserve the original error on
+the A9 serdev WCN39xx path and let the existing bounded power-off/retry cleanup
+run. Successful firmware setup and all other boards retain their behavior.
+
+This opt-in patch belongs only to the Bluetooth build's patch directory.
+It changes no E Ink, shared regulator, or modem storage path.
+
+--- a/drivers/bluetooth/hci_qca.c
++++ b/drivers/bluetooth/hci_qca.c
+@@ -39,6 +39,8 @@
+ 
+ #include "hci_uart.h"
+ #include "btqca.h"
++
++MODULE_INFO(a9_qca_firmware_required, "1");
+ 
+ /* HCI_IBS protocol messages */
+ #define HCI_IBS_SLEEP_IND	0xFE
+@@ -1908,6 +1910,27 @@
+ 	return 0;
+ }
+ 
++/* The A9 image admits a checked, private firmware set. Do not silently
++ * replace an unknown/missing revision with unpatched ROM firmware.
++ */
++static bool qca_a9_requires_firmware(struct hci_uart *hu,
++				   enum qca_btsoc_type soc_type)
++{
++	if (!hu->serdev || !of_machine_is_compatible("hisense,hlte556n"))
++		return false;
++
++	switch (soc_type) {
++	case QCA_WCN3950:
++	case QCA_WCN3988:
++	case QCA_WCN3990:
++	case QCA_WCN3991:
++	case QCA_WCN3998:
++		return true;
++	default:
++		return false;
++	}
++}
++
+ static int qca_setup(struct hci_uart *hu)
+ {
+ 	struct hci_dev *hdev = hu->hdev;
+@@ -2040,14 +2063,15 @@
+ 			if (device_can_wakeup(hu->serdev->ctrl->dev.parent))
+ 				hu->hdev->wakeup = qca_wakeup;
+ 		}
+-	} else if (ret == -ENOENT) {
+-		/* No patch/nvm-config found, run with original fw/config */
+-		set_bit(QCA_ROM_FW, &qca->flags);
+-		ret = 0;
+-	} else if (ret == -EAGAIN) {
+-		/*
+-		 * Userspace firmware loader will return -EAGAIN in case no
+-		 * patch/nvm-config is found, so run with original fw/config.
++	} else if (ret == -ENOENT || ret == -EAGAIN) {
++		if (qca_a9_requires_firmware(hu, soc_type)) {
++			bt_dev_err(hdev, "A9 requires patch and NVM firmware (%d)",
++				   ret);
++			goto out;
++		}
++
++		/* Keep the generic ROM fallback for other boards. Userspace
++		 * firmware loading can report -EAGAIN as well as -ENOENT.
+ 		 */
+ 		set_bit(QCA_ROM_FW, &qca->flags);
+ 		ret = 0;

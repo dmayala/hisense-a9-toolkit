@@ -1,0 +1,160 @@
+--- a/drivers/media/platform/qcom/venus/core.c
++++ b/drivers/media/platform/qcom/venus/core.c
+@@ -104,7 +104,8 @@
+ 	core->state = CORE_UNINIT;
+ 
+ 	for (i = 0; i < max_attempts; i++) {
+-		if (!pm_runtime_active(core->dev_dec) && !pm_runtime_active(core->dev_enc))
++		if ((!core->dev_dec || !pm_runtime_active(core->dev_dec)) &&
++		    (!core->dev_enc || !pm_runtime_active(core->dev_enc)))
+ 			break;
+ 		msleep(10);
+ 	}
+@@ -1170,6 +1171,46 @@
+ 	.min_fw = &min_fw,
+ };
+ 
++/* The A9's OEM-signed 6.0.39 needs the old decoder EOS quirk. Stock
++ * also encodes AVC/HEVC with this payload. Create both SM6115 devices so
++ * the existing encoder protocol can be qualified without replacing firmware.
++ */
++static const struct firmware_version sm6115_min_fw = {
++	.major = 6, .minor = 0, .rev = 39,
++};
++
++static const struct venus_resources sm6115_res = {
++	.bw_tbl_dec = qcm2290_bw_table_dec,
++	.bw_tbl_dec_size = ARRAY_SIZE(qcm2290_bw_table_dec),
++	.bw_tbl_enc = qcm2290_bw_table_enc,
++	.bw_tbl_enc_size = ARRAY_SIZE(qcm2290_bw_table_enc),
++	.clks = { "core", "iface", "bus", "throttle" },
++	.clks_num = 4,
++	.vcodec0_clks = { "vcodec0_core", "vcodec0_bus" },
++	.vcodec_clks_num = 2,
++	.vcodec_pmdomains = (const char *[]) { "venus", "vcodec0" },
++	.vcodec_pmdomains_num = 2,
++	.opp_pmdomain = (const char *[]) { "cx" },
++	.opp_pmdomain_num = 1,
++	.vcodec_num = 1,
++	.hfi_version = HFI_VERSION_4XX,
++	.vpu_version = VPU_VERSION_AR50_LITE,
++	.max_load = 352800,
++	.num_vpp_pipes = 1,
++	.vmem_id = VIDC_RESOURCE_NONE,
++	.vmem_size = 0,
++	.vmem_addr = 0,
++	.cp_start = 0,
++	.cp_size = 0x70800000,
++	.cp_nonpixel_start = 0x1000000,
++	.cp_nonpixel_size = 0x24800000,
++	.dma_mask = 0xe0000000 - 1,
++	.fwname = "qcom/venus-6.0/venus.mbn",
++	.dec_nodename = "video-decoder",
++	.enc_nodename = "video-encoder",
++	.min_fw = &sm6115_min_fw,
++};
++
+ static const struct of_device_id venus_dt_match[] = {
+ 	{ .compatible = "qcom,msm8916-venus", .data = &msm8916_res, },
+ 	{ .compatible = "qcom,msm8939-venus", .data = &msm8939_res, },
+@@ -1180,6 +1221,7 @@
+ 	{ .compatible = "qcom,sdm660-venus", .data = &sdm660_res, },
+ 	{ .compatible = "qcom,sdm845-venus", .data = &sdm845_res, },
+ 	{ .compatible = "qcom,sdm845-venus-v2", .data = &sdm845_res_v2, },
++	{ .compatible = "qcom,sm6115-venus", .data = &sm6115_res, },
+ #if (!IS_ENABLED(CONFIG_VIDEO_QCOM_IRIS))
+ 	{ .compatible = "qcom,sc7280-venus", .data = &sc7280_res, },
+ 	{ .compatible = "qcom,sm8250-venus", .data = &sm8250_res, },
+--- a/drivers/media/platform/qcom/venus/vdec.c
++++ b/drivers/media/platform/qcom/venus/vdec.c
+@@ -579,6 +579,14 @@
+ 		else
+ 			fdata.device_addr = 0xdeadb000;
+ 
++		/* AR50_LITE firmware <= 6.0.53 rejects a zero-length EOS.
++		 * Upstream v7 used a one-byte dummy allocation; firmware does
++		 * not access it. The A9's signed 6.0.39 requires this path.
++		 */
++		if (IS_AR50_LITE(inst->core) &&
++		    is_fw_rev_or_older(inst->core, 6, 0, 53))
++			fdata.alloc_len = 1;
++
+ 		ret = hfi_session_process_buf(inst, &fdata);
+ 
+ 		if (!ret && inst->codec_state == VENUS_DEC_STATE_DECODING) {
+--- a/drivers/media/platform/qcom/venus/venc.c
++++ b/drivers/media/platform/qcom/venus/venc.c
+@@ -551,0 +552,6 @@
++		/* Match the pre-6.0.54 AR50_LITE decoder EOS packet. The firmware
++		 * validates a nonzero allocation length but does not read EOS data.
++		 */
++		if (IS_AR50_LITE(inst->core) &&
++		    is_fw_rev_or_older(inst->core, 6, 0, 53))
++			fdata.alloc_len = 1;
+--- a/drivers/media/platform/qcom/venus/hfi.c
++++ b/drivers/media/platform/qcom/venus/hfi.c
+@@ -141 +141 @@
+-static int wait_session_msg(struct venus_inst *inst)
++static int wait_session_msg(struct venus_inst *inst, const char *command)
+@@ -146 +146,3 @@
+-	if (!ret)
++	if (!ret) {
++		dev_err(inst->core->dev, "%s: response timed out (state %u, codec %#x)\n",
++			command, inst->state, inst->hfi_codec);
+@@ -148,3 +150,7 @@
+-
+-	if (inst->error != HFI_ERR_NONE)
+-		return -EIO;
++	}
++
++	if (inst->error != HFI_ERR_NONE) {
++		dev_err(inst->core->dev, "%s: firmware session error %#x (codec %#x)\n",
++			command, inst->error, inst->hfi_codec);
++		return -EIO;
++	}
+@@ -219 +225 @@
+-	ret = wait_session_msg(inst);
++	ret = wait_session_msg(inst, __func__);
+@@ -261 +267 @@
+-	ret = wait_session_msg(inst);
++	ret = wait_session_msg(inst, __func__);
+@@ -289 +295 @@
+-	ret = wait_session_msg(inst);
++	ret = wait_session_msg(inst, __func__);
+@@ -316 +322 @@
+-	ret = wait_session_msg(inst);
++	ret = wait_session_msg(inst, __func__);
+@@ -354 +360 @@
+-	ret = wait_session_msg(inst);
++	ret = wait_session_msg(inst, __func__);
+@@ -379 +385 @@
+-	ret = wait_session_msg(inst);
++	ret = wait_session_msg(inst, __func__);
+@@ -405 +411 @@
+-	ret = wait_session_msg(inst);
++	ret = wait_session_msg(inst, __func__);
+@@ -430 +436 @@
+-		ret = wait_session_msg(inst);
++		ret = wait_session_msg(inst, __func__);
+@@ -467 +473 @@
+-	ret = wait_session_msg(inst);
++	ret = wait_session_msg(inst, __func__);
+@@ -492 +498 @@
+-	ret = wait_session_msg(inst);
++	ret = wait_session_msg(inst, __func__);
+--- a/drivers/media/platform/qcom/venus/pm_helpers.c
++++ b/drivers/media/platform/qcom/venus/pm_helpers.c
+@@ -576,8 +576,11 @@
+ 		writel(0, ctrl);
+ 
+ 		ret = readl_poll_timeout(stat, val, val & BIT(1), 1, 100);
+-		if (ret)
+-			return ret;
++		if (ret) {
++			dev_err(core->dev, "VCODEC%u legacy power-on timed out (status %#x); check GCC HW_CTRL_TRIGGER\n",
++				coreid, val);
++			return ret;
++		}
+ 	} else {
+ 		writel(1, ctrl);
+ 

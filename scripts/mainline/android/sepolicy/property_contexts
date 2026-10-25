@@ -1,0 +1,11 @@
+# A9 mainline enforcing: appended to the staged vendor_property_contexts.
+vendor.a9ml.            u:object_r:a9ml_prop:s0
+vendor.a9.              u:object_r:a9ml_prop:s0
+ro.a9ml.               u:object_r:a9ml_prop:s0
+ro.vendor.a9ml.        u:object_r:a9ml_prop:s0
+ro.vendor.a9.          u:object_r:a9ml_prop:s0
+persist.a9.            u:object_r:a9ml_prop:s0
+init.svc.vendor.graphics.allocator u:object_r:a9ml_service_status_prop:s0 exact string
+init.svc.vendor.camera-provider-a9 u:object_r:a9ml_service_status_prop:s0 exact string
+init.svc.vendor.a9ml_logd u:object_r:a9ml_service_status_prop:s0 exact string
+init.svc.vendor.a9ml_auditctl u:object_r:a9ml_service_status_prop:s0 exact string

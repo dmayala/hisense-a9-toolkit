@@ -1,0 +1,28 @@
+# Second-stage fstab, /vendor/etc/fstab.hlte556n (DRAFT 2026-10-15).
+# Read by init (mount_all), vold, fs_mgr users and libbootloader_message.
+#
+# NEVER add: userdata, metadata, misc, persist, modemst*, fsg, cache, frp,
+# kdebug*, devinfo, or any /dev/block/by-name path. In particular:
+#  - no /misc entry: libbootloader_message finds misc ONLY through the fstab
+#    (bootable/recovery android-16.0.0_r1 bootloader_message.cpp:50
+#    get_misc_blk_device), so every BCB write (reboot,recovery /
+#    --wipe_data / --prompt_and_wipe_data / boot-fastboot / misctrl /
+#    kcmdlinectrl / mtectrl) fails with "failed to find /misc partition"
+#    instead of writing the shared misc partition.
+#  - no voldmanaged entries: vold never touches the SD card or USB OTG.
+#  - no zram/swap entry.
+#
+# /data = brd RAM disk (kernel: CONFIG_BLK_DEV_RAM=y, cmdline brd.rd_nr=1
+# brd.rd_size=3145728). Fresh ram0 reads as zeros -> fs_mgr's partition_wiped()
+# is true -> "formattable" makes fs_mgr run mke2fs on it, then mounts it.
+# No fileencryption/metadata_encryption: init sets ro.crypto.state=unsupported
+# and queues "nonencrypted" (init/builtins.cpp queue_fs_event). Contents vanish
+# at every reboot (setup wizard runs every boot).
+#
+# /metadata is a tmpfs mounted by the GSI itself (phh 00-fix-metadata.rc,
+# early-init, "mountpoint -q /metadata || mount -t tmpfs ..."), MEASURED in v7.
+#
+#<src>             <mnt_point>  <type>  <mnt_flags>                       <fs_mgr_flags>
+system             /system      ext4    ro,barrier=1                      wait,slotselect,logical,first_stage_mount
+vendor             /vendor      ext4    ro,barrier=1                      wait,slotselect,logical,first_stage_mount
+/dev/block/ram0    /data        ext4    noatime,nosuid,nodev,discard      wait,latemount,formattable

@@ -1,0 +1,81 @@
+From: A9 mainline integration <dmayala@users.noreply.github.com>
+Subject: [PATCH] fscrypt: accept legacy Android wrappedkey_v0 without struct changes
+
+Adapt Android common I3774bcfe0f8c3143e90b5187400a467afbb196eb by Eric Biggers.
+Shipped GSI vold writes __flags at offset 0x4c; upstream rejects that reserved
+word. Normalize it to the upstream flag, retain rejection of unknown/conflicting
+flags, and select the legacy key-identifier KDF context. Pass compatibility as a
+local/static argument rather than adding an android_compat struct member.
+No UAPI, fscrypt-private, block or module structure changes.
+
+--- a/fs/crypto/keyring.c
++++ b/fs/crypto/keyring.c
+@@ -530,7 +530,8 @@
+ 
+ static int add_master_key(struct super_block *sb,
+ 			  struct fscrypt_master_key_secret *secret,
+-			  struct fscrypt_key_specifier *key_spec)
++			  struct fscrypt_key_specifier *key_spec,
++			  bool android_compat)
+ {
+ 	int err;
+ 
+@@ -560,7 +561,9 @@
+ 			 * different key identifiers by deriving their key
+ 			 * identifiers using different KDF contexts.
+ 			 */
+-			keyid_kdf_ctx =
++			/* Android wrappedkey_v0 used the original identifier context. */
++			keyid_kdf_ctx = android_compat ?
++				HKDF_CONTEXT_KEY_IDENTIFIER_FOR_RAW_KEY :
+ 				HKDF_CONTEXT_KEY_IDENTIFIER_FOR_HW_WRAPPED_KEY;
+ 		}
+ 		fscrypt_init_hkdf(&secret->hkdf, kdf_key, kdf_key_size);
+@@ -732,10 +735,26 @@
+ 	struct fscrypt_add_key_arg __user *uarg = _uarg;
+ 	struct fscrypt_add_key_arg arg;
+ 	struct fscrypt_master_key_secret secret;
++	bool android_compat;
+ 	int err;
+ 
+ 	if (copy_from_user(&arg, uarg, sizeof(arg)))
+ 		return -EFAULT;
++
++	/*
++	 * Original Android wrappedkey_v0 puts __flags in the last reserved
++	 * word (offset 0x4c), while upstream flags is at offset 0x30.
++	 * Keep both public and private structs unchanged: normalize locally.
++	 * Equivalent to Android common I3774bcfe0f8c3143e90b5187400a467afbb196eb.
++	 */
++	android_compat = arg.__reserved[6] != 0;
++	if (android_compat) {
++		if (arg.__reserved[6] != FSCRYPT_ADD_KEY_FLAG_HW_WRAPPED ||
++		    arg.flags)
++			return -EINVAL;
++		arg.__reserved[6] = 0;
++		arg.flags = FSCRYPT_ADD_KEY_FLAG_HW_WRAPPED;
++	}
+ 
+ 	if (!valid_key_spec(&arg.key_spec))
+ 		return -EINVAL;
+@@ -778,7 +797,10 @@
+ 			goto out_wipe_secret;
+ 	}
+ 
+-	err = add_master_key(sb, &secret, &arg.key_spec);
++	if (android_compat)
++		pr_info_once("fscrypt: Android wrappedkey_v0 add raw_size=%u key_id_present=%u\n",
++			     arg.raw_size, !!arg.key_id);
++	err = add_master_key(sb, &secret, &arg.key_spec, android_compat);
+ 	if (err)
+ 		goto out_wipe_secret;
+ 
+@@ -839,7 +861,7 @@
+ 	int err;
+ 
+ 	fscrypt_get_test_dummy_secret(&secret);
+-	err = add_master_key(sb, &secret, key_spec);
++	err = add_master_key(sb, &secret, key_spec, false);
+ 	wipe_master_key_secret(&secret);
+ 	return err;
+ }

@@ -1,0 +1,74 @@
+--- a/v4l2/V4L2Decoder.cpp
++++ b/v4l2/V4L2Decoder.cpp
+@@ -364,8 +364,22 @@
+     if (!adjustedFormat) {
+         return false;
+     }
+-    mCodedSize.set(adjustedFormat->fmt.pix_mp.width, adjustedFormat->fmt.pix_mp.height);
+-    mVisibleRect = getVisibleRect(mCodedSize);
++    const auto& capture = adjustedFormat->fmt.pix_mp;
++    const ui::Size pictureSize(capture.width, capture.height);
++    mVisibleRect = getVisibleRect(pictureSize);
++    mCodedSize = pictureSize;
++    // Venus NV12 uses one memory plane with a 128-byte luma/chroma stride.
++    // Gralloc takes pixel dimensions, not V4L2 bytesperline: requesting only
++    // picture width (e.g. 320) gives a smaller/differently laid-out BO than the
++    // driver needs (stride 384). Keep the driver scanline count so the UV plane
++    // starts at bytesperline * height, and keep picture/crop dimensions separate.
++    if (capture.pixelformat == V4L2_PIX_FMT_NV12 && capture.num_planes == 1) {
++        mCodedSize.width = std::max(capture.width, capture.plane_fmt[0].bytesperline);
++    }
++    ALOGI("CAPTURE picture %s, allocation %s, stride %u, sizeimage %u, planes %u",
++          toString(pictureSize).c_str(), toString(mCodedSize).c_str(),
++          capture.plane_fmt[0].bytesperline, capture.plane_fmt[0].sizeimage,
++          capture.num_planes);
+ 
+     ALOGI("Need %zu output buffers. coded size: %s, visible rect: %s", *numOutputBuffers,
+           toString(mCodedSize).c_str(), toString(mVisibleRect).c_str());
+@@ -1150,12 +1164,13 @@
+         return Rect(codedSize.width, codedSize.height);
+     }
+ 
+-    // Venus: the driver reports no crop (rectangle = coded size, e.g. Venus HFI 3xx): use the SPS one.
++    // Venus reports 32-line-aligned CAPTURE height; allow that padding when
++    // falling back from an uncropped driver rectangle to the SPS visible area.
+     if (mBitstreamRect && rect == Rect(codedSize.width, codedSize.height)) {
+         const ui::Size& spsCoded = mBitstreamRect->first;
+         const Rect& spsVisible = mBitstreamRect->second;
+         if (std::abs(spsCoded.width - codedSize.width) < 16 &&
+-            std::abs(spsCoded.height - codedSize.height) < 16 &&
++            std::abs(spsCoded.height - codedSize.height) < 32 &&
+             contains(Rect(codedSize.width, codedSize.height), spsVisible) && !spsVisible.isEmpty()) {
+             ALOGI("Driver reports no crop: using the bitstream visible rect %s",
+                   toString(spsVisible).c_str());
+--- a/v4l2/V4L2Device.cpp
++++ b/v4l2/V4L2Device.cpp
+@@ -22,6 +22,7 @@
+ #include <sys/eventfd.h>
+ #include <sys/ioctl.h>
+ #include <sys/mman.h>
++#include <sys/stat.h>
+ #include <utils/Trace.h>
+ 
+ #include <algorithm>
+@@ -945,7 +946,19 @@
+ 
+     int ret = mDevice->ioctl(VIDIOC_QBUF, v4l2Buffer);
+     if (ret) {
+-        ALOGEQ("VIDIOC_QBUF failed");
++        const int error = errno;
++        ALOGEQ("VIDIOC_QBUF failed: errno %d (%s), memory %u, planes %u", error,
++               strerror(error), v4l2Buffer->memory, v4l2Buffer->length);
++        if (v4l2Buffer->memory == V4L2_MEMORY_DMABUF) {
++            for (size_t i = 0; i < v4l2Buffer->length; ++i) {
++                const auto& plane = v4l2Buffer->m.planes[i];
++                struct stat info = {};
++                const int64_t dmaBufSize = fstat(plane.m.fd, &info) == 0 ? info.st_size : -1;
++                ALOGEQ("plane %zu: length %u, bytesused %u, offset %u, dmabuf size %" PRId64,
++                       i, plane.length, plane.bytesused, plane.data_offset, dmaBufSize);
++            }
++        }
++        errno = error;
+         return false;
+     }
+ 

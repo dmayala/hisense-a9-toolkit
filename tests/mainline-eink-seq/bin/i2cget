@@ -1,0 +1,4 @@
+#!/bin/sh
+. "$SIM_LIB"
+scen i2c-stall && sleep 2.9   # each read stalls just under the sequencer's timeout 3
+case "$5" in 0x02) echo 0x7e;; 0x00) echo 0x1e;; *) echo "Error: Read failed"; exit 1;; esac

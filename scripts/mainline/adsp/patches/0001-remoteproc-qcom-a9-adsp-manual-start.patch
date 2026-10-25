@@ -1,0 +1,75 @@
+From: A9 project <dmayala@users.noreply.github.com>
+Subject: [PATCH] remoteproc: qcom: add opt-in Hisense A9 ADSP manual-start mode
+
+Keep a diagnostic ADSP probe offline independently of firmware availability.
+The default-false read-only module parameter only applies to the A9 root DT
+and the SM6115 ADSP PAS node. Disable automatic boot, recovery and coredumps
+before IRQ setup or remoteproc publication. Reject unexpected PAS/early-boot
+descriptors instead of silently admitting an attach or another subsystem.
+
+Other boards and PAS nodes retain their descriptor defaults. Explicit
+remoteproc start/recover interfaces remain privileged operations; this is
+not an access-control policy or a once-per-boot runtime harness.
+
+Not wired into the default kernel series. Independent review required.
+---
+diff --git a/drivers/remoteproc/qcom_q6v5_pas.c b/drivers/remoteproc/qcom_q6v5_pas.c
+--- a/drivers/remoteproc/qcom_q6v5_pas.c
++++ b/drivers/remoteproc/qcom_q6v5_pas.c
+@@ -36,6 +36,12 @@
+ 
+ #define MAX_ASSIGN_COUNT 3
+ 
++/* Diagnostic only: consumed at probe, never writable after module load. */
++static bool a9_adsp_manual_start;
++module_param(a9_adsp_manual_start, bool, 0400);
++MODULE_PARM_DESC(a9_adsp_manual_start,
++	"Disable ADSP auto-boot/recovery/coredump on Hisense A9 for manual bring-up");
++
+ struct qcom_pas_data {
+ 	int crash_reason_smem;
+ 	const char *firmware_name;
+@@ -62,6 +68,33 @@
+ 	int region_assign_vmid;
+ 	bool early_boot;
+ };
++
++/*
++ * Set containment before IRQ setup and rproc_add() publishes the device.
++ * This suppresses probe auto-boot; explicit rproc_boot() remains available.
++ */
++static int qcom_pas_a9_apply_manual_start(struct device *dev,
++					const struct qcom_pas_data *desc,
++					struct rproc *rproc)
++{
++	if (!a9_adsp_manual_start ||
++	    !of_machine_is_compatible("hisense,hlte556n") ||
++	    !of_device_is_compatible(dev->of_node, "qcom,sm6115-adsp-pas"))
++		return 0;
++
++	/* Do not accidentally admit an attach/other-PAS descriptor in D0. */
++	if (desc->pas_id != 1 || desc->early_boot) {
++		dev_err(dev, "A9 ADSP manual-start: unsupported PAS/early-boot descriptor\n");
++		return -EINVAL;
++	}
++
++	rproc->auto_boot = false;
++	rproc->recovery_disabled = true;
++	rproc->dump_conf = RPROC_COREDUMP_DISABLED;
++	dev_info(dev, "A9 ADSP manual-start: auto_boot=0 recovery=disabled coredump=disabled\n");
++
++	return 0;
++}
+ 
+ struct qcom_pas {
+ 	struct device *dev;
+@@ -833,6 +866,9 @@
+ 
+ 	rproc->has_iommu = of_property_present(pdev->dev.of_node, "iommus");
+ 	rproc->auto_boot = desc->auto_boot;
++	ret = qcom_pas_a9_apply_manual_start(&pdev->dev, desc, rproc);
++	if (ret)
++		return ret;
+ 	rproc_coredump_set_elf_info(rproc, ELFCLASS32, EM_NONE);
+ 
+ 	pas = rproc->priv;

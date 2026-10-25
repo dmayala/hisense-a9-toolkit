@@ -1,0 +1,12 @@
+{
+  "origin": "LineageOS23.2 GSI platform policy, policy version202504; cached platform inputs used by plain-deadline and integrated6r3/8",
+  "normalization": "typepermissive declarations removed, matching enforcing compilation",
+  "files": {
+    "0-plat_sepolicy.cil": "e245c119429e2f78b98a704f808233856ff61719d7ef606bf5fb895e780f44e9",
+    "1-202504.cil": "a98f4b8479aa64e7d2b5a4146e6edc89fc50d62c80d37200258ff719dfced03b",
+    "2-system_ext_sepolicy.cil": "53a080d8a96745fc35b9ecf77bb62dbb1c4d7872cf61ba2acaec789af43bc1ff",
+    "3-202504.cil": "c4ebb19d64e9088bf46243e1fbdfb1962ed5a22eeca61fefec2d0f4c897e312a",
+    "4-product_sepolicy.cil": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+    "5-202504.cil": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+  }
+}

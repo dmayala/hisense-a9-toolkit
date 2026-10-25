@@ -1,0 +1,31 @@
+From 6c4ee1c3ec9bb5b72067089dbcea1f85c945c850 Mon Sep 17 00:00:00 2001
+From: A9-project <dmayala@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 21:25:53 -0700
+Subject: [PATCH 13/13] drm/msm/dpu: underflow colour 0 for the Hisense A9 E
+ Ink transport
+
+Vendor tree only. The E Ink transport carries 2-bit drive codes in the blue
+byte of each pixel; an underflow filled with 0xff drives code 3 on every
+pixel of the affected line. 0 is no drive.
+---
+ drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
+index ba810f26e..1e4f67738 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
+@@ -86,7 +86,12 @@ static void drm_mode_to_intf_timing_params(
+ 	timing->hsync_polarity = (mode->flags & DRM_MODE_FLAG_NHSYNC) ? 1 : 0;
+ 	timing->vsync_polarity = (mode->flags & DRM_MODE_FLAG_NVSYNC) ? 1 : 0;
+ 	timing->border_clr = 0;
+-	timing->underflow_clr = 0xff;
++	/*
++	 * Hisense A9 vendor tree: 0, not 0xff. The E Ink transport carries
++	 * 2-bit drive codes in the blue byte, so an underflow filled with 0xff
++	 * would drive code 3 on every pixel of the line; 0 means "no drive".
++	 */
++	timing->underflow_clr = 0;
+ 	timing->hsync_skew = mode->hskew;
+ 
+ 	/* DSI controller cannot handle active-low sync signals. */

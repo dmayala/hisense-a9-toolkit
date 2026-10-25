@@ -1,0 +1,133 @@
+From 19ad4775a610512ec3281815c5f16cb15e90016c Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 10:36:34 -0700
+Subject: [PATCH] regulator: fp9929a, drm/a9_eink: review 8: emergency PWRUP 50
+ ms after the last VCOM-EN, progress-only deadline, valid fresh temperatures
+
+- fp9929a_emerg_work: always wait 50 ms after its own VCOM-EN-low write
+  (under the gate lock, so no power-up can raise VCOM-EN in between)
+  before dropping PWRUP; no timestamp comparison, which a repeated
+  emergency_off() could overwrite (reproduced: PWRUP 8.9 ms after the last
+  VCOM-EN fall). PWRUP now falls ~100 ms after the first call.
+- a9_eink frame-progress interlock: a drive commit arms the deadline only
+  if it is not armed (it may latch and block) and never postpones it; a
+  successful drive commit restarts it from now (confirmed progress); a
+  successful null commit cancels it; a failed commit leaves it. A drive
+  frame now stays on the panel at most one deadline (3 periods) after the
+  last commit that returned, or after the start of the first drive commit.
+- a9_eink admission: a real waveform update needs a valid TMST sampled at
+  THIS power-up and a thermistor reading; temp_fallback never admits drive
+  frames. The pre-power-up bin pre-filter uses the previous TMST only if
+  there is one and can only refuse.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c       | 28 ++++++++++++++++++---
+ drivers/gpu/drm/a9_eink/a9_eink_transport.c | 13 +++++++++-
+ drivers/regulator/fp9929a.c                 |  9 +++++--
+ 3 files changed, 43 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index b028110a6..ca304693a 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -677,15 +677,22 @@ static void a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 	}
+ 	if (!dry && !zt) {
+ 		/*
+-		 * Bin admission before any power-up: t1 is the PREVIOUS power-up's
+-		 * TMST sample (temp_fallback if none), t2 the fresh thermistor.
+-		 * The fresh TMST is checked again after power-up, before a frame.
++		 * Bin pre-filter before any power-up, never a fallback (review 8):
++		 * the thermistor must read; t1 is the PREVIOUS power-up's TMST if
++		 * there is one (no temp_fallback), else the pre-filter is skipped.
++		 * It can only refuse. The real admission is after power-up, with
++		 * this power-up's valid TMST, before any frame.
+ 		 */
+ 		a9_temps(a9, &t1, &t2);
++		if (a9->last.t2_raw == INT_MIN) {
++			dev_err(a9->dev, "no thermistor reading: update refused (no fallback)\n");
++			a9->aborts++;
++			return;
++		}
+ 		mutex_lock(&a9->eng_lock);
+ 		bin = a9t_temp_bin(&a9->e.st, t1, t2);
+ 		mutex_unlock(&a9->eng_lock);
+-		if (!a9_bin_admitted(bin, &lo, &hi)) {
++		if (a9->last.t1_raw != INT_MIN && !a9_bin_admitted(bin, &lo, &hi)) {
+ 			dev_err(a9->dev, "bin %d outside [%d,%d] before power-up (t1 %d from the previous power-up, t2 %d): update refused\n",
+ 				bin, lo, hi, t1, t2);
+ 			a9->aborts++;
+@@ -710,6 +717,19 @@ static void a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 			a9_power_off(a9);
+ 		return;
+ 	}
++	/*
++	 * Review 8: a real waveform update needs VALID samples from THIS
++	 * power-up (fp9929a clears have_temp at every power-up start) and the
++	 * thermistor; temp_fallback is never used to admit drive frames.
++	 */
++	if (!dry && !zt && (a9->last.t1_raw == INT_MIN || a9->last.t2_raw == INT_MIN)) {
++		dev_err(a9->dev, "no valid fresh temperature (FP9929A %s, thermistor %s): update refused\n",
++			a9->last.t1_raw == INT_MIN ? "missing" : "ok",
++			a9->last.t2_raw == INT_MIN ? "missing" : "ok");
++		a9->aborts++;
++		a9_power_off(a9);
++		return;
++	}
+ 
+ 	if (!dry && zt) {
+ 		unsigned int i, n = min(zt, 850U);	/* <= 10 s at 85 Hz */
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_transport.c b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+index f436203c0..a1e9a9e52 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_transport.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+@@ -349,7 +349,16 @@ static int a9x_commit_locked(struct a9x_transport *t, int idx, bool null)
+ 	mutex_lock(&t->client.modeset_mutex);
+ 	t->ms->fb = t->buf[idx]->fb;
+ 	mutex_unlock(&t->client.modeset_mutex);
+-	if (!null)
++	/*
++	 * Review 8: the deadline only moves on CONFIRMED progress. A drive
++	 * commit arms the interlock if it is not armed (it may latch and then
++	 * block); it never postpones an armed deadline. A successful drive
++	 * commit restarts it from now; a successful null commit cancels it;
++	 * a failed commit leaves the running deadline alone. So no drive frame
++	 * stays on the panel longer than one deadline after the last commit
++	 * that returned, or after the start of the first drive commit.
++	 */
++	if (!null && !t->stall_armed)
+ 		a9x_stall_arm(t);
+ 	ret = drm_client_modeset_commit(&t->client);
+ 	if (ret) {
+@@ -358,6 +367,8 @@ static int a9x_commit_locked(struct a9x_transport *t, int idx, bool null)
+ 	}
+ 	if (null)
+ 		a9x_stall_disarm(t);
++	else
++		a9x_stall_arm(t);	/* confirmed progress: deadline from now */
+ 	now = ktime_get();
+ 	crtc = t->ms->crtc;
+ 	if (t->on && t->vbl_ref) {
+diff --git a/drivers/regulator/fp9929a.c b/drivers/regulator/fp9929a.c
+index c2f7c7e06..9d9a6becc 100644
+--- a/drivers/regulator/fp9929a.c
++++ b/drivers/regulator/fp9929a.c
+@@ -863,10 +863,15 @@ static void fp9929a_emerg_work(struct work_struct *work)
+ 	struct fp9929a *fp = container_of(to_delayed_work(work), struct fp9929a,
+ 					  emerg_work);
+ 
++	/*
++	 * Review 8: no timestamp comparison (a repeated emergency_off() could
++	 * overwrite it). Under the gate lock no power-up can raise VCOM-EN
++	 * (it raises pins only while holding it), so this write is the last
++	 * VCOM-EN edge until PWRUP falls; the stock 50 ms always follows it.
++	 */
+ 	mutex_lock(&fp9929a_gate_lock);
+ 	gpiod_set_value_cansleep(fp->vcom_en, 0);
+-	if (READ_ONCE(fp->vcom_on_at) >= READ_ONCE(fp->emerg_at))
+-		msleep(50);
++	msleep(50);
+ 	gpiod_set_value_cansleep(fp->pwrup, 0);
+ 	fp9929a_mark_off(fp);
+ 	WRITE_ONCE(fp->on, false);

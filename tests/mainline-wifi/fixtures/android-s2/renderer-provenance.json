@@ -1,0 +1,19 @@
+{
+  "format": "  %17s  %9d  %18s   %7s    %-32s  %s\\n",
+  "framework_wifi_sha256": "b543262808907844bf72b992e540479853fa87696edc0894be0dfdae45ecd716",
+  "kind": "synthetic-rows-from-real-shipped-renderer",
+  "limit": "S1 retained counts only; these tests are not a captured-scan replay.",
+  "method": "android.net.wifi.util.ScanResultUtil.dumpScanResults",
+  "real_scan_rows_available": false,
+  "rssi_columns": {
+    "no_radio_chains": 18,
+    "note": "printf widths are minimums; chain RSSI below -99 widens columns. Parser recognises the numeric/chain grammar.",
+    "one_radio_chain": 19,
+    "two_radio_chains": 18
+  },
+  "status_methods": [
+    "WifiShellCommand.printStatus",
+    "WifiShellCommand.printWifiInfo",
+    "WifiInfo.toString"
+  ]
+}

@@ -1,0 +1,45 @@
+#!/bin/sh
+# a9-eink: the explicit initramfs steps for the E Ink display stack.
+#   a9-eink status   what is loaded, FP9929A state, gates
+#   a9-eink load core    E1: dispcc-sm6115 + msm only (MDSS, DPU, DSI host/PHY).
+#                        No bridge: nothing on the E Ink I2C bus, no GPIO moves.
+#   a9-eink load bridge  E2b: core + panel + tc358767. The bridge probe switches
+#                        VDDC (GPIO 31), pulses reset (GPIO 26) and reads its ID
+#                        over I2C. HV stays off: the panel driver refuses prepare.
+#   (a plain "load" is refused: loading tc358767 without dispcc/msm makes it
+#    toggle VDDC/reset on every deferred-probe retry, docs/mainline-eink-steps.md G2)
+#   a9-eink allow    open BOTH gates (panel driver + FP9929A). From then on a
+#                    KMS client (the TCON) enabling the CRTC powers the panel.
+#   a9-eink deny     close both gates again (does not power anything off; a
+#                    running CRTC keeps its power until it is disabled)
+# Opening the gates is the step that can damage the panel if the sequence or
+# VCOM is wrong (INFERRED). Do it only for a planned display test.
+P=/sys/module/panel_hisense_hlte556n_eink/parameters/enable
+F=/sys/module/fp9929a/parameters/allow_power_on
+case "${1:-status}" in
+	status)
+		echo "panel gate:  $(cat $P 2>/dev/null || echo 'module not loaded')"
+		echo "fp9929a gate: $(cat $F 2>/dev/null || echo 'driver missing')"
+		lsmod 2>/dev/null | grep -e msm -e tc358767 -e hlte556n -e dispcc
+		dmesg | grep -i -e fp9929a -e tc358767 -e hlte556n | tail -n 20
+		;;
+	load)
+		case "${2:-}" in
+		core) mods="dispcc-sm6115 msm" ;;
+		bridge) mods="dispcc-sm6115 msm panel-hisense-hlte556n-eink tc358767" ;;
+		*) echo "a9-eink load core|bridge (plain 'load' refused)"; exit 2 ;;
+		esac
+		for m in $mods; do
+			if modprobe "$m"; then echo "loaded $m"; echo "a9-eink: loaded $m" >/dev/kmsg
+			else echo "FAILED $m"; echo "a9-eink: FAILED $m" >/dev/kmsg; exit 1; fi
+		done
+		;;
+	allow)
+		[ -w "$P" ] || modprobe panel-hisense-hlte556n-eink
+		echo 1 > "$P" && echo 1 > "$F" && echo "gates OPEN"
+		;;
+	deny)
+		echo 0 > "$P" 2>/dev/null; echo 0 > "$F" 2>/dev/null; echo "gates closed"
+		;;
+	*) sed -n '2,17p' "$0"; exit 2 ;;
+esac

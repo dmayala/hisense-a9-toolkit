@@ -1,0 +1,59 @@
+From 069a3196e317e6daca49bde03d1efde0f36a9d0c Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 22:40:36 -0700
+Subject: [PATCH 0044] thermal: qcom: tsens: optionally refuse unvalidated
+ samples (Hisense A9)
+
+With CONFIG_QCOM_TSENS_REQUIRE_VALID=y, tsens_read_temp() returns -EAGAIN
+when none of its three status reads has VALID set, instead of returning
+two matching unvalidated samples (which are converted and acted upon,
+including critical trips). The thermal core re-reads after 250 ms.
+Default n = unchanged. Review 24 (sensors), Hisense A9 bring-up.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/thermal/qcom/Kconfig | 11 +++++++++++
+ drivers/thermal/qcom/tsens.c |  4 ++++
+ 2 files changed, 15 insertions(+)
+
+diff --git a/drivers/thermal/qcom/Kconfig b/drivers/thermal/qcom/Kconfig
+index a6bb01082..030f6f908 100644
+--- a/drivers/thermal/qcom/Kconfig
++++ b/drivers/thermal/qcom/Kconfig
+@@ -10,6 +10,17 @@ config QCOM_TSENS
+ 	  Also able to set threshold temperature for both hot and cold and update
+ 	  when a threshold is reached.
+ 
++config QCOM_TSENS_REQUIRE_VALID
++	bool "TSENS: no temperature without a VALID-marked sample"
++	depends on QCOM_TSENS
++	default n
++	help
++	  When none of the three status reads of a TSENS v2 sensor has the
++	  VALID bit set, the driver normally falls back to two matching
++	  (unvalidated) samples. Say Y to return -EAGAIN instead, so the
++	  thermal core re-reads the sensor after 250 ms rather than acting
++	  on an unvalidated value (which can be a critical one).
++
+ config QCOM_SPMI_ADC_TM5
+ 	tristate "Qualcomm SPMI PMIC Thermal Monitor ADC5"
+ 	depends on OF && SPMI && IIO
+diff --git a/drivers/thermal/qcom/tsens.c b/drivers/thermal/qcom/tsens.c
+index 6e3714eca..a3d094697 100644
+--- a/drivers/thermal/qcom/tsens.c
++++ b/drivers/thermal/qcom/tsens.c
+@@ -361,7 +361,11 @@ static int tsens_read_temp(const struct tsens_sensor *s, int field, int *temp)
+ 	 * first and second samples match, the second value is returned;
+ 	 * otherwise, if the second and third samples match, the third
+ 	 * value is returned.
++	 * CONFIG_QCOM_TSENS_REQUIRE_VALID: never return an unvalidated sample;
++	 * the thermal core re-reads after -EAGAIN.
+ 	 */
++	if (IS_ENABLED(CONFIG_QCOM_TSENS_REQUIRE_VALID))
++		return -EAGAIN;
+ 	if (temp_val[0] == temp_val[1])
+ 		*temp = temp_val[1];
+ 	else if (temp_val[1] == temp_val[2])
+-- 
+2.51.0
+

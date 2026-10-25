@@ -1,0 +1,8 @@
+{
+  "_comment": "Written by scripts/a9-devices.sh into local/device.json (gitignored). You normally never edit it. Never commit the real file.",
+  "default": "SERIAL_OF_YOUR_MAIN_A9",
+  "devices": {
+    "SERIAL_OF_YOUR_MAIN_A9": {"name": "a9-1", "first_seen": "2026-10-14T00:00:00Z", "last_seen": "2026-10-14T00:00:00Z", "last_mode": "device"},
+    "SERIAL_OF_A_SECOND_A9": {"name": "test-phone", "first_seen": "2026-10-14T00:00:00Z", "last_seen": "2026-10-14T00:00:00Z", "last_mode": "fastboot"}
+  }
+}

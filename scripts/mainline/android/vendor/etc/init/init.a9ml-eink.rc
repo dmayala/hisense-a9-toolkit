@@ -1,0 +1,70 @@
+# /vendor/etc/init/init.a9ml-eink.rc -- phase 2: Android on the a9_eink KMS card.
+# INERT unless the boot image sets androidboot.a9ml.eink=1 (mkramdisk.sh --eink)
+# AND the vendor carries the E Ink modules (build-vendor.sh --eink).
+# Setup only loads the modules and points drm_hwcomposer at the a9_eink card;
+# every panel gate stays CLOSED. Gates open only on a property set by the test
+# script (android-boot.sh --eink --open-gates), never by this file.
+# docs/mainline-android.md section 9.
+
+on early-boot && property:ro.boot.a9ml.eink=1
+    # before `class_start hal` (on boot) starts vendor.hwcomposer-3; the
+    # composer is started HERE, after setup pointed it at the a9_eink card
+    # (init.hlte556n.rc starts it only for androidboot.a9ml.eink=0)
+    exec_start a9ml_eink_setup
+    # diagnosis (run 6: every composer commit failed 'active without enabled'
+    # and the first failing commit had rotated out of the logs): DRM atomic
+    # debug (0x10) to kmsg from just before the composer starts, switched off
+    # again by a9ml_drmdebug_off after a9ml.drmdebug_s (default 60 s)
+    write /sys/module/drm/parameters/debug 0x10
+    start a9ml_drmdebug_off
+    start vendor.hwcomposer-3
+
+on property:vendor.a9ml.eink.gate=open && property:ro.boot.a9ml.eink=1 && property:vendor.a9ml.eink.ready=1
+    start a9ml_eink_open
+
+on property:vendor.a9ml.eink.gate=closed
+    start a9ml_eink_close
+
+on property:vendor.a9ml.eink.watch=1
+    setprop vendor.a9ml.eink.watch 0
+    start a9ml_eink_watch
+
+on shutdown
+    # belt and braces: the driver drains and powers down on shutdown itself
+    write /sys/module/a9_eink/parameters/enable 0
+
+service a9ml_eink_setup /system/bin/sh /vendor/bin/a9ml-eink.sh setup
+    user root
+    group root system graphics
+    seclabel u:r:phhsu_daemon:s0
+    oneshot
+    disabled
+    timeout_period 60
+
+service a9ml_eink_open /system/bin/sh /vendor/bin/a9ml-eink.sh open
+    user root
+    group root system
+    seclabel u:r:phhsu_daemon:s0
+    oneshot
+    disabled
+
+service a9ml_eink_watch /system/bin/sh /vendor/bin/a9ml-eink.sh watch
+    user root
+    group root system
+    seclabel u:r:phhsu_daemon:s0
+    oneshot
+    disabled
+
+service a9ml_eink_close /system/bin/sh /vendor/bin/a9ml-eink.sh close
+    user root
+    group root system
+    seclabel u:r:phhsu_daemon:s0
+    oneshot
+    disabled
+
+service a9ml_drmdebug_off /system/bin/sh /vendor/bin/a9ml-eink.sh drmdebug-off
+    user root
+    group root
+    seclabel u:r:phhsu_daemon:s0
+    oneshot
+    disabled

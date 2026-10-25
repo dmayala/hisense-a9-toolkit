@@ -1,0 +1,33 @@
+#!/system/bin/sh
+set -eu
+setprop vendor.a9.video.ready 0
+/vendor/bin/a9-video-load
+decoder=0
+encoder=0
+attempt=0
+while [ "$attempt" -lt 50 ]; do
+    for node in /sys/class/video4linux/video*; do
+        [ -r "$node/name" ] && [ -c "/dev/${node##*/}" ] || continue
+        case "$(cat "$node/name")" in
+            *venus*decoder*)
+                chown media:media "/dev/${node##*/}"
+                chmod 0660 "/dev/${node##*/}"
+                decoder=1
+                ;;
+            *venus*encoder*)
+                chown media:media "/dev/${node##*/}"
+                chmod 0660 "/dev/${node##*/}"
+                encoder=1
+                ;;
+        esac
+    done
+    [ "$decoder" = 1 ] && [ "$encoder" = 1 ] && break
+    attempt=$((attempt + 1))
+    sleep 0.1
+done
+if [ "$decoder" = 0 ]; then
+    echo 'A9_VIDEO: no Venus decoder; Codec2 service remains stopped' >&2
+    exit 1
+fi
+echo "A9_VIDEO: decoder=$decoder encoder=$encoder" >&2
+setprop vendor.a9.video.ready 1

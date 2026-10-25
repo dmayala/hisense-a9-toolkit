@@ -1,0 +1,591 @@
+From c20c1c82d9315f0479187334f8a3d6edf2ac6196 Mon Sep 17 00:00:00 2001
+From: dmayala <dmayala@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 00:40:46 +0000
+Subject: [PATCH 0036] drm/a9_eink: use guarded blocking primary flips and
+ profile commit phases
+
+Replace the full client modeset takeover on every steady frame with a
+primary-FB-only validated blocking atomic commit. Keep initial enable and
+DPMS on the existing modeset path, and preserve all waits and safety caps.
+
+Require exclusive primary scanout under CRTC/plane locks, the exact transport
+mode, fixed connector/encoder routing, zero-offset 448x829 unrotated geometry
+and either owned FB. Refuse foreign state instead of changing it under HV.
+Any failed powered neutral commit removes HV after releasing DRM locks,
+before another DRM attempt or joining the producer; never record it as blank.
+
+Own consumer FIFO50 and producer OTHER/-10 policy in kernel. Reject a late
+successful drive return if the hard fault already latched. Add opt-in
+elapsed phase accounting in DRM/MSM; unprofiled callers remain unchanged.
+
+The companion Android debug-off init/gate fix and host regressions live in
+the project checkout. Rebuild matching DRM core, msm and a9_eink artifacts:
+this patch changes the internal atomic-commit structure.
+
+Co-Authored-By: GPT-6.1 Sol (Codex)
+---
+ drivers/gpu/drm/a9_eink/a9_eink.h           |   7 ++
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c       |  54 +++++++++--
+ drivers/gpu/drm/a9_eink/a9_eink_transport.c | 145 +++++++++++++++++++++++++++-
+ drivers/gpu/drm/drm_atomic.c                |   3 +
+ drivers/gpu/drm/drm_atomic_helper.c         |   8 ++
+ drivers/gpu/drm/msm/msm_atomic.c            |   6 ++
+ include/drm/drm_atomic.h                    |  10 ++
+ include/drm/drm_atomic_profile.h            |  62 ++++++++++++
+ include/drm/drm_auth.h                      |   4 +
+ 9 files changed, 288 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index 1ef87e67acf60c662b4a527f577bb97a70b2dc1e..7a011da70c0763eb1a094a6241bd3152f48a576b 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -12,6 +12,7 @@
+ #include <linux/wait.h>
+ 
+ #include <drm/drm_client.h>
++#include <drm/drm_atomic_profile.h>
+ #include <drm/drm_connector.h>
+ #include <drm/drm_crtc.h>
+ #include <drm/drm_device.h>
+@@ -80,6 +81,12 @@ struct a9x_transport {
+ 	/* pacing diagnosis (0033): the commit call itself, and the compose */
+ 	u32 commit_max_us, compose_max_us;
+ 	u64 commit_slow;		/* commit calls > 1.5 periods */
++	/* 0036: blocking FB-only flips, separate from cold modeset latency. */
++	struct drm_atomic_commit_profile profile;
++	u32 phase_max_us[DRM_ATOMIC_PROFILE_DONE];
++	u32 flip_max_us, modeset_max_us;
++	u64 flips, modesets;
++	bool profile_valid;
+ };
+ 
+ /*
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index 370855f955609aaf13c4e740077a3d257ba97d28..56fbcddf44dfd8c03db54e40994150394cb1b1c6 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -564,6 +564,16 @@ static ssize_t status_show(struct device *kdev, struct device_attribute *attr, c
+ {
+ 	struct a9_eink *a9 = kdev_to_a9(kdev);
+ 	struct a9x_transport *t = &a9->tx;
++	u32 phase = READ_ONCE(t->profile.phase);
++	u64 age_us = 0;
++
++	if (READ_ONCE(t->profile_valid) && phase < DRM_ATOMIC_PROFILE_DONE) {
++		u64 mark = READ_ONCE(t->profile.mark_ns);
++		u64 now = ktime_get_ns();
++
++		if (now >= mark)
++			age_us = div_u64(now - mark, 1000);
++	}
+ 
+ 	return sysfs_emit(buf,
+ 		"enable %d waveform %d transport %d hv_on %d stall_fault %d template %d\n"
+@@ -572,7 +582,11 @@ static ssize_t status_show(struct device *kdev, struct device_attribute *attr, c
+ 		"last mode %#x pre %#x clear %d type %u bin %d t1 %d t2 %d frames %u steps %u dry %d aborted %d"
+ 		" rect %d,%d-%d,%d begin_us %u total_us %u prep_us %u\n"
+ 		"pace commit_max_us %u commit_slow %llu compose_max_us %u render_max_us %u"
+-		" prefill_us %u ring_min %u underruns %llu\n",
++		" prefill_us %u ring_min %u underruns %llu\n"
++		"flip_phases valid %d phase %u age_us %llu prepare_us %llu fences_us %llu"
++		" dependencies_us %llu wait_prev_us %llu program_us %llu flip_done_us %llu cleanup_us %llu\n"
++		"flip_max prepare_us %u fences_us %u dependencies_us %u wait_prev_us %u"
++		" program_us %u flip_done_us %u cleanup_us %u total_us %u modeset_us %u flips %llu modesets %llu\n",
+ 		enable, a9->wf_loaded, a9x_attached(t), t->on, atomic_read(&a9x_stall_fault),
+ 		a9->ct_loaded,
+ 		a9->updates, a9->aborts, t->frames, t->late, t->vbl_skips, t->commits_failed,
+@@ -582,7 +596,24 @@ static ssize_t status_show(struct device *kdev, struct device_attribute *attr, c
+ 		a9->last.dry, a9->last.aborted, a9->last.rect.x1, a9->last.rect.y1,
+ 		a9->last.rect.x2, a9->last.rect.y2, a9->last.begin_us, a9->last.total_us,
+ 		a9->last.prep_us, t->commit_max_us, t->commit_slow, t->compose_max_us,
+-		a9->render_max_us, a9->prefill_us, a9->ring.fill_min, a9->ring.underruns);
++		a9->render_max_us, a9->prefill_us, a9->ring.fill_min, a9->ring.underruns,
++		READ_ONCE(t->profile_valid), phase, age_us,
++		div_u64(READ_ONCE(t->profile.ns[DRM_ATOMIC_PROFILE_PREPARE]), 1000),
++		div_u64(READ_ONCE(t->profile.ns[DRM_ATOMIC_PROFILE_FENCES]), 1000),
++		div_u64(READ_ONCE(t->profile.ns[DRM_ATOMIC_PROFILE_DEPENDENCIES]), 1000),
++		div_u64(READ_ONCE(t->profile.ns[DRM_ATOMIC_PROFILE_WAIT_PREV]), 1000),
++		div_u64(READ_ONCE(t->profile.ns[DRM_ATOMIC_PROFILE_PROGRAM]), 1000),
++		div_u64(READ_ONCE(t->profile.ns[DRM_ATOMIC_PROFILE_FLIP_DONE]), 1000),
++		div_u64(READ_ONCE(t->profile.ns[DRM_ATOMIC_PROFILE_CLEANUP]), 1000),
++		READ_ONCE(t->phase_max_us[DRM_ATOMIC_PROFILE_PREPARE]),
++		READ_ONCE(t->phase_max_us[DRM_ATOMIC_PROFILE_FENCES]),
++		READ_ONCE(t->phase_max_us[DRM_ATOMIC_PROFILE_DEPENDENCIES]),
++		READ_ONCE(t->phase_max_us[DRM_ATOMIC_PROFILE_WAIT_PREV]),
++		READ_ONCE(t->phase_max_us[DRM_ATOMIC_PROFILE_PROGRAM]),
++		READ_ONCE(t->phase_max_us[DRM_ATOMIC_PROFILE_FLIP_DONE]),
++		READ_ONCE(t->phase_max_us[DRM_ATOMIC_PROFILE_CLEANUP]),
++		READ_ONCE(t->flip_max_us), READ_ONCE(t->modeset_max_us),
++		READ_ONCE(t->flips), READ_ONCE(t->modesets));
+ }
+ static DEVICE_ATTR_RO(status);
+ 
+@@ -917,7 +948,8 @@ static int a9_render_thread(void *data)
+ {
+ 	struct a9_eink *a9 = data;
+ 
+-	set_user_nice(current, -10);
++	/* Own the policy in kernel; Android chrt may be absent or lack caps. */
++	sched_set_normal(current, -10);
+ 	for (;;) {
+ 		wait_event_interruptible(a9->rwq, READ_ONCE(a9->rjob) || kthread_should_stop());
+ 		/* Pairs with run_ring's release, before ANY engine/job field read. */
+@@ -1282,21 +1314,23 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ }
+ 
+ /*
+- * Frame pacing: a real update runs at nice -10 so that userspace on the one
+- * boot CPU (the sequencer's sampler/logger, shells) cannot delay a frame;
+- * the worker sleeps in every commit, and kworkers at -20 (fp9929a max_on,
+- * emergency PWRUP drop) still preempt it. Dry runs stay at nice 0.
++ * The blocking msm atomic tail runs inline in this task. Give real updates
++ * FIFO 50 in kernel, independent of Android's chrt availability/capabilities.
++ * It sleeps for hardware flush/vblank; the render producer stays OTHER/-10.
++ * Dry runs and the idle worker use OTHER/0. IRQ interlocks remain independent;
++ * neither this policy nor a nice workqueue guarantees delivery under a wedged
++ * kernel. Do not pin both tasks to one CPU without measured affinity evidence.
+  */
+-#define A9_NICE_DRIVE (-10)
+ static void a9_update(struct a9_eink *a9, const struct a9_job *job)
+ {
+ 	if (job->dry) {
++		sched_set_normal(current, 0);
+ 		__a9_update(a9, job);
+ 		return;
+ 	}
+-	set_user_nice(current, A9_NICE_DRIVE);
++	sched_set_fifo(current);
+ 	__a9_update(a9, job);
+-	set_user_nice(current, 0);
++	sched_set_normal(current, 0);
+ }
+ 
+ /* ---- worker ------------------------------------------------------------------------ */
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_transport.c b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+index 557af469b34822572e21d5dc51b3d3491462fdfe..7851721779973b3f4ec7c2b939a550db3c01595d 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_transport.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+@@ -49,12 +49,15 @@
+ #include <linux/regulator/fp9929a.h>
+ 
+ #include <drm/drm_atomic.h>
++#include <drm/drm_auth.h>
+ #include <drm/drm_bridge.h>
+ #include <drm/drm_client.h>
+ #include <drm/drm_drv.h>
+ #include <drm/drm_framebuffer.h>
+ #include <drm/drm_fourcc.h>
+ #include <drm/drm_modes.h>
++#include <drm/drm_modeset_lock.h>
++#include <drm/drm_atomic_uapi.h>
+ #include <drm/drm_print.h>
+ #include <drm/drm_vblank.h>
+ 
+@@ -435,6 +438,110 @@ void a9x_detach(struct a9x_transport *t)
+ 	drm_dev_put(ddev);
+ }
+ 
++/*
++ * Steady scanout needs only a new primary FB, not a client takeover of every
++ * plane/connector on msm. Keep the same master exclusion, WW locks, atomic
++ * validation and BLOCKING msm tail/flush wait. Never return after queueing an
++ * unconfirmed flip or allow an accidental modeset during a waveform.
++ * Locked current state must describe ONLY our untransformed transport. A
++ * primary-only neutral FB cannot establish neutral output through foreign
++ * planes, cropping or routing; refuse rather than repair live scanout.
++ */
++static int a9x_flip(struct a9x_transport *t, int idx)
++{
++	struct drm_device *dev = t->client.dev;
++	struct drm_crtc *crtc = t->ms->crtc;
++	struct drm_modeset_acquire_ctx ctx;
++	struct drm_atomic_commit *state;
++	struct drm_crtc_state *cs;
++	struct drm_plane_state *ps;
++	struct drm_connector *connector;
++	u32 encoders;
++	int ret;
++
++	if (!drm_master_internal_acquire(dev))
++		return -EBUSY;
++	mutex_lock(&t->client.modeset_mutex);
++	drm_modeset_acquire_init(&ctx, 0);
++	state = drm_atomic_commit_alloc(dev);
++	if (!state) {
++		ret = -ENOMEM;
++		goto out_ctx;
++	}
++	state->acquire_ctx = &ctx;
++retry:
++	state->allow_modeset = false;
++	state->profile = &t->profile;
++	cs = drm_atomic_get_crtc_state(state, crtc);
++	if (IS_ERR(cs)) {
++		ret = PTR_ERR(cs);
++		goto out_state;
++	}
++	if (!cs->enable || !cs->active) {
++		ret = -ENODEV;
++		goto out_state;
++	}
++	/* Plane/routing masks change through the acquired CRTC state lock. */
++	if (cs->plane_mask != drm_plane_mask(crtc->primary)) {
++		ret = -EBUSY;
++		goto out_state;
++	}
++	ps = drm_atomic_get_plane_state(state, crtc->primary);
++	if (IS_ERR(ps)) {
++		ret = PTR_ERR(ps);
++		goto out_state;
++	}
++	if (!t->ms->mode || t->ms->x || t->ms->y ||
++	    t->ms->mode->hdisplay != TX_W || t->ms->mode->vdisplay != TX_H ||
++	    !drm_mode_equal(&cs->mode, t->ms->mode) ||
++	    t->ms->num_connectors != 1 || !t->ms->connectors || !t->ms->connectors[0]) {
++		ret = -EINVAL;
++		goto out_state;
++	}
++	/* A9's bridge connector attaches exactly one DSI encoder. Fail closed
++	 * on clones, another connector, or ambiguous/different encoder routing.
++	 * possible_encoders is attachment topology, not unlocked atomic state.
++	 */
++	connector = t->ms->connectors[0];
++	encoders = connector->possible_encoders;
++	if (!encoders || (encoders & (encoders - 1)) ||
++	    cs->connector_mask != drm_connector_mask(connector) ||
++	    cs->encoder_mask != encoders) {
++		ret = -EINVAL;
++		goto out_state;
++	}
++	if (ps->crtc != crtc) {
++		ret = -ENODEV;
++		goto out_state;
++	}
++	/* Primary state is now locked too. Either owned FB is valid: a failed
++	 * commit can have swapped state without advancing t->front.
++	 */
++	if ((ps->fb != t->buf[0]->fb && ps->fb != t->buf[1]->fb) ||
++	    ps->src_x || ps->src_y ||
++	    ps->src_w != (TX_W << 16) || ps->src_h != (TX_H << 16) ||
++	    ps->crtc_x || ps->crtc_y || ps->crtc_w != TX_W || ps->crtc_h != TX_H ||
++	    ps->rotation != DRM_MODE_ROTATE_0) {
++		ret = -EINVAL;
++		goto out_state;
++	}
++	drm_atomic_set_fb_for_plane(ps, t->buf[idx]->fb);
++	ret = drm_atomic_commit(state);
++out_state:
++	if (ret == -EDEADLK) {
++		drm_atomic_commit_clear(state);
++		drm_modeset_backoff(&ctx);
++		goto retry;
++	}
++	drm_atomic_commit_put(state);
++out_ctx:
++	drm_modeset_drop_locks(&ctx);
++	drm_modeset_acquire_fini(&ctx);
++	mutex_unlock(&t->client.modeset_mutex);
++	drm_master_internal_release(dev);
++	return ret;
++}
++
+ /*
+  * @null: the buffer carries no drive. A drive frame arms the interlock BEFORE
+  * the commit (it may latch even if the call then fails or never returns); a
+@@ -448,6 +555,8 @@ static int a9x_commit_locked(struct a9x_transport *t, int idx, bool null)
+ 	u32 gap, cgap;
+ 	int ret;
+ 
++	if (!null && atomic_read(&a9x_stall_fault))
++		return -EIO;
+ 	mutex_lock(&t->client.modeset_mutex);
+ 	t->ms->fb = t->buf[idx]->fb;
+ 	mutex_unlock(&t->client.modeset_mutex);
+@@ -470,15 +579,49 @@ static int a9x_commit_locked(struct a9x_transport *t, int idx, bool null)
+ 	cstart = ktime_get();
+ 	if (t->on && t->vbl_ref)
+ 		vbl0 = drm_crtc_vblank_count(t->ms->crtc);
+-	ret = drm_client_modeset_commit(&t->client);
++	if (t->on) {
++		unsigned int i;
++
++		drm_atomic_profile_init(&t->profile);
++		WRITE_ONCE(t->profile_valid, true);
++		ret = a9x_flip(t, idx);
++		drm_atomic_profile_enter(&t->profile, DRM_ATOMIC_PROFILE_DONE);
++		for (i = 0; i < DRM_ATOMIC_PROFILE_DONE; i++) {
++			u32 us = (u32)div_u64(READ_ONCE(t->profile.ns[i]), 1000);
++
++			if (us > t->phase_max_us[i])
++				t->phase_max_us[i] = us;
++		}
++		cgap = (u32)ktime_us_delta(ktime_get(), cstart);
++		if (cgap > t->flip_max_us)
++			t->flip_max_us = cgap;
++		t->flips++;
++	} else {
++		/* First enable needs the full connector/mode/panel power sequence. */
++		ret = drm_client_modeset_commit(&t->client);
++		cgap = (u32)ktime_us_delta(ktime_get(), cstart);
++		if (cgap > t->modeset_max_us)
++			t->modeset_max_us = cgap;
++		t->modesets++;
++	}
+ 	/* pacing diagnosis: does the commit itself take more than a period? */
+ 	cgap = (u32)ktime_us_delta(ktime_get(), cstart);
+ 	if (cgap > t->commit_max_us)
+ 		t->commit_max_us = cgap;
+ 	if (cgap > a9x_period_us(t) + a9x_period_us(t) / 2)
+ 		t->commit_slow++;
++	/* A successful DRM return cannot resurrect progress after HV was cut. */
++	if (!ret && !null && atomic_read(&a9x_stall_fault))
++		ret = -EIO;
+ 	if (ret) {
+ 		t->commits_failed++;
++		/* A refused/failed neutral is no proof of neutral scanout, even
++		 * if the cached front was idle. Cut HV after DRM locks are gone,
++		 * before another DRM attempt or a render producer can be joined.
++		 * Keep front_null/stall_armed unchanged: this is not progress.
++		 */
++		if (null && t->on)
++			a9x_emergency_off(t, "a9_eink: neutral commit failed");
+ 		return ret;
+ 	}
+ 	if (null)
+diff --git a/drivers/gpu/drm/drm_atomic.c b/drivers/gpu/drm/drm_atomic.c
+index 080aec5a977467a5497a711fba81980d6d7c0583..67fa05bba48f2558f00864fdac28b0cfbf33c564 100644
+--- a/drivers/gpu/drm/drm_atomic.c
++++ b/drivers/gpu/drm/drm_atomic.c
+@@ -126,6 +126,7 @@ int
+ drm_atomic_commit_init(struct drm_device *dev, struct drm_atomic_commit *state)
+ {
+ 	kref_init(&state->ref);
++	state->profile = NULL;
+ 
+ 	/* TODO legacy paths should maybe do a better job about
+ 	 * setting this appropriately?
+@@ -206,6 +207,8 @@ void drm_atomic_commit_default_clear(struct drm_atomic_commit *state)
+ 	drm_dbg_atomic(dev, "Clearing atomic state %p\n", state);
+ 
+ 	state->checked = false;
++	/* A recycled state must not retain another caller's observation storage. */
++	state->profile = NULL;
+ 
+ 	for (i = 0; i < state->num_connector; i++) {
+ 		struct drm_connector *connector = state->connectors[i].ptr;
+diff --git a/drivers/gpu/drm/drm_atomic_helper.c b/drivers/gpu/drm/drm_atomic_helper.c
+index 51f39edc31edc6f9fb5b621d625424023e5a337f..036b4311123eec99e8293d9654cbfa517af3e747 100644
+--- a/drivers/gpu/drm/drm_atomic_helper.c
++++ b/drivers/gpu/drm/drm_atomic_helper.c
+@@ -31,6 +31,7 @@
+ 
+ #include <drm/drm_atomic.h>
+ #include <drm/drm_atomic_helper.h>
++#include <drm/drm_atomic_profile.h>
+ #include <drm/drm_atomic_uapi.h>
+ #include <drm/drm_blend.h>
+ #include <drm/drm_bridge.h>
+@@ -2055,8 +2056,10 @@ static void commit_tail(struct drm_atomic_commit *state)
+ 	 */
+ 	start = ktime_get();
+ 
++	drm_atomic_profile_enter(state->profile, DRM_ATOMIC_PROFILE_FENCES);
+ 	drm_atomic_helper_wait_for_fences(dev, state, false);
+ 
++	drm_atomic_profile_enter(state->profile, DRM_ATOMIC_PROFILE_DEPENDENCIES);
+ 	drm_atomic_helper_wait_for_dependencies(state);
+ 
+ 	/*
+@@ -2068,10 +2071,12 @@ static void commit_tail(struct drm_atomic_commit *state)
+ 		if (new_crtc_state->self_refresh_active)
+ 			new_self_refresh_mask |= BIT(i);
+ 
++	drm_atomic_profile_enter(state->profile, DRM_ATOMIC_PROFILE_PROGRAM);
+ 	if (funcs && funcs->atomic_commit_tail)
+ 		funcs->atomic_commit_tail(state);
+ 	else
+ 		drm_atomic_helper_commit_tail(state);
++	drm_atomic_profile_enter(state->profile, DRM_ATOMIC_PROFILE_CLEANUP);
+ 
+ 	commit_time_ms = ktime_ms_delta(ktime_get(), start);
+ 	if (commit_time_ms > 0)
+@@ -2248,6 +2253,7 @@ int drm_atomic_helper_commit(struct drm_device *dev,
+ {
+ 	int ret;
+ 
++	drm_atomic_profile_enter(state->profile, DRM_ATOMIC_PROFILE_PREPARE);
+ 	if (state->async_update) {
+ 		ret = drm_atomic_helper_prepare_planes(dev, state);
+ 		if (ret)
+@@ -2270,7 +2276,9 @@ int drm_atomic_helper_commit(struct drm_device *dev,
+ 		return ret;
+ 
+ 	if (!nonblock) {
++		drm_atomic_profile_enter(state->profile, DRM_ATOMIC_PROFILE_FENCES);
+ 		ret = drm_atomic_helper_wait_for_fences(dev, state, true);
++		drm_atomic_profile_enter(state->profile, DRM_ATOMIC_PROFILE_PREPARE);
+ 		if (ret)
+ 			goto err;
+ 	}
+diff --git a/drivers/gpu/drm/msm/msm_atomic.c b/drivers/gpu/drm/msm/msm_atomic.c
+index a8babf1dbe0d33f8a0ecdbdc864a07747520df75..f3c8c8829154aa314d140def3ed56b605886e198 100644
+--- a/drivers/gpu/drm/msm/msm_atomic.c
++++ b/drivers/gpu/drm/msm/msm_atomic.c
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include <drm/drm_atomic_uapi.h>
++#include <drm/drm_atomic_profile.h>
+ #include <drm/drm_vblank.h>
+ 
+ #include "msm_atomic_trace.h"
+@@ -221,6 +222,7 @@ void msm_atomic_commit_tail(struct drm_atomic_commit *state)
+ 
+ 	trace_msm_atomic_commit_tail_start(async, crtc_mask);
+ 
++	drm_atomic_profile_enter(state->profile, DRM_ATOMIC_PROFILE_WAIT_PREV);
+ 	kms->funcs->enable_commit(kms);
+ 
+ 	/*
+@@ -232,6 +234,7 @@ void msm_atomic_commit_tail(struct drm_atomic_commit *state)
+ 	kms->funcs->wait_flush(kms, crtc_mask);
+ 	trace_msm_atomic_wait_flush_finish(crtc_mask);
+ 
++	drm_atomic_profile_enter(state->profile, DRM_ATOMIC_PROFILE_PROGRAM);
+ 	atomic_set(&kms->fault_snapshot_capture, 0);
+ 
+ 	/*
+@@ -280,6 +283,7 @@ void msm_atomic_commit_tail(struct drm_atomic_commit *state)
+ 		 * are done with the atomic update, so we can just
+ 		 * go ahead and signal that it is done:
+ 		 */
++		drm_atomic_profile_enter(state->profile, DRM_ATOMIC_PROFILE_CLEANUP);
+ 		drm_atomic_helper_commit_hw_done(state);
+ 		drm_atomic_helper_cleanup_planes(dev, state);
+ 
+@@ -306,10 +310,12 @@ void msm_atomic_commit_tail(struct drm_atomic_commit *state)
+ 	/*
+ 	 * Wait for flush to complete:
+ 	 */
++	drm_atomic_profile_enter(state->profile, DRM_ATOMIC_PROFILE_FLIP_DONE);
+ 	trace_msm_atomic_wait_flush_start(crtc_mask);
+ 	kms->funcs->wait_flush(kms, crtc_mask);
+ 	trace_msm_atomic_wait_flush_finish(crtc_mask);
+ 
++	drm_atomic_profile_enter(state->profile, DRM_ATOMIC_PROFILE_CLEANUP);
+ 	vblank_put(kms, crtc_mask);
+ 
+ 	lock_crtcs(kms, crtc_mask);
+diff --git a/include/drm/drm_atomic.h b/include/drm/drm_atomic.h
+index 1a80a8cdf2693d5dd01aa0f02e4af752346b323e..047526c006a5b4879e8370870e1dbde2110ec0d6 100644
+--- a/include/drm/drm_atomic.h
++++ b/include/drm/drm_atomic.h
+@@ -31,6 +31,8 @@
+ #include <drm/drm_crtc.h>
+ #include <drm/drm_util.h>
+ 
++struct drm_atomic_commit_profile;
++
+ /**
+  * struct drm_crtc_commit - track modeset commits on a CRTC
+  *
+@@ -639,6 +641,14 @@ struct drm_atomic_commit {
+ 	 */
+ 	struct drm_crtc_commit *fake_commit;
+ 
++	/**
++	 * @profile:
++	 * Optional caller-owned elapsed-time accounting for a blocking internal
++	 * commit. NULL for ordinary commits. Storage must outlive commit return;
++	 * never attach stack storage to a nonblocking or asynchronous update.
++	 */
++	struct drm_atomic_commit_profile *profile;
++
+ 	/**
+ 	 * @commit_work:
+ 	 *
+diff --git a/include/drm/drm_atomic_profile.h b/include/drm/drm_atomic_profile.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..569da0c5056f2e43cf92ae04c9bb99f548235ef2
+--- /dev/null
++++ b/include/drm/drm_atomic_profile.h
+@@ -0,0 +1,62 @@
++/* SPDX-License-Identifier: MIT */
++#ifndef __DRM_ATOMIC_PROFILE_H__
++#define __DRM_ATOMIC_PROFILE_H__
++
++#include <linux/compiler.h>
++#include <linux/ktime.h>
++#include <linux/types.h>
++
++enum drm_atomic_profile_phase {
++	DRM_ATOMIC_PROFILE_PREPARE,
++	DRM_ATOMIC_PROFILE_FENCES,
++	DRM_ATOMIC_PROFILE_DEPENDENCIES,
++	DRM_ATOMIC_PROFILE_WAIT_PREV,
++	DRM_ATOMIC_PROFILE_PROGRAM,
++	DRM_ATOMIC_PROFILE_FLIP_DONE,
++	DRM_ATOMIC_PROFILE_CLEANUP,
++	DRM_ATOMIC_PROFILE_DONE,
++};
++
++/*
++ * Opt-in elapsed-time accounting for a blocking internal atomic commit.
++ * The caller owns this storage until commit returns and closes it with DONE.
++ * A single commit thread updates it; READ/WRITE_ONCE also permit diagnostic
++ * snapshots, which are approximate while a phase transition is in progress.
++ * This is observation only: no scheduling, fence or hardware-wait changes.
++ */
++struct drm_atomic_commit_profile {
++	u64 ns[DRM_ATOMIC_PROFILE_DONE];
++	u64 mark_ns;
++	u32 phase;
++};
++
++static inline void drm_atomic_profile_init(struct drm_atomic_commit_profile *p)
++{
++	unsigned int i;
++
++	if (!p)
++		return;
++	for (i = 0; i < DRM_ATOMIC_PROFILE_DONE; i++)
++		WRITE_ONCE(p->ns[i], 0);
++	WRITE_ONCE(p->mark_ns, ktime_get_ns());
++	WRITE_ONCE(p->phase, DRM_ATOMIC_PROFILE_PREPARE);
++}
++
++static inline void drm_atomic_profile_enter(struct drm_atomic_commit_profile *p,
++					    u32 phase)
++{
++	u32 old;
++	u64 now;
++
++	if (!p || phase > DRM_ATOMIC_PROFILE_DONE)
++		return;
++	old = READ_ONCE(p->phase);
++	if (old >= DRM_ATOMIC_PROFILE_DONE)
++		return;
++	now = ktime_get_ns();
++	WRITE_ONCE(p->ns[old], READ_ONCE(p->ns[old]) + now - READ_ONCE(p->mark_ns));
++	WRITE_ONCE(p->mark_ns, now);
++	WRITE_ONCE(p->phase, phase);
++}
++
++#endif /* __DRM_ATOMIC_PROFILE_H__ */
+diff --git a/include/drm/drm_auth.h b/include/drm/drm_auth.h
+index 50131383ed8146835d656c0d61c0a8a756cbaf5d..c5d86ddeaa40f798c3fae11596dade973ab2e07c 100644
+--- a/include/drm/drm_auth.h
++++ b/include/drm/drm_auth.h
+@@ -134,6 +134,10 @@ struct drm_master *drm_file_get_master(struct drm_file *file_priv);
+ void drm_master_put(struct drm_master **master);
+ bool drm_is_current_master(struct drm_file *fpriv);
+ 
++/* Already exported for in-kernel clients; hold across blocking KMS commits. */
++bool drm_master_internal_acquire(struct drm_device *dev);
++void drm_master_internal_release(struct drm_device *dev);
++
+ struct drm_master *drm_master_create(struct drm_device *dev);
+ 
+ #endif
+-- 
+2.51.0

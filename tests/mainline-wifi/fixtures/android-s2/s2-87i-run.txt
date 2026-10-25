@@ -1,0 +1,33 @@
+S2_GATE phase=ram-data branch=accepted roots=1 children=1 user0=1
+S2_GATE phase=regulatory iw_rc=0
+S2_GATE phase=channel iw_rc=0
+S2_GATE phase=power-limit iw_rc=0
+S2_BRIDGE phase=binder-api
+S2_BRIDGE phase=runtime-hashes
+S2_BRIDGE phase=binder-api
+S2_BRIDGE phase=baseline
+S2_BRIDGE phase=enable
+S2_BRIDGE wifi=enabled verified=yes
+S2_BRIDGE phase=probe-connectivity
+S2_BRIDGE probe=accepted
+S2_GATE phase=power-before command=bridge-probe rc=0
+S2_BRIDGE phase=binder-api
+S2_BRIDGE phase=runtime-hashes
+S2_BRIDGE phase=binder-api
+S2_BRIDGE phase=baseline
+S2_BRIDGE phase=enable
+S2_BRIDGE wifi=enabled verified=yes
+S2_BRIDGE phase=input
+S2_BRIDGE phase=scan
+S2_BRIDGE result=failed phase=scan
+S2_GATE phase=framework-connect command=bridge-connect rc=1
+S2_GATE phase=framework-connect result=failed
+S2_BRIDGE phase=binder-api
+S2_BRIDGE phase=runtime-hashes
+S2_BRIDGE phase=binder-api
+S2_BRIDGE phase=disable
+S2_BRIDGE phase=forget
+S2_BRIDGE cleanup=forgotten
+S2_GATE phase=cleanup command=bridge-cleanup rc=0
+S2_GATE phase=cleanup framework_cleanup_rc=0
+S2_ROOT_RC 1

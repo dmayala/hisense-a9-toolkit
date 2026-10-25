@@ -1,0 +1,535 @@
+From: GPT-6.1 Sol (Codex)
+Subject: [PROPOSAL 1/2] leds: A9 raw AW99703/KTD3137 frontlight
+
+diff --git a/drivers/leds/Kconfig b/drivers/leds/Kconfig
+--- a/drivers/leds/Kconfig
++++ b/drivers/leds/Kconfig
+@@ -1042,4 +1042,6 @@
+ comment "Simatic LED drivers"
+ source "drivers/leds/simatic/Kconfig"
+ 
++source "drivers/leds/a9-frontlight/Kconfig"
++
+ endif # NEW_LEDS
+diff --git a/drivers/leds/Makefile b/drivers/leds/Makefile
+--- a/drivers/leds/Makefile
++++ b/drivers/leds/Makefile
+@@ -126,3 +126,5 @@
+ 
+ # Simatic LED drivers
+ obj-y					+= simatic/
++
++obj-$(CONFIG_LEDS_A9_FRONTLIGHT) += a9-frontlight/
+diff --git a/drivers/leds/a9-frontlight/Kconfig b/drivers/leds/a9-frontlight/Kconfig
+new file mode 100644
+--- /dev/null
++++ b/drivers/leds/a9-frontlight/Kconfig
+@@ -0,0 +1,9 @@
++# SPDX-License-Identifier: GPL-2.0-only
++config LEDS_A9_FRONTLIGHT
++	tristate "Hisense A9 AW99703/KTD3137 frontlight LEDs"
++	depends on I2C && OF && GPIOLIB
++	depends on LEDS_CLASS
++	help
++	  Four raw 11-bit frontlight LEDs using the Hisense A9 stock electrical
++	  profiles. Per-chip brightness gains belong in userspace, not here.
++	  If built as a module it is named a9-frontlight.
+diff --git a/drivers/leds/a9-frontlight/Makefile b/drivers/leds/a9-frontlight/Makefile
+new file mode 100644
+--- /dev/null
++++ b/drivers/leds/a9-frontlight/Makefile
+@@ -0,0 +1,3 @@
++# SPDX-License-Identifier: GPL-2.0-only
++obj-$(CONFIG_LEDS_A9_FRONTLIGHT) += a9-frontlight.o
++a9-frontlight-y := leds-a9-frontlight.o a9-frontlight-core.o
+diff --git a/drivers/leds/a9-frontlight/a9-frontlight-core.h b/drivers/leds/a9-frontlight/a9-frontlight-core.h
+new file mode 100644
+--- /dev/null
++++ b/drivers/leds/a9-frontlight/a9-frontlight-core.h
+@@ -0,0 +1,31 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef A9_FRONTLIGHT_CORE_H
++#define A9_FRONTLIGHT_CORE_H
++
++/* No Linux dependencies: this exact register logic is exercised on the host. */
++#define A9_FL_MAX 2047U
++
++enum a9_fl_kind { A9_FL_AW99703, A9_FL_KTD3137 };
++
++struct a9_fl_io {
++	void *ctx;
++	int (*read)(void *ctx, unsigned int reg);
++	int (*write)(void *ctx, unsigned int reg, unsigned int val);
++	int (*enable)(void *ctx, int on);
++	void (*settle)(void *ctx);
++};
++
++struct a9_fl {
++	enum a9_fl_kind kind;
++	struct a9_fl_io io;
++	unsigned int level;
++	int powered;
++	int configured;
++};
++
++/* Probe only reads. A live unrecognized configuration is left untouched. */
++int a9_fl_adopt(struct a9_fl *fl, int enabled);
++/* Caller serializes all operations. Values are raw, without per-chip gains. */
++int a9_fl_set(struct a9_fl *fl, unsigned int level);
++
++#endif
+diff --git a/drivers/leds/a9-frontlight/a9-frontlight-core.c b/drivers/leds/a9-frontlight/a9-frontlight-core.c
+new file mode 100644
+--- /dev/null
++++ b/drivers/leds/a9-frontlight/a9-frontlight-core.c
+@@ -0,0 +1,165 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* Hisense A9 stock-derived profiles; see docs/mainline-frontlight.md. */
++#ifdef __KERNEL__
++#include <linux/array_size.h>
++#include <linux/errno.h>
++#else
++#include <errno.h>
++#define ARRAY_SIZE(array) (sizeof(array) / sizeof((array)[0]))
++#endif
++#include "a9-frontlight-core.h"
++
++struct a9_fl_reg {
++	unsigned int reg;
++	unsigned int val;
++};
++
++/* Standby first; safety settings and zero ratio before any backlight enable. */
++static const struct a9_fl_reg aw_init[] = {
++	{ 0x02, 0x14 }, /* PWM disabled, linear, standby */
++	{ 0x03, 0x01 }, /* 4.8 mA full scale, CH1 only */
++	{ 0x04, 0x33 }, /* stock OVP code 4, 1 MHz, OCP code 3 */
++	{ 0x05, 0x40 }, /* stock 10 uH inductor selection */
++	{ 0x06, 0x00 }, { 0x07, 0x00 },
++	{ 0x09, 0x44 }, { 0x0a, 0x00 },
++};
++
++static const struct a9_fl_reg ktd_init[] = {
++	{ 0x02, 0x00 }, /* 5 mA full scale, backlight/flash disabled */
++	{ 0x03, 0x62 }, /* stock OVP 32 V, 1 MHz, 1.8 A, linear */
++	{ 0x06, 0x9f }, /* PWM disabled; reset hysteresis and CH1..3 mask */
++	{ 0x04, 0x00 }, { 0x05, 0x00 },
++	{ 0x07, 0x00 }, { 0x08, 0x00 },
++};
++
++static int a9_fl_id(struct a9_fl *fl)
++{
++	int id = fl->io.read(fl->io.ctx, 0x00);
++
++	if (id < 0)
++		return id;
++	if (fl->kind == A9_FL_AW99703)
++		return id == 0x03 ? 0 : -ENODEV;
++	/* KTD3137 device ID bits [5:3]; revision/reserved bits are ignored. */
++	return (id & 0x38) == 0x18 ? 0 : -ENODEV;
++}
++
++int a9_fl_adopt(struct a9_fl *fl, int enabled)
++{
++	int r[11] = { 0 };
++	unsigned int i, lsb, msb;
++	int ret;
++
++	fl->level = 0;
++	fl->configured = 0;
++	fl->powered = !!enabled;
++	if (!enabled)
++		return 0; /* Do not power up a dark chip just to identify it. */
++	ret = a9_fl_id(fl);
++	if (ret)
++		return ret;
++	for (i = 2; i <= 7; i++) {
++		r[i] = fl->io.read(fl->io.ctx, i);
++		if (r[i] < 0)
++			return r[i];
++	}
++	if (fl->kind == A9_FL_AW99703) {
++		if ((r[2] & 3) == 0)
++			return 0; /* Standby: defer initialization to first nonzero. */
++		if ((r[2] & 0x17) != 0x15 || r[3] != 0x01 ||
++		    (r[4] & 0x3f) != 0x33 || !(r[5] & 0x40))
++			return -EBUSY;
++		lsb = 6;
++		msb = 7;
++	} else {
++		if (!(r[2] & 3))
++			return 0;
++		if (r[2] != 0x01 || r[3] != 0x62 ||
++		    !(r[6] & 0x80) || !(r[6] & 7))
++			return -EBUSY;
++		lsb = 4;
++		msb = 5;
++	}
++	fl->level = ((unsigned int)r[msb] << 3) | (r[lsb] & 7);
++	fl->configured = 1;
++	return 0;
++}
++
++static int a9_fl_fail_off(struct a9_fl *fl, int error)
++{
++	/* HWEN is the fail-safe if the bus is dead or a ratio write was partial. */
++	int ret = fl->io.enable(fl->io.ctx, 0);
++
++	fl->configured = 0;
++	if (!ret) {
++		fl->powered = 0;
++		fl->level = 0;
++	}
++	return error ? error : ret;
++}
++
++static int a9_fl_configure(struct a9_fl *fl)
++{
++	const struct a9_fl_reg *seq;
++	unsigned int i, count;
++	int ret;
++
++	if (!fl->powered) {
++		ret = fl->io.enable(fl->io.ctx, 1);
++		if (ret)
++			return ret;
++		fl->powered = 1;
++		fl->io.settle(fl->io.ctx);
++	}
++	ret = a9_fl_id(fl);
++	if (ret)
++		return a9_fl_fail_off(fl, ret);
++	if (fl->kind == A9_FL_AW99703) {
++		seq = aw_init;
++		count = ARRAY_SIZE(aw_init);
++	} else {
++		seq = ktd_init;
++		count = ARRAY_SIZE(ktd_init);
++	}
++	for (i = 0; i < count; i++) {
++		ret = fl->io.write(fl->io.ctx, seq[i].reg, seq[i].val);
++		if (ret)
++			return a9_fl_fail_off(fl, ret);
++	}
++	fl->configured = 1;
++	return 0;
++}
++
++int a9_fl_set(struct a9_fl *fl, unsigned int level)
++{
++	unsigned int lsb = fl->kind == A9_FL_AW99703 ? 6 : 4;
++	unsigned int standby = fl->kind == A9_FL_AW99703 ? 0x14 : 0;
++	int ret;
++
++	if (level > A9_FL_MAX)
++		return -EINVAL;
++	if (!level) {
++		if (!fl->powered)
++			return 0;
++		/* Disable both backlight and flash, then HWEN low (also on error). */
++		ret = fl->io.write(fl->io.ctx, 2, standby);
++		return a9_fl_fail_off(fl, ret);
++	}
++	if (!fl->configured) {
++		ret = a9_fl_configure(fl);
++		if (ret)
++			return ret;
++	}
++	/* Always LSB then MSB; KTD3137 latches both on the MSB write. */
++	ret = fl->io.write(fl->io.ctx, lsb, level & 7);
++	if (ret)
++		return a9_fl_fail_off(fl, ret);
++	ret = fl->io.write(fl->io.ctx, lsb + 1, level >> 3);
++	if (ret)
++		return a9_fl_fail_off(fl, ret);
++	ret = fl->io.write(fl->io.ctx, 2, standby | 1);
++	if (ret)
++		return a9_fl_fail_off(fl, ret);
++	fl->level = level;
++	return 0;
++}
+diff --git a/drivers/leds/a9-frontlight/leds-a9-frontlight.c b/drivers/leds/a9-frontlight/leds-a9-frontlight.c
+new file mode 100644
+--- /dev/null
++++ b/drivers/leds/a9-frontlight/leds-a9-frontlight.c
+@@ -0,0 +1,192 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* Board-specific raw frontlight LEDs for the Hisense A9. */
++#include <linux/delay.h>
++#include <linux/err.h>
++#include <linux/gpio/consumer.h>
++#include <linux/i2c.h>
++#include <linux/leds.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/property.h>
++
++#include "a9-frontlight-core.h"
++
++struct a9_frontlight {
++	struct i2c_client *client;
++	struct gpio_desc *enable;
++	struct mutex lock;
++	struct led_classdev led;
++	struct a9_fl core;
++};
++
++static int a9_frontlight_read(void *ctx, unsigned int reg)
++{
++	struct a9_frontlight *fl = ctx;
++	int i, ret;
++
++	for (i = 0; i < 5; i++) {
++		ret = i2c_smbus_read_byte_data(fl->client, reg);
++		if (ret >= 0)
++			return ret;
++		usleep_range(2000, 2500);
++	}
++	dev_warn_ratelimited(&fl->client->dev,
++			     "read register 0x%02x failed after 5 attempts: %d\n",
++			     reg, ret);
++	return ret;
++}
++
++static int a9_frontlight_write(void *ctx, unsigned int reg, unsigned int val)
++{
++	struct a9_frontlight *fl = ctx;
++	int i, ret;
++
++	for (i = 0; i < 5; i++) {
++		ret = i2c_smbus_write_byte_data(fl->client, reg, val);
++		if (!ret)
++			return 0;
++		usleep_range(2000, 2500);
++	}
++	return ret;
++}
++
++static int a9_frontlight_enable(void *ctx, int on)
++{
++	struct a9_frontlight *fl = ctx;
++
++	return gpiod_direction_output(fl->enable, on);
++}
++
++static void a9_frontlight_settle(void *ctx)
++{
++	/* Stock AW99703 delay; also exceeds KTD3137's 100 us minimum. */
++	usleep_range(3500, 4000);
++}
++
++static int a9_frontlight_set(struct led_classdev *led, enum led_brightness value)
++{
++	struct a9_frontlight *fl = container_of(led, struct a9_frontlight, led);
++	int ret;
++
++	mutex_lock(&fl->lock);
++	ret = a9_fl_set(&fl->core, value);
++	mutex_unlock(&fl->lock);
++	if (ret)
++		dev_err_ratelimited(&fl->client->dev, "brightness %u failed: %d\n",
++				   value, ret);
++	return ret;
++}
++
++static enum led_brightness a9_frontlight_get(struct led_classdev *led)
++{
++	struct a9_frontlight *fl = container_of(led, struct a9_frontlight, led);
++	unsigned int value;
++
++	mutex_lock(&fl->lock);
++	/* Preserve the LED core's resume target during system suspend. */
++	value = led->flags & LED_SUSPENDED ? led->brightness : fl->core.level;
++	mutex_unlock(&fl->lock);
++	return value;
++}
++
++static const enum a9_fl_kind aw_kind = A9_FL_AW99703;
++static const enum a9_fl_kind ktd_kind = A9_FL_KTD3137;
++
++static int a9_frontlight_probe(struct i2c_client *client)
++{
++	struct device *dev = &client->dev;
++	const enum a9_fl_kind *kind = device_get_match_data(dev);
++	struct a9_frontlight *fl;
++	const char *name, *state;
++	int ret, enabled;
++
++	if (!kind || !i2c_check_functionality(client->adapter,
++					     I2C_FUNC_SMBUS_BYTE_DATA))
++		return -EOPNOTSUPP;
++	ret = device_property_read_string(dev, "label", &name);
++	if (ret)
++		return ret;
++	if ((*kind == A9_FL_AW99703 && strcmp(name, "a9:warm:center") &&
++	     strcmp(name, "a9:white:center")) ||
++	    (*kind == A9_FL_KTD3137 && strcmp(name, "a9:warm:edge") &&
++	     strcmp(name, "a9:white:edge")))
++		return dev_err_probe(dev, -EINVAL, "Invalid A9 LED label\n");
++	ret = device_property_read_string(dev, "default-state", &state);
++	if (ret || strcmp(state, "keep"))
++		return dev_err_probe(dev, -EINVAL, "default-state must be keep\n");
++	fl = devm_kzalloc(dev, sizeof(*fl), GFP_KERNEL);
++	if (!fl)
++		return -ENOMEM;
++	fl->client = client;
++	mutex_init(&fl->lock);
++	/* Never request OUT_LOW: that would flash an already lit bootloader LED. */
++	fl->enable = devm_gpiod_get(dev, "enable", GPIOD_ASIS);
++	if (IS_ERR(fl->enable))
++		return dev_err_probe(dev, PTR_ERR(fl->enable), "HWEN unavailable\n");
++	if (gpiod_is_active_low(fl->enable))
++		return dev_err_probe(dev, -EINVAL, "HWEN must be active high\n");
++	enabled = gpiod_get_value_cansleep(fl->enable);
++	if (enabled < 0)
++		return enabled;
++	fl->core.kind = *kind;
++	fl->core.io = (struct a9_fl_io) {
++		.ctx = fl,
++		.read = a9_frontlight_read,
++		.write = a9_frontlight_write,
++		.enable = a9_frontlight_enable,
++		.settle = a9_frontlight_settle,
++	};
++	ret = a9_fl_adopt(&fl->core, enabled);
++	if (ret)
++		return dev_err_probe(dev, ret,
++				     "Cannot safely adopt boot state (sampled HWEN=%d)\n",
++				     enabled);
++	/* Drive the sampled level without an edge; no HWEN pinctrl output preset. */
++	ret = gpiod_direction_output(fl->enable, enabled);
++	if (ret)
++		return ret;
++	fl->led.name = name;
++	fl->led.max_brightness = A9_FL_MAX;
++	fl->led.brightness = fl->core.level;
++	fl->led.brightness_set_blocking = a9_frontlight_set;
++	fl->led.brightness_get = a9_frontlight_get;
++	fl->led.flags = LED_CORE_SUSPENDRESUME | LED_REJECT_NAME_CONFLICT;
++	i2c_set_clientdata(client, fl);
++	ret = devm_led_classdev_register(dev, &fl->led);
++	if (ret)
++		return ret;
++	dev_info(dev, "%s: kept raw brightness %u (HWEN=%d)\n",
++		 name, fl->core.level, enabled);
++	return 0;
++}
++
++static void a9_frontlight_shutdown(struct i2c_client *client)
++{
++	struct a9_frontlight *fl = i2c_get_clientdata(client);
++
++	/* Stop triggers/work before the final off, including during shutdown. */
++	devm_led_classdev_unregister(&client->dev, &fl->led);
++	a9_frontlight_set(&fl->led, LED_OFF);
++}
++
++static const struct of_device_id a9_frontlight_of_match[] = {
++	{ .compatible = "hisense,a9-aw99703-frontlight", .data = &aw_kind },
++	{ .compatible = "hisense,a9-ktd3137-frontlight", .data = &ktd_kind },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, a9_frontlight_of_match);
++
++static struct i2c_driver a9_frontlight_driver = {
++	.driver = {
++		.name = "a9-frontlight",
++		.of_match_table = a9_frontlight_of_match,
++	},
++	.probe = a9_frontlight_probe,
++	.remove = a9_frontlight_shutdown,
++	.shutdown = a9_frontlight_shutdown,
++};
++module_i2c_driver(a9_frontlight_driver);
++
++MODULE_DESCRIPTION("Hisense A9 raw AW99703 and KTD3137 frontlight LEDs");
++MODULE_LICENSE("GPL");
+diff --git a/Documentation/devicetree/bindings/leds/hisense,a9-frontlight.yaml b/Documentation/devicetree/bindings/leds/hisense,a9-frontlight.yaml
+new file mode 100644
+--- /dev/null
++++ b/Documentation/devicetree/bindings/leds/hisense,a9-frontlight.yaml
+@@ -0,0 +1,83 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/leds/hisense,a9-frontlight.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: Hisense A9 AW99703 and KTD3137 frontlight LED banks
++
++maintainers:
++  - dmayala <dmayala@users.noreply.github.com>
++
++description: |
++  One LED class device per IC, with a shared raw 11-bit brightness for that
++  IC's connected sinks. These board-specific compatibles select the A9 stock
++  electrical profiles, not the chip reset defaults. AW99703 enables CH1 at
++  4.8 mA full scale; KTD3137 preserves the stock reset CH1..3 enable mask at
++  5 mA full scale (unused grounded sinks are detected by the IC). No per-chip
++  optical gain is applied by the kernel. Warm/white describes the LED bank,
++  center/edge describes its location on the A9 light guide.
++
++allOf:
++  - $ref: /schemas/leds/common.yaml#
++  - if:
++      properties:
++        compatible:
++          const: hisense,a9-aw99703-frontlight
++    then:
++      properties:
++        reg:
++          items:
++            - const: 0x36
++        label:
++          enum: ["a9:warm:center", "a9:white:center"]
++    else:
++      properties:
++        reg:
++          items:
++            - const: 0x35
++        label:
++          enum: ["a9:warm:edge", "a9:white:edge"]
++
++properties:
++  compatible:
++    enum:
++      - hisense,a9-aw99703-frontlight
++      - hisense,a9-ktd3137-frontlight
++
++  reg:
++    maxItems: 1
++
++  enable-gpios:
++    maxItems: 1
++    description: Active-high HWEN, kept at its bootloader level during probe.
++
++  label:
++    description: Stable LED class ABI used by the A9 Android compat daemon.
++
++  default-state:
++    const: keep
++
++required:
++  - compatible
++  - reg
++  - enable-gpios
++  - label
++  - default-state
++
++unevaluatedProperties: false
++
++examples:
++  - |
++    #include <dt-bindings/gpio/gpio.h>
++    i2c {
++        #address-cells = <1>;
++        #size-cells = <0>;
++        backlight@36 {
++            compatible = "hisense,a9-aw99703-frontlight";
++            reg = <0x36>;
++            enable-gpios = <&tlmm 83 GPIO_ACTIVE_HIGH>;
++            label = "a9:warm:center";
++            default-state = "keep";
++        };
++    };

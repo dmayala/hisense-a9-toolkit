@@ -1,0 +1,350 @@
+--- a/common/EncodeHelpers.cpp
++++ b/common/EncodeHelpers.cpp
+@@ -15,6 +15,7 @@
+ #include <utils/Log.h>
+ 
+ #include <v4l2_codec2/common/H264NalParser.h>
++#include <v4l2_codec2/common/HEVCNalParser.h>
+ 
+ namespace android {
+ 
+@@ -133,8 +134,24 @@
+ }
+ 
+ bool extractCSDInfo(std::unique_ptr<C2StreamInitDataInfo::output>* const csd, const uint8_t* data,
+-                    size_t length) {
++                    size_t length, bool hevc) {
+     csd->reset();
++    if (hevc) {
++        std::vector<uint8_t> sets[3];
++        HEVCNalParser parser(data, length);
++        while (parser.locateNextNal()) {
++            const auto type = parser.type();
++            if (type >= 32 && type <= 34)
++                sets[type - 32].assign(parser.data(), parser.data() + parser.length());
++        }
++        if (sets[0].empty() || sets[1].empty() || sets[2].empty()) return false;
++        size_t remaining = sets[0].size() + sets[1].size() + sets[2].size() + 12;
++        *csd = C2StreamInitDataInfo::output::AllocUnique(remaining, 0u);
++        uint8_t* target = (*csd)->m.value;
++        for (const auto& set : sets)
++            if (!copyNALUPrependingStartCode(set.data(), set.size(), &target, &remaining)) return false;
++        return true;
++    }
+ 
+     std::vector<uint8_t> sps;
+     std::vector<uint8_t> pps;
+--- a/common/FormatConverter.cpp
++++ b/common/FormatConverter.cpp
+@@ -214,7 +214,7 @@
+         return C2_CORRUPTED;
+     }
+ 
+-    if (inputFormat == mOutFormat) {
++    if (inputFormat == mOutFormat && inputFormat != VideoPixelFormat::NV12) {
+         ALOGV("Zero-Copy is applied");
+         mGraphicBlocks.emplace_back(new BlockEntry(frameIndex));
+         *convertedBlock = inputBlock;
+@@ -249,6 +249,10 @@
+         const int srcStrideV = inputLayout.planes[C2PlanarLayout::PLANE_V].rowInc;
+ 
+         switch (convertMap(inputFormat, mOutFormat)) {
++        case convertMap(VideoPixelFormat::NV12, VideoPixelFormat::NV12):
++            libyuv::NV12Copy(srcY, srcStrideY, srcU, srcStrideU, dstY, dstStrideY,
++                            dstUV, dstStrideUV, mVisibleSize.width, mVisibleSize.height);
++            break;
+         case convertMap(VideoPixelFormat::YV12, VideoPixelFormat::I420):
+             libyuv::I420Copy(srcY, srcStrideY, srcU, srcStrideU, srcV, srcStrideV, dstY, dstStrideY,
+                              dstU, dstStrideU, dstV, dstStrideV, mVisibleSize.width,
+--- a/common/include/v4l2_codec2/common/EncodeHelpers.h
++++ b/common/include/v4l2_codec2/common/EncodeHelpers.h
+@@ -52,7 +52,7 @@
+ // concatenated to the first encoded slice. This function extracts the CSD out of the bitstream and
+ // stores it into |csd|. Returns whether extracting CSD info was successful.
+ bool extractCSDInfo(std::unique_ptr<C2StreamInitDataInfo::output>* const csd, const uint8_t* data,
+-                    size_t length);
++                    size_t length, bool hevc = false);
+ 
+ // Prepend the specified |sps| and |pps| NAL units (without start codes) to the H.264 |data| stream.
+ // The result is copied into |dst|. The provided |sps| and |pps| data will be updated if an SPS or
+--- a/components/EncodeComponent.cpp
++++ b/components/EncodeComponent.cpp
+@@ -469,7 +469,9 @@
+             reportError(C2_CORRUPTED);
+             return;
+         }
+-        if (mEncoder->inputFormat() != format) {
++        // Normalize even NV12: minigbm's visible allocation may have a different
++        // stride/chroma offset from Venus's negotiated coded allocation.
++        {
+             ALOG_ASSERT(!mInputFormatConverter);
+             ALOGV("Creating input format convertor (%s)",
+                   videoPixelFormatToString(mEncoder->inputFormat()).c_str());
+@@ -883,7 +885,8 @@
+         ALOGV("No CSD submitted yet, extracting CSD");
+         std::unique_ptr<C2StreamInitDataInfo::output> csd;
+         C2ReadView view = constBlock.map().get();
+-        if (!extractCSDInfo(&csd, view.data(), view.capacity())) {
++        if (view.error() != C2_OK || !extractCSDInfo(&csd, view.data(), dataSize,
++                mInterface->getOutputProfile() == C2Config::PROFILE_HEVC_MAIN)) {
+             ALOGE("Failed to extract CSD");
+             reportError(C2_CORRUPTED);
+             return;
+--- a/components/EncodeInterface.cpp
++++ b/components/EncodeInterface.cpp
+@@ -40,7 +40,7 @@
+ 
+ // The maximal output bitrate in bits per second. It's the max bitrate of AVC Level4.1.
+ // TODO: increase this in the future for supporting higher level/resolution encoding.
+-constexpr uint32_t kMaxBitrate = 50000000;
++constexpr uint32_t kMaxBitrate = 60000000;
+ }  // namespace
+ 
+ //static
+@@ -223,8 +223,8 @@
+     addParameter(DefineParam(mInputVisibleSize, C2_PARAMKEY_PICTURE_SIZE)
+                          .withDefault(new C2StreamPictureSizeInfo::input(0u, 320, 240))
+                          .withFields({
+-                                 C2F(mInputVisibleSize, width).inRange(2, maxSize.width, 2),
+-                                 C2F(mInputVisibleSize, height).inRange(2, maxSize.height, 2),
++                                 C2F(mInputVisibleSize, width).inRange(128, maxSize.width, 2),
++                                 C2F(mInputVisibleSize, height).inRange(128, maxSize.height, 2),
+                          })
+                          .withSetter(SizeSetter)
+                          .build());
+@@ -232,13 +232,13 @@
+     addParameter(DefineParam(mFrameRate, C2_PARAMKEY_FRAME_RATE)
+                          .withDefault(new C2StreamFrameRateInfo::output(0u, kDefaultFrameRate))
+                          // TODO: More restriction?
+-                         .withFields({C2F(mFrameRate, value).greaterThan(0.)})
++                         .withFields({C2F(mFrameRate, value).inRange(1., 120.)})
+                          .withSetter(Setter<decltype(*mFrameRate)>::StrictValueWithNoDeps)
+                          .build());
+ 
+     addParameter(DefineParam(mBitrate, C2_PARAMKEY_BITRATE)
+                          .withDefault(new C2StreamBitrateInfo::output(0u, kDefaultBitrate))
+-                         .withFields({C2F(mBitrate, value).inRange(0, kMaxBitrate)})
++                         .withFields({C2F(mBitrate, value).inRange(1, kMaxBitrate)})
+                          .withSetter(Setter<decltype(*mBitrate)>::StrictValueWithNoDeps)
+                          .build());
+ 
+@@ -274,6 +274,12 @@
+                                                  C2Config::LEVEL_AVC_5, C2Config::LEVEL_AVC_5_1})})
+                         .withSetter(H264ProfileLevelSetter, mInputVisibleSize, mFrameRate, mBitrate)
+                         .build());
++    } else if (caps.codec == VideoCodec::HEVC) {
++        outputMime = MEDIA_MIMETYPE_VIDEO_HEVC;
++        addParameter(DefineParam(mProfileLevel, C2_PARAMKEY_PROFILE_LEVEL)
++            .withConstValue(new C2StreamProfileLevelInfo::output(
++                0u, C2Config::PROFILE_HEVC_MAIN, C2Config::LEVEL_HEVC_MAIN_4_1))
++            .build());
+     } else if (caps.codec == VideoCodec::VP8) {
+         outputMime = MEDIA_MIMETYPE_VIDEO_VP8;
+         // VP8 doesn't have conventional profiles, we'll use profile0 if the VP8 codec is requested.
+--- a/v4l2/V4L2ComponentCommon.cpp
++++ b/v4l2/V4L2ComponentCommon.cpp
+@@ -13,6 +13,7 @@
+ namespace android {
+ 
+ const std::string V4L2ComponentName::kH264Encoder = "c2.v4l2.avc.encoder";
++const std::string V4L2ComponentName::kHEVCEncoder = "c2.v4l2.hevc.encoder";
+ const std::string V4L2ComponentName::kVP8Encoder = "c2.v4l2.vp8.encoder";
+ const std::string V4L2ComponentName::kVP9Encoder = "c2.v4l2.vp9.encoder";
+ 
+@@ -27,7 +28,7 @@
+ 
+ // static
+ bool V4L2ComponentName::isValid(const std::string& name) {
+-    return name == kH264Encoder || name == kVP8Encoder || name == kVP9Encoder ||
++    return name == kH264Encoder || name == kHEVCEncoder || name == kVP8Encoder || name == kVP9Encoder ||
+            name == kH264Decoder || name == kVP8Decoder || name == kVP9Decoder ||
+            name == kHEVCDecoder || name == kH264SecureDecoder || name == kVP8SecureDecoder ||
+            name == kVP9SecureDecoder || name == kHEVCSecureDecoder;
+@@ -37,7 +38,7 @@
+ bool V4L2ComponentName::isEncoder(const std::string& name) {
+     ALOG_ASSERT(isValid(name));
+ 
+-    return name == kH264Encoder || name == kVP8Encoder || name == kVP9Encoder;
++    return name == kH264Encoder || name == kHEVCEncoder || name == kVP8Encoder || name == kVP9Encoder;
+ }
+ 
+ // static
+@@ -65,6 +66,7 @@
+             {kVP9Encoder, VideoCodec::VP9},
+ 
+             {kHEVCDecoder, VideoCodec::HEVC}, {kHEVCSecureDecoder, VideoCodec::HEVC},
++            {kHEVCEncoder, VideoCodec::HEVC},
+     };
+ 
+     auto iter = kNameToCodecs.find(name);
+--- a/v4l2/V4L2ComponentStore.cpp
++++ b/v4l2/V4L2ComponentStore.cpp
+@@ -38,7 +38,18 @@
+ 
+     auto builder = ComponentStore::Builder("android.componentStore.v4l2");
+ 
+-    // Venus POC: expose only enabled, nonsecure decoders backed by a real device.
++    // Stock A9 encoder opt-in still requires a discovered encoder device and profiles.
++    if (property_get_bool("ro.vendor.v4l2_codec2.encoder.supported.h264", false) &&
++        !V4L2Device::queryEncodingCapabilities(VideoCodec::H264).supportedProfiles.empty()) {
++        builder.encoder(V4L2ComponentName::kH264Encoder, VideoCodec::H264,
++                        &V4L2ComponentFactory::create);
++    }
++    if (property_get_bool("ro.vendor.v4l2_codec2.encoder.supported.hevc", false) &&
++        !V4L2Device::queryEncodingCapabilities(VideoCodec::HEVC).supportedProfiles.empty()) {
++        builder.encoder(V4L2ComponentName::kHEVCEncoder, VideoCodec::HEVC,
++                        &V4L2ComponentFactory::create);
++    }
++    // Expose only enabled, nonsecure decoders backed by a real device.
+     // This mainline path has no protected-content allocator/session support.
+     if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.h264", false) &&
+         !V4L2Device::queryDecodingCapabilities(VideoCodec::H264).supportedProfiles.empty()) {
+--- a/v4l2/V4L2Device.cpp
++++ b/v4l2/V4L2Device.cpp
+@@ -2317,6 +2317,20 @@
+     caps.codec = codec;
+     caps.supportedProfiles = V4L2Device::getSupportedProfiles(
+             V4L2Device::Type::kEncoder, {V4L2Device::videoCodecToPixFmt(codec)});
++    // Restrict the A9 port to stock's 8-bit AVC/HEVC envelope. Do not manufacture
++    // profiles when discovery failed or expose the generic lite table's Main10.
++    caps.supportedProfiles.erase(std::remove_if(caps.supportedProfiles.begin(),
++        caps.supportedProfiles.end(), [codec](const SupportedProfile& p) {
++            return codec == VideoCodec::HEVC ? p.profile != C2Config::PROFILE_HEVC_MAIN :
++                (p.profile != C2Config::PROFILE_AVC_BASELINE &&
++                 p.profile != C2Config::PROFILE_AVC_MAIN && p.profile != C2Config::PROFILE_AVC_HIGH);
++        }), caps.supportedProfiles.end());
++    for (auto& p : caps.supportedProfiles) {
++        p.min_resolution.width = std::max(p.min_resolution.width, 128);
++        p.min_resolution.height = std::max(p.min_resolution.height, 128);
++        p.max_resolution.width = std::min(p.max_resolution.width, 1920);
++        p.max_resolution.height = std::min(p.max_resolution.height, 1088);
++    }
+     return caps;
+ }
+ 
+--- a/v4l2/V4L2EncodeComponent.cpp
++++ b/v4l2/V4L2EncodeComponent.cpp
+@@ -66,7 +66,7 @@
+     C2Config::profile_t outputProfile = mInterface->getOutputProfile();
+ 
+     // CSD only needs to be extracted when using an H.264 profile.
+-    mExtractCSD = isH264Profile(outputProfile);
++    mExtractCSD = isH264Profile(outputProfile) || outputProfile == C2Config::PROFILE_HEVC_MAIN;
+ 
+     std::optional<uint8_t> h264Level;
+     if (isH264Profile(outputProfile)) {
+--- a/v4l2/V4L2Encoder.cpp
++++ b/v4l2/V4L2Encoder.cpp
+@@ -8,6 +8,7 @@
+ #include <v4l2_codec2/v4l2/V4L2Encoder.h>
+ 
+ #include <stdint.h>
++#include <v4l2_codec2/v4l2/EncoderOutput.h>
+ #include <optional>
+ #include <vector>
+ 
+@@ -607,7 +608,18 @@
+     mDevice->setExtCtrls(V4L2_CTRL_CLASS_MPEG, {V4L2ExtCtrl(V4L2_CID_MPEG_VIDEO_MB_RC_ENABLE, 1),
+                                                 V4L2ExtCtrl(V4L2_CID_MPEG_VIDEO_GOP_SIZE, 0)});
+ 
+-    // All controls below are H.264-specific, so we can return here if the profile is not H.264.
++    if (outputProfile == C2Config::PROFILE_HEVC_MAIN) {
++        // Match stock's 8-bit NV12/Main path, with no B-frame reordering. Ask
++        // Venus to join VPS/SPS/PPS to the first access unit for Codec2 CSD.
++        mInjectParamsBeforeIDR = false;
++        return mDevice->setExtCtrls(V4L2_CTRL_CLASS_MPEG, {
++            V4L2ExtCtrl(V4L2_CID_MPEG_VIDEO_HEVC_PROFILE, V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN),
++            V4L2ExtCtrl(V4L2_CID_MPEG_VIDEO_HEVC_LEVEL, V4L2_MPEG_VIDEO_HEVC_LEVEL_4_1),
++            V4L2ExtCtrl(V4L2_CID_MPEG_VIDEO_B_FRAMES, 0),
++            V4L2ExtCtrl(V4L2_CID_MPEG_VIDEO_HEADER_MODE,
++                        V4L2_MPEG_VIDEO_HEADER_MODE_JOINED_WITH_1ST_FRAME)});
++    }
++    // Remaining controls are H.264-specific.
+     if (outputProfile >= C2Config::PROFILE_AVC_BASELINE &&
+         outputProfile <= C2Config::PROFILE_AVC_ENHANCED_MULTIVIEW_DEPTH_HIGH) {
+         return configureH264(outputProfile, outputH264Level);
+@@ -841,10 +853,8 @@
+ 
+     size_t bufferId = buffer->bufferId();
+ 
+-    std::vector<int> fds;
+-    fds.push_back(bitstreamBuffer->dmabuf->handle()->data[0]);
+-    if (!std::move(*buffer).queueDMABuf(fds)) {
+-        ALOGE("Failed to queue output buffer using QueueDMABuf");
++    if (!std::move(*buffer).queueMMap()) {
++        ALOGE("Failed to queue mapped encoder output buffer");
+         onError();
+         return false;
+     }
+@@ -922,7 +932,15 @@
+         return false;
+     }
+ 
+-    size_t encodedDataSize = buffer->getPlaneBytesUsed(0) - buffer->getPlaneDataOffset(0);
++    const size_t used = buffer->getPlaneBytesUsed(0);
++    const size_t offset = buffer->getPlaneDataOffset(0);
++    if (offset > used || used > mOutputBufferSize) {
++        ALOGE("Invalid encoder output bounds: used=%zu offset=%zu capacity=%u",
++              used, offset, mOutputBufferSize);
++        onError();
++        return false;
++    }
++    size_t encodedDataSize = used - offset;
+     ::base::TimeDelta timestamp = ::base::TimeDelta::FromMicroseconds(
+             buffer->getTimeStamp().tv_usec +
+             buffer->getTimeStamp().tv_sec * ::base::Time::kMicrosecondsPerSecond);
+@@ -940,6 +958,17 @@
+     std::unique_ptr<BitstreamBuffer> bitstreamBuffer =
+             std::move(mOutputBuffers[buffer->bufferId()]);
+     if (encodedDataSize > 0) {
++        // Copy compressed bytes out before returning the mapped V4L2 slot to
++        // its queue. Client linear blocks are never imported into Venus.
++        {
++            C2WriteView view = bitstreamBuffer->dmabuf->map().get();
++            if (view.error() != C2_OK || !copyEncoderOutput(view.data(), view.size(),
++                    buffer->getPlaneMapping(0), mOutputBufferSize, offset, used)) {
++                ALOGE("Failed to copy mapped encoder output");
++                onError();
++                return false;
++            }
++        }
+         if (!mInjectParamsBeforeIDR) {
+             // No need to inject SPS or PPS before IDR frames, we can just return the buffer as-is.
+             mOutputBufferDoneCb.Run(encodedDataSize, timestamp.InMicroseconds(),
+@@ -1030,7 +1059,7 @@
+ 
+     // No memory is allocated here, we just generate a list of buffers on the output queue, which
+     // will hold memory handles to the real buffers.
+-    if (mOutputQueue->allocateBuffers(kOutputBufferCount, V4L2_MEMORY_DMABUF) <
++    if (mOutputQueue->allocateBuffers(kOutputBufferCount, V4L2_MEMORY_MMAP) <
+         kOutputBufferCount) {
+         ALOGE("Failed to create V4L2 output buffers.");
+         return false;
+--- a/v4l2/include/v4l2_codec2/v4l2/EncoderOutput.h
++++ b/v4l2/include/v4l2_codec2/v4l2/EncoderOutput.h
+@@ -0,0 +1,15 @@
++// SPDX-License-Identifier: Apache-2.0
++#pragma once
++#include <cstddef>
++#include <cstring>
++namespace android {
++// Validate the driver's range before pointer arithmetic or either memory access.
++inline bool copyEncoderOutput(void* dst, size_t dstSize, const void* src,
++                              size_t srcSize, size_t offset, size_t used) {
++    if (offset > used || used > srcSize || used - offset > dstSize) return false;
++    if (used == offset) return true;
++    if (!src || !dst) return false;
++    std::memcpy(dst, static_cast<const unsigned char*>(src) + offset, used - offset);
++    return true;
++}
++}  // namespace android
+--- a/v4l2/include/v4l2_codec2/v4l2/V4L2ComponentCommon.h
++++ b/v4l2/include/v4l2_codec2/v4l2/V4L2ComponentCommon.h
+@@ -14,6 +14,7 @@
+ // Defines the names of all supported components.
+ struct V4L2ComponentName {
+     static const std::string kH264Encoder;
++    static const std::string kHEVCEncoder;
+     static const std::string kVP8Encoder;
+     static const std::string kVP9Encoder;
+ 

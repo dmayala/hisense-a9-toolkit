@@ -1,0 +1,17 @@
+# /vendor/etc/init/init.a9-sensors.rc -- ADSP sensors bring-up (S2b/S2c, runs/sensors-s2c-prep.md).
+# INERT unless the vendor was built with sensors (ro.vendor.a9ml.sensors=1) AND the kill
+# switch is on: persist.a9.sensors=1 (default unset = OFF). The S2c TEST vendor ships the
+# switch as a build.prop default; a property-only trigger would then fire at
+# queue_property_triggers, before /data and /mnt/vendor exist, so it is tied to
+# post-fs-data (the GPU pattern, review 79k C2.1). a9-sensors.sh also refuses unless /data
+# is a RAM disk. Never restarts; a failure or an ADSP crash leaves sensors off for this
+# boot (vendor.a9.sensors.state says why).
+on post-fs-data && property:persist.a9.sensors=1 && property:ro.vendor.a9ml.sensors=1
+    start vendor.a9-sensors
+
+service vendor.a9-sensors /system/bin/sh /vendor/bin/a9-sensors.sh start
+    user root
+    group root system
+    seclabel u:r:phhsu_daemon:s0
+    oneshot
+    disabled

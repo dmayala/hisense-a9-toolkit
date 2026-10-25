@@ -1,0 +1,37 @@
+service vendor.radio-a9 /vendor/bin/hw/android.hardware.radio-service.a9
+    interface aidl android.hardware.radio.config.IRadioConfig/default
+    interface aidl android.hardware.radio.data.IRadioData/slot1
+    interface aidl android.hardware.radio.messaging.IRadioMessaging/slot1
+    interface aidl android.hardware.radio.modem.IRadioModem/slot1
+    interface aidl android.hardware.radio.network.IRadioNetwork/slot1
+    interface aidl android.hardware.radio.sim.IRadioSim/slot1
+    interface aidl android.hardware.radio.voice.IRadioVoice/slot1
+    interface aidl android.hardware.radio.data.IRadioData/slot2
+    interface aidl android.hardware.radio.messaging.IRadioMessaging/slot2
+    interface aidl android.hardware.radio.modem.IRadioModem/slot2
+    interface aidl android.hardware.radio.network.IRadioNetwork/slot2
+    interface aidl android.hardware.radio.sim.IRadioSim/slot2
+    interface aidl android.hardware.radio.voice.IRadioVoice/slot2
+    disabled
+    seclabel u:r:hal_radio_default:s0
+    class main
+    user radio
+    group radio inet misc log readproc wakelock system
+    capabilities BLOCK_SUSPEND NET_ADMIN NET_RAW
+    task_profiles ProcessCapacityHigh
+
+service a9ml-cellular-prepare /system/bin/sh /vendor/bin/a9ml-cellular-prepare.sh
+    class late_start
+    user root
+    group root radio system
+    seclabel u:r:vendor_init:s0
+    disabled
+    oneshot
+
+# Uses the existing MPSS/Wi-Fi owner and RAM-copy rmtfs, never starts/stops it.
+on property:vendor.a9ml.cellular=1
+    exec_start a9ml-cellular-prepare
+    start vendor.radio-a9
+
+on property:vendor.a9ml.cellular=0
+    stop vendor.radio-a9

@@ -1,0 +1,14 @@
+#!/bin/sh
+# fake i2ctransfer -f -y 0 w2@0x0f HI LO r4: the TC358767 raw reads of e3t
+. "$SIM_LIB"
+[ "$1 $2 $3 $4" = "-f -y 0 w2@0x0f" ] && [ "$7" = r4 ] || { echo "Error: unexpected arguments: $*"; exit 1; }
+r=$(printf '0x%04x' $(( ($5 << 8) | $6 )))
+# tc-read-fail: one register NACKs (info only for the sequencer)
+scen tc-read-fail && [ $r = 0x0214 ] && { echo "Error: Sending messages failed: No such device or address"; exit 1; }
+case $r in
+0x0500) v=0x00006601;; 0x0510) v=0x00000001;; 0x050c) v=0x0000003d;; 0x0448) v=0x00000086;;
+0x0450) v=0x03f00100;; 0x0454) v=0x001d0003;; 0x045c) v=0x00040002;; 0x0464) v=0x00000000;;
+0x0908) v=0x00000001;; 0x0914) v=0x00118301;; 0x0300) v=$(( $(cat $S/dsierr 2>/dev/null || echo 0) )); echo $((v + 2)) > $S/dsierr;;
+*) v=0;;
+esac
+printf '0x%02x 0x%02x 0x%02x 0x%02x\n' $(( v & 255 )) $(( (v >> 8) & 255 )) $(( (v >> 16) & 255 )) $(( (v >> 24) & 255 ))

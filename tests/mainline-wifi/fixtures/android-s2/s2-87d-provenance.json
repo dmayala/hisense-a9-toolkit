@@ -1,0 +1,16 @@
+{
+  "console_source": "/tmp/claude-1000/-home-user-A9/138276b1-32cf-47e9-a654-4be339175015/scratchpad/s2-run.out",
+  "console_sha256": "77db19936c312be5dce9bc40200d143c41edc1b409c30f3a9cbce885c33cb441",
+  "captured": [
+    "phase=store-pre failed",
+    "cleanup stop/post failed",
+    "restore passed and slot A healthy",
+    "credentials not delivered"
+  ],
+  "not_captured": [
+    "root command stdout/stderr/exit status",
+    "slot-B mount, partition, module and sysfs listing"
+  ],
+  "derived_fixture": "zero MPSS remoteproc before prepare; derived from pinned kernel CONFIG_QCOM_Q6V5_PAS=m, modules.load excluding PAS, modules.wifi including PAS, and gated init awaiting-s2-audit. Not captured hardware sysfs.",
+  "bare_metal_comparison": "trial22 post.cmp has fsc,fsg,modemst1,modemst2; post-check uses the same root channel and stdin sha256sum; persist was not in that four-store pair."
+}

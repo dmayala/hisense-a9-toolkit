@@ -1,0 +1,68 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/* R4 keeps its D1 card disabled; ESS is the sole live ALSA card (card0). */
+/dts-v1/;
+/plugin/;
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/sound/qcom,q6afe.h>
+#include <dt-bindings/sound/qcom,q6asm.h>
+
+&{/sound} { status = "disabled"; };
+
+&{/} {
+ sound-ess {
+  compatible = "hisense,a9-es9218-sndcard";
+  model = "Hisense-A9-HiFi";
+  pinctrl-names = "default", "sleep";
+  pinctrl-0 = <&ess_i2s_default>;
+  pinctrl-1 = <&ess_i2s_sleep>;
+  audio-routing = "Headphone Jack", "HPOUTL", "Headphone Jack", "HPOUTR";
+  mm1-dai-link {
+   link-name = "MultiMedia1";
+   cpu { sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA1>; };
+  };
+  ess-dai-link {
+   link-name = "ESS HiFi Playback";
+   cpu { sound-dai = <&q6afedai SECONDARY_MI2S_RX>; };
+   platform { sound-dai = <&q6routing>; };
+   codec { sound-dai = <&ess_dac>; };
+  };
+ };
+};
+
+&i2c1 {
+ #address-cells = <1>;
+ #size-cells = <0>;
+ ess_dac: audio-codec@48 {
+  compatible = "hisense,a9-es9218";
+  reg = <0x48>;
+  #sound-dai-cells = <0>;
+  reset-gpios = <&tlmm 65 GPIO_ACTIVE_LOW>;
+  select-gpios = <&tlmm 69 GPIO_ACTIVE_HIGH>;
+  oscillator-enable-gpios = <&tlmm 66 GPIO_ACTIVE_HIGH>;
+  pa-enable-gpios = <&tlmm 68 GPIO_ACTIVE_HIGH>;
+ };
+};
+&q6afedai {
+ #address-cells = <1>;
+ #size-cells = <0>;
+ dai@12 { reg = <SECONDARY_MI2S_RX>; qcom,sd-lines = <0>; };
+};
+&lpass_tlmm {
+ status = "okay";
+ ess_i2s_default: ess-i2s-default-state {
+  clk { pins = "gpio10"; function = "i2s2_clk"; drive-strength = <8>; bias-disable; output-high; };
+  ws { pins = "gpio11"; function = "i2s2_ws"; drive-strength = <8>; bias-disable; output-high; };
+  data { pins = "gpio12"; function = "i2s2_data"; drive-strength = <8>; bias-disable; output-high; };
+ };
+ ess_i2s_sleep: ess-i2s-sleep-state {
+  clk { pins = "gpio10"; function = "i2s2_clk"; drive-strength = <2>; bias-pull-down; input-enable; };
+  ws { pins = "gpio11"; function = "i2s2_ws"; drive-strength = <2>; bias-pull-down; input-enable; };
+  data { pins = "gpio12"; function = "i2s2_data"; drive-strength = <2>; bias-pull-down; input-enable; };
+ };
+};
+&tlmm {
+ /* Preserve R4's other reservations; release only ESS 65/66/68/69. */
+ gpio-reserved-ranges = <3 1>, <14 7>, <22 3>, <27 4>, <32 1>,
+                        <35 1>, <37 28>, <67 1>, <70 1>, <72 8>,
+                        <87 21>, <109 5>;
+};

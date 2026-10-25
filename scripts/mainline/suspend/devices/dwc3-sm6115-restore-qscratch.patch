@@ -1,0 +1,64 @@
+--- a/drivers/usb/dwc3/dwc3-qcom-legacy.c
++++ b/drivers/usb/dwc3/dwc3-qcom-legacy.c
+@@ -73,0 +74,4 @@
++	u32			qscratch_general_saved;
++	u32			qscratch_hs_saved;
++	u32			qscratch_ss_saved;
++	bool			restore_qscratch;
+@@ -433,0 +438,9 @@
++	/* The HS-only SM6115 glue can lose QSCRATCH across GDSC collapse.
++	 * Keep the exact session policy; do not invent a VBUS/charger vote.
++	 */
++	if (qcom->restore_qscratch) {
++		qcom->qscratch_general_saved = readl(qcom->qscratch_base + QSCRATCH_GENERAL_CFG);
++		qcom->qscratch_hs_saved = readl(qcom->qscratch_base + QSCRATCH_HS_PHY_CTRL);
++		qcom->qscratch_ss_saved = readl(qcom->qscratch_base + QSCRATCH_SS_PHY_CTRL);
++	}
++
+@@ -461,0 +475,38 @@
++static void dwc3_qcom_restore_bits(struct dwc3_qcom *qcom, u32 offset,
++				   u32 mask, u32 saved)
++{
++	u32 val = readl(qcom->qscratch_base + offset);
++
++	writel((val & ~mask) | (saved & mask), qcom->qscratch_base + offset);
++	readl(qcom->qscratch_base + offset);
++}
++
++static void dwc3_qcom_restore_qscratch(struct dwc3_qcom *qcom)
++{
++	u32 gen = readl(qcom->qscratch_base + QSCRATCH_GENERAL_CFG);
++	u32 hs = readl(qcom->qscratch_base + QSCRATCH_HS_PHY_CTRL);
++	u32 ss = readl(qcom->qscratch_base + QSCRATCH_SS_PHY_CTRL);
++	u32 mux = PIPE_UTMI_CLK_SEL | PIPE3_PHYSTATUS_SW;
++
++	if ((gen ^ qcom->qscratch_general_saved) & (mux | PIPE_UTMI_CLK_DIS)) {
++		/* Same clock-mux sequencing as dwc3_qcom_select_utmi_clk(). */
++		dwc3_qcom_setbits(qcom->qscratch_base, QSCRATCH_GENERAL_CFG,
++				  PIPE_UTMI_CLK_DIS);
++		usleep_range(100, 1000);
++		dwc3_qcom_restore_bits(qcom, QSCRATCH_GENERAL_CFG, mux,
++					 qcom->qscratch_general_saved);
++		usleep_range(100, 1000);
++		dwc3_qcom_restore_bits(qcom, QSCRATCH_GENERAL_CFG, PIPE_UTMI_CLK_DIS,
++					 qcom->qscratch_general_saved);
++	}
++	dwc3_qcom_restore_bits(qcom, QSCRATCH_SS_PHY_CTRL, LANE0_PWR_PRESENT,
++				 qcom->qscratch_ss_saved);
++	dwc3_qcom_restore_bits(qcom, QSCRATCH_HS_PHY_CTRL,
++				 UTMI_OTG_VBUS_VALID | SW_SESSVLD_SEL,
++				 qcom->qscratch_hs_saved);
++	dev_info(qcom->dev, "A9USB_R20 restore gen=%#x->%#x hs=%#x->%#x ss=%#x->%#x\n",
++		 gen, readl(qcom->qscratch_base + QSCRATCH_GENERAL_CFG),
++		 hs, readl(qcom->qscratch_base + QSCRATCH_HS_PHY_CTRL),
++		 ss, readl(qcom->qscratch_base + QSCRATCH_SS_PHY_CTRL));
++}
++
+@@ -485,0 +537,4 @@
++	/* Restore glue before the child DWC3 enables its control endpoints. */
++	if (qcom->restore_qscratch)
++		dwc3_qcom_restore_qscratch(qcom);
++
+@@ -792,0 +848,2 @@
++	qcom->restore_qscratch = ignore_pipe_clk &&
++		of_device_is_compatible(np, "qcom,sm6115-dwc3");

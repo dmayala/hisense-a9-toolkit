@@ -1,0 +1,23 @@
+# Qualification only: boot flag supplied by build-enforcing.py
+# --qualification-audit. Short switch MUST fit ABL's primary cmdline field.
+# Static helper uses the existing auditctl domain, sets rate0/backlog8192 and
+# reads them back to kmsg. No daemon PID, audit-enable, rules or persist writes.
+service vendor.a9ml_auditctl /vendor/bin/a9ml-audit
+    seclabel u:r:auditctl:s0
+    user root
+    group root
+    capabilities AUDIT_CONTROL
+    disabled
+    oneshot
+
+on early-init && property:ro.boot.a9audit=1
+    exec_start vendor.a9ml_auditctl
+
+on post-fs-data && property:ro.boot.a9audit=1
+    exec_start vendor.a9ml_auditctl
+
+# The GSI starts logd-auditctl -r ${persist.logd.audit.rate:-5} at boot
+# completion (and on property changes). Reapply only after that oneshot exits,
+# so it cannot silently leave the qualification run limited to five/sec.
+on property:init.svc.logd-auditctl=stopped && property:ro.boot.a9audit=1
+    exec_start vendor.a9ml_auditctl

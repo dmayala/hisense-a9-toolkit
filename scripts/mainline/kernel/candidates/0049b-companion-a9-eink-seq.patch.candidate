@@ -1,0 +1,26 @@
+diff --git a/scripts/mainline/kernel/initramfs/a9-eink-seq b/scripts/mainline/kernel/initramfs/a9-eink-seq
+index 6ab9329..80bd68d 100755
+--- a/scripts/mainline/kernel/initramfs/a9-eink-seq
++++ b/scripts/mainline/kernel/initramfs/a9-eink-seq
+@@ -67,7 +67,7 @@ DBG=$R/sys/kernel/debug
+ # ---- session parameters (docs: "E3-E5 sequencer") ---------------------------
+ HV_MAX_MS=15000          # a9_eink cap, below fp9929a.max_on_ms (20000)
+ FP_MAX_ON_MS=20000       # expected fp9929a.max_on_ms (patch 0017 default)
+-FP_MIN_OFF_MS=1000       # expected fp9929a.min_off_ms (patch 0025 default)
++FP_MIN_OFF_MS=500        # expected fp9929a.min_off_ms (patch 0025 + 0049b default: datasheet VLD)
+ E3A_N=255                # zero frames, session A (3 s at 85 Hz): PG sampling
+ E3B_N=425                # zero frames, session B (5 s): timing, VCOM, MX
+ E3T_N=425                # template frames, session e3t (5 s): bridge/clock/DPU reads
+diff --git a/tests/mainline-eink-seq/sim-lib.sh b/tests/mainline-eink-seq/sim-lib.sh
+index 236b354..8f05e03 100644
+--- a/tests/mainline-eink-seq/sim-lib.sh
++++ b/tests/mainline-eink-seq/sim-lib.sh
+@@ -118,7 +118,7 @@ setup() { # setup <scenario words>
+ 	echo " 103:          0  msm_mdss     0 Edge      msm" > $R/proc/interrupts
+ 	echo N > $R/sys/module/fp9929a/parameters/allow_power_on
+ 	echo 20000 > $R/sys/module/fp9929a/parameters/max_on_ms
+-	echo 1000 > $R/sys/module/fp9929a/parameters/min_off_ms
++	echo 500 > $R/sys/module/fp9929a/parameters/min_off_ms
+ 	echo N > $R/sys/module/panel_hisense_hlte556n_eink/parameters/enable
+ 	echo 4455435 > $R/sys/class/power_supply/battery/voltage_now
+ 	echo 30343 > "$R/sys/bus/iio/devices/iio:device1/in_temp_epd_top_therm_input"

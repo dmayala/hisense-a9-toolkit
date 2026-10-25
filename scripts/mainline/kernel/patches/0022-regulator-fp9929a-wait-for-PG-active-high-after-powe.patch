@@ -1,0 +1,246 @@
+From 4ac74fdc8682fd3d85c66334626b02644dc5df37 Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 06:19:53 -0700
+Subject: [PATCH] regulator: fp9929a: wait for PG (active-high) after power-up;
+ a9_eink requires it
+
+The FP9929A PG output on the Hisense A9 (TLMM GPIO82) was treated as
+active-low: fp9929a_get_status() reported pg_good when the RAW level was 0,
+based on 45 stock "active end, state=0" log lines. A re-audit
+(docs/mainline-fp9929a-pg.md in the A9 work repo) found that the stock
+kernel samples the raw level immediately after toggling the controls and
+never waits for or checks PG; the 45 lines are 23 unique enable-edge
+samples, not settled readings. The settled evidence (mainline capture with
+the bootloader's rails up: PG=1; after power-down: 0; UEFI "Epd Pmic
+Status = 1"; the related FP9931's datasheet and upstream driver) points to
+active-high: logical 1 = rails settled good.
+
+Use one convention throughout: the DT describes PG as GPIO_ACTIVE_HIGH and
+the driver tests the logical value == 1.
+
+fp9929a_enable() now, after VCOM-EN=1 (raised under the gate lock after
+the gate re-check of the previous patch), polls PG every ~1 ms and
+requires two consecutive reads of 1 within the new pg_timeout_ms
+parameter (default 100 ms; upstream fp9931.c waits up to 200 ms). On
+timeout or a GPIO read error it logs, runs the normal power-down, cancels
+the max_on work (non-sync) and returns -ETIMEDOUT without marking the
+rails on. The wait stops early when allow_power_on closes or max_on_ms
+expires, and the gate is re-checked under the gate lock once more after
+the wait, before the rails are marked on: a closed gate powers down and
+fails with -EPERM (-EIO and a latched fault if max_on_ms expired); a
+cancelled wait never reaches "on", even if the gate reopened meanwhile.
+So the guarantee of allow_power_on=0 (no power-up in flight, no pin raised
+afterwards) also covers the PG wait. Without a PG line, power-up is
+refused with -ENODEV (the A9 DT wires it). The settle time is reported in
+the "on:" line.
+
+a9_eink's a9_hv_is_on() no longer treats an unwired PG as good: drive
+frames need st.on && st.pg_valid && st.pg_good.
+
+This is not yet applied to the A9 image: it waits for an E3 capture that
+shows GPIO82 steady at 1 with GPIO36/86 high.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c |  7 ++-
+ drivers/regulator/fp9929a.c           | 90 +++++++++++++++++++++++++--
+ include/linux/regulator/fp9929a.h     |  3 +-
+ 3 files changed, 91 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index 5615d9338..95ec1de5a 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -509,15 +509,16 @@ static void a9_temps(struct a9_eink *a9, int *t1, int *t2)
+ 	}
+ }
+ 
+-/* rails up and, where PG is wired, power-good (PG reads 0 when on: MEASURED
+- * in 45 of 45 stock sessions) */
++/* rails up AND power-good. PG is required: logical 1 (DT active-high) means
++ * the rails settled good (docs/mainline-fp9929a-pg.md; the stock "state=0"
++ * samples were taken at the enable edge, not when settled) */
+ static bool a9_hv_is_on(struct a9_eink *a9)
+ {
+ 	struct fp9929a_status st;
+ 
+ 	if (fp9929a_get_status(a9->pmic_np, &st))
+ 		return false;
+-	return st.on && (!st.pg_valid || st.pg_good);
++	return st.on && st.pg_valid && st.pg_good;
+ }
+ 
+ static bool a9_hv_maybe_on(struct a9_eink *a9)
+diff --git a/drivers/regulator/fp9929a.c b/drivers/regulator/fp9929a.c
+index fa43d073f..d08e542b1 100644
+--- a/drivers/regulator/fp9929a.c
++++ b/drivers/regulator/fp9929a.c
+@@ -10,7 +10,8 @@
+  * E Ink panel driver, plus a hwmon temperature input.
+  *
+  *   power-up:   PWRUP=1, 5 ms, I2C reg 0x02 = VCOM code, I2C read reg 0x00
+- *               (temperature, deg C), 20 ms, VCOM-EN=1
++ *               (temperature, deg C), 20 ms, VCOM-EN=1, then wait for PG
++ *               (not in the vendor driver, see below)
+  *   power-down: 1 ms, VCOM-EN=0, 50 ms, PWRUP=0
+  *   VCOM code = 0x74 + trunc((mV - 2500) / 22), mV in [605, 5002), else 2650
+  *
+@@ -47,6 +48,16 @@
+  *    on: closing the gate is not a power-down;
+  *  - panic: the notifier drives VCOM-EN low, waits 50 ms and drives PWRUP low
+  *    unconditionally, also in the middle of a power-up.
++ *  - power-good: after VCOM-EN=1 the PG line (DT GPIO_ACTIVE_HIGH, logical 1
++ *    = rails settled good) must read 1 twice in a row within
++ *    fp9929a.pg_timeout_ms (default 100), or the rails are powered down and
++ *    the power-up fails with -ETIMEDOUT. Without a PG line power-up is
++ *    refused (-ENODEV). The wait ends early if the gate closes (or max_on_ms
++ *    expires), and the gate is re-checked under the gate lock once more
++ *    after it, before the rails are marked on. The vendor driver only logs
++ *    the raw level right after the control edges and never waits for it;
++ *    the polarity reasoning is in docs/mainline-fp9929a-pg.md of the A9
++ *    work repo.
+  *
+  * Modelled on drivers/regulator/fp9931.c (Andreas Kemnade), which drives the
+  * related FP9931 with a different register map.
+@@ -58,6 +69,7 @@
+ #include <linux/gpio/consumer.h>
+ #include <linux/hwmon.h>
+ #include <linux/i2c.h>
++#include <linux/ktime.h>
+ #include <linux/module.h>
+ #include <linux/mutex.h>
+ #include <linux/notifier.h>
+@@ -131,6 +143,15 @@ module_param_cb(allow_power_on, &fp9929a_allow_ops, &allow_power_on, 0644);
+ MODULE_PARM_DESC(allow_power_on,
+ 		 "Allow the E Ink high-voltage rails to be switched on (default: no). Writing 0 returns once no power-up is in flight (-EBUSY after 2 s)");
+ 
++/*
++ * fp9931.c (upstream, related part) waits up to 200 ms for PG; the FP9929A
++ * datasheet gives no PG timing, so this is a guess, kept tunable.
++ */
++static unsigned int pg_timeout_ms = 100;
++module_param(pg_timeout_ms, uint, 0644);
++MODULE_PARM_DESC(pg_timeout_ms,
++		 "Power-up fails unless PG reads good within this long after VCOM-EN (ms, default 100; read at each power-up)");
++
+ static unsigned int max_on_ms = 20000;
+ module_param(max_on_ms, uint, 0644);
+ MODULE_PARM_DESC(max_on_ms,
+@@ -234,6 +255,38 @@ static void fp9929a_abort_power_up(struct fp9929a *fp)
+ 	cancel_delayed_work(&fp->max_on_work);
+ }
+ 
++/*
++ * called with lock held, after VCOM-EN=1: wait until PG (logical) reads 1 on
++ * two consecutive samples ~1 ms apart. Returns 0 and the settle time in us,
++ * -ETIMEDOUT / a negative GPIO error with the last level read in *last, or
++ * -ECANCELED as soon as the gate closes or max_on_ms expires (the caller's
++ * locked gate re-check then decides).
++ */
++static int fp9929a_wait_pg(struct fp9929a *fp, unsigned int timeout_ms,
++			   unsigned int *settle_us, int *last)
++{
++	ktime_t start = ktime_get();
++	ktime_t deadline = ktime_add_ms(start, timeout_ms);
++	int good = 0, v;
++
++	for (;;) {
++		if (!READ_ONCE(allow_power_on) || READ_ONCE(fp->expired))
++			return -ECANCELED;
++		v = gpiod_get_value_cansleep(fp->pg);
++		*last = v;
++		if (v < 0)
++			return v;
++		good = v == 1 ? good + 1 : 0;
++		if (good >= 2) {
++			*settle_us = ktime_us_delta(ktime_get(), start);
++			return 0;
++		}
++		if (ktime_after(ktime_get(), deadline))
++			return -ETIMEDOUT;
++		usleep_range(1000, 1100);
++	}
++}
++
+ /* called with lock held: whether a max_on_ms fault is still latched */
+ static bool fp9929a_fault_latched(struct fp9929a *fp)
+ {
+@@ -340,7 +393,8 @@ static int fp9929a_gate_closed(struct fp9929a *fp, const char *before)
+ 
+ static int __fp9929a_enable(struct fp9929a *fp)
+ {
+-	int ret;
++	unsigned int pg_ms, settle_us = 0;
++	int ret, pg_last = -1;
+ 
+ 	if (!READ_ONCE(allow_power_on)) {
+ 		dev_warn(fp->dev,
+@@ -356,6 +410,11 @@ static int __fp9929a_enable(struct fp9929a *fp)
+ 		dev_err(fp->dev, "power-up refused: no VCOM from cmdline or DT\n");
+ 		return -EINVAL;
+ 	}
++	/* without PG nothing tells us the rails came up in spec */
++	if (!fp->pg) {
++		dev_err(fp->dev, "power-up refused: no pg-gpios in the DT\n");
++		return -ENODEV;
++	}
+ 
+ 	mutex_lock(&fp->lock);
+ 	if (fp->on) {
+@@ -411,10 +470,31 @@ static int __fp9929a_enable(struct fp9929a *fp)
+ 	}
+ 	gpiod_set_value_cansleep(fp->vcom_en, 1);
+ 	mutex_unlock(&fp9929a_gate_lock);
++
++	pg_ms = READ_ONCE(pg_timeout_ms);
++	ret = fp9929a_wait_pg(fp, pg_ms, &settle_us, &pg_last);
++	if (ret && ret != -ECANCELED) {
++		dev_err(fp->dev,
++			"PG not asserted within %u ms (last %d): powering down\n",
++			pg_ms, pg_last);
++		fp9929a_abort_power_up(fp);
++		mutex_unlock(&fp->lock);
++		return -ETIMEDOUT;
++	}
++	/*
++	 * the gate may have closed during the wait: re-check, under its lock.
++	 * A cancelled wait never reaches "on", even if the gate reopened since.
++	 */
++	if (ret == -ECANCELED || !fp9929a_gate_open(fp)) {
++		ret = fp9929a_gate_closed(fp, "marking the rails on (PG wait)");
++		mutex_unlock(&fp->lock);
++		return ret;
++	}
+ 	fp->on = true;
+-	dev_info(fp->dev, "on: VCOM %u mV (code 0x%02x), temp %d C, PG %d\n",
++	mutex_unlock(&fp9929a_gate_lock);
++	dev_info(fp->dev, "on: VCOM %u mV (code 0x%02x), temp %d C, PG 1 after %u us\n",
+ 		 fp->vcom_mv, fp->vcom_code, fp->have_temp ? fp->temp_c : -1,
+-		 fp->pg ? gpiod_get_value_cansleep(fp->pg) : -1);
++		 settle_us);
+ 	mutex_unlock(&fp->lock);
+ 	return 0;
+ }
+@@ -669,7 +749,7 @@ int fp9929a_get_status(struct device_node *np, struct fp9929a_status *st)
+ 		st->temp_valid = fp->have_temp;
+ 		st->temp_c = fp->temp_c;
+ 		st->pg_valid = !!fp->pg;
+-		st->pg_good = fp->pg && gpiod_get_raw_value_cansleep(fp->pg) == 0;
++		st->pg_good = fp->pg && gpiod_get_value_cansleep(fp->pg) == 1;
+ 		mutex_unlock(&fp->lock);
+ 	}
+ 	put_device(&client->dev);
+diff --git a/include/linux/regulator/fp9929a.h b/include/linux/regulator/fp9929a.h
+index 247470324..a7b24aaf4 100644
+--- a/include/linux/regulator/fp9929a.h
++++ b/include/linux/regulator/fp9929a.h
+@@ -11,7 +11,8 @@ struct fp9929a_status {
+ 	bool on;		/* rails up (power-up sequence completed) */
+ 	bool forced_off;	/* max_on_ms fault latched: power-up returns -EIO */
+ 	bool pg_valid;		/* a PG line is wired */
+-	bool pg_good;		/* PG raw level 0 (MEASURED: 0 when on, 1 when off) */
++	bool pg_good;		/* PG logical 1 (DT active-high): rails settled good;
++				 * docs/mainline-fp9929a-pg.md */
+ 	bool temp_valid;	/* a TMST sample exists */
+ 	int temp_c;		/* TMST byte from the last power-up, unsigned deg C */
+ };

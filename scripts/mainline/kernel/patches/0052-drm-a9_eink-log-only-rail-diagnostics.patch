@@ -1,0 +1,322 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: dmayala <dmayala@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 17:22:09 -0700
+Subject: [PATCH 0052] drm/a9_eink: log-only rail diagnostics (since-waveform
+ histogram, wf-end PG read, shutdown trace ring)
+
+Counters only; no latch, gate, shutdown, hold, cap or FP9929A API change.
+1. a9_check_rail_sample(): one counter hook (delay after the last waveform
+   end, buckets 0-3/4-15/16-63/64+ ms/none, and how many of those samples
+   were low).
+2. After a9_run_ring(): one non-latching PG read through the existing
+   fp9929a_get_status() when the pipeline is still on. Recorded and logged
+   (rate-limited warning), never acted on.
+3. A ring of the last 16 ordered-shutdown PG traces, harvested from the
+   status the wf-end read already returns (no extra read, nothing in the
+   shutdown path); a fault's own trace stays in rail.pd_*.
+Exposed read-only in the new eink/rail_diag attribute only (eink/status is unchanged: it is near the 4096 B sysfs page).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/a9_eink/a9_eink.h     |  31 +++++
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c | 189 ++++++++++++++++++++++++++
+ 2 files changed, 220 insertions(+)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index dee642e8f..c431aaba9 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -184,6 +184,9 @@ struct a9_input_stats {
+ 	u32 requested_mode, manual_mode;
+ };
+ 
++#define A9_DIAG_BUCKETS 5	/* 0-3 ms, 4-15, 16-63, 64+, no waveform yet */
++#define A9_DIAG_PD 16
++
+ struct a9_eink {
+ 	struct drm_device drm;
+ 	struct drm_plane plane;
+@@ -253,6 +256,34 @@ struct a9_eink {
+ 		s64 pd_at_us[3]; /* normal shutdown: entry, VCOM-low, PWRUP-low */
+ 		int pd_pg_raw[3];
+ 	} rail;
++	/*
++	 * Patch 0052 (rail-diag): LOG-ONLY. Nothing here is read by any latch,
++	 * gate, shutdown or timing decision. Written by the worker thread only,
++	 * read by sysfs under diag.lock (a leaf lock: no other lock is taken, and
++	 * no FP9929A call is made, while it is held).
++	 */
++	struct a9_rail_diag {
++		spinlock_t lock;
++		/* delay after the last waveform end at each checked rail sample */
++		u64 hist_n[A9_DIAG_BUCKETS], hist_low[A9_DIAG_BUCKETS];
++		/* one non-latching PG read at each waveform end */
++		u64 end_n, end_low, end_err, end_skipped;
++		u64 end_full_n, end_full_low;	/* the same, for full-screen rects only */
++		int end_last_pg;
++		s64 end_last_at_us;
++		s64 end_first_low_ms;		/* uptime ms, -1 none */
++		u64 end_first_low_session, end_first_low_n;
++		u32 end_first_low_total_us;	/* that waveform's total_us */
++		s64 end_last_low_ms;
++		/* ring of the last A9_DIAG_PD shutdown traces (healthy baseline) */
++		u64 pd_seen_seq, pd_total, pd_missed, pd_skipped_fault;
++		unsigned int pd_head;		/* next slot */
++		struct {
++			u64 seq, session;
++			s64 at_us[3];
++			int pg[3];
++		} pd[A9_DIAG_PD];
++	} diag;
+ 	struct notifier_block pm_nb;
+ 	struct task_struct *thread;
+ 
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index 3ceb109e1..7e2f6327c 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -65,6 +65,7 @@
+ #include <linux/regulator/consumer.h>
+ #include <linux/regulator/fp9929a.h>
+ #include <linux/seq_file.h>
++#include <linux/slab.h>
+ #include <linux/sysfs.h>
+ #include <linux/vmalloc.h>
+ 
+@@ -839,6 +840,20 @@ static u64 a9_session_frames(const struct a9_eink *a9)
+ }
+ 
+ /* read-only status (not part of the contract) */
++/* snapshot of the log-only counters (0052); the caller kfree()s it */
++static struct a9_rail_diag *a9_diag_copy(struct a9_eink *a9)
++{
++	struct a9_rail_diag *d = kmalloc(sizeof(*d), GFP_KERNEL);
++	unsigned long flags;
++
++	if (!d)
++		return NULL;
++	spin_lock_irqsave(&a9->diag.lock, flags);
++	*d = a9->diag;
++	spin_unlock_irqrestore(&a9->diag.lock, flags);
++	return d;
++}
++
+ static ssize_t status_show(struct device *kdev, struct device_attribute *attr, char *buf)
+ {
+ 	struct a9_eink *a9 = kdev_to_a9(kdev);
+@@ -927,6 +942,45 @@ static ssize_t status_show(struct device *kdev, struct device_attribute *attr, c
+ }
+ static DEVICE_ATTR_RO(status);
+ 
++/* 0052: the shutdown PG trace ring (healthy baseline), newest first. Read-only. */
++static ssize_t rail_diag_show(struct device *kdev, struct device_attribute *attr, char *buf)
++{
++	struct a9_eink *a9 = kdev_to_a9(kdev);
++	struct a9_rail_diag *d = a9_diag_copy(a9);
++	ssize_t n;
++	unsigned int k;
++
++	if (!d)
++		return -ENOMEM;
++	n = sysfs_emit(buf, "diag_hist_n %llu %llu %llu %llu %llu diag_hist_low %llu %llu %llu %llu %llu"
++		" (since_wf_ms buckets 0-3 4-15 16-63 64+ none)\n"
++		"diag_pg_end n %llu low %llu err %llu skipped %llu last_pg %d last_at_us %lld"
++		" full_n %llu full_low %llu"
++		" first_low_ms %lld first_low_session %llu first_low_n %llu first_low_total_us %u last_low_ms %lld"
++		" diag_pd_total %llu diag_pd_missed %llu diag_pd_skipped_fault %llu\n",
++		d->hist_n[0], d->hist_n[1], d->hist_n[2], d->hist_n[3], d->hist_n[4],
++		d->hist_low[0], d->hist_low[1], d->hist_low[2], d->hist_low[3], d->hist_low[4],
++		d->end_n, d->end_low, d->end_err, d->end_skipped, d->end_last_pg, d->end_last_at_us,
++		d->end_full_n, d->end_full_low,
++		d->end_first_low_ms, d->end_first_low_session, d->end_first_low_n,
++		d->end_first_low_total_us, d->end_last_low_ms,
++		d->pd_total, d->pd_missed, d->pd_skipped_fault);
++	n += sysfs_emit_at(buf, n, "pd_total %llu pd_missed %llu pd_skipped_fault %llu pd_seen_seq %llu"
++		" (entries: shutdown traces first seen at the next waveform end, newest first;"
++		" the fault's own trace is in status pd_*)\n",
++		d->pd_total, d->pd_missed, d->pd_skipped_fault, d->pd_seen_seq);
++	for (k = 0; k < A9_DIAG_PD && k < d->pd_total; k++) {
++		unsigned int i = (d->pd_head + A9_DIAG_PD - 1 - k) % A9_DIAG_PD;
++
++		n += sysfs_emit_at(buf, n, "pd %u seq %llu session %llu pg %d,%d,%d dt_us 0,%lld,%lld\n",
++			k, d->pd[i].seq, d->pd[i].session, d->pd[i].pg[0], d->pd[i].pg[1], d->pd[i].pg[2],
++			d->pd[i].at_us[1] - d->pd[i].at_us[0], d->pd[i].at_us[2] - d->pd[i].at_us[0]);
++	}
++	kfree(d);
++	return n;
++}
++static DEVICE_ATTR_RO(rail_diag);
++
+ /* Separate from the safety/status snapshot. No per-frame logging or data dump. */
+ static ssize_t input_stats_show(struct device *kdev, struct device_attribute *attr, char *buf)
+ {
+@@ -964,6 +1018,7 @@ static struct attribute *a9_eink_attrs[] = {
+ 	&dev_attr_manual_clear.attr,
+ 	&dev_attr_test_pattern.attr,
+ 	&dev_attr_status.attr,
++	&dev_attr_rail_diag.attr,
+ 	NULL
+ };
+ 
+@@ -1160,6 +1215,134 @@ static void a9_power_off(struct a9_eink *a9)
+ 		a9->hv_fault = false;
+ }
+ 
++/*
++ * Patch 0052 (rail-diag), LOG-ONLY. These helpers only count and record: no
++ * latch, gate, shutdown, hold, cap or timing decision reads any of it, and
++ * none of them calls a9_check_rail_sample(), a9_rail_fault() or the power
++ * paths. diag.lock is a leaf lock (nothing else is taken, no FP9929A call is
++ * made, with it held). The FP9929A driver API is the existing
++ * fp9929a_get_status() only.
++ */
++static unsigned int a9_diag_bucket(struct a9_eink *a9, ktime_t now)
++{
++	s64 ms;
++
++	if (!a9->wf_end)
++		return 4;		/* no waveform yet */
++	ms = ktime_ms_delta(now, a9->wf_end);
++	if (ms < 4)
++		return 0;
++	if (ms < 16)
++		return 1;
++	return ms < 64 ? 2 : 3;
++}
++
++/* every CHECKED rail sample (pipeline was on): delay since the last waveform end */
++static void a9_diag_rail_sample(struct a9_eink *a9, bool was_on, int ret,
++				const struct fp9929a_status *st)
++{
++	unsigned long flags;
++	unsigned int b;
++
++	if (!was_on)
++		return;
++	b = a9_diag_bucket(a9, ktime_get());
++	spin_lock_irqsave(&a9->diag.lock, flags);
++	a9->diag.hist_n[b]++;
++	if (!a9_hv_good(ret, st))
++		a9->diag.hist_low[b]++;
++	spin_unlock_irqrestore(&a9->diag.lock, flags);
++}
++
++/* keep a shutdown trace not seen yet; a fault's own trace lives in a9->rail.pd_* */
++static void a9_diag_pd_push(struct a9_eink *a9, const struct fp9929a_pd_trace *tr)
++{
++	unsigned long flags;
++	unsigned int i;
++	u64 seq = tr->seq;
++
++	spin_lock_irqsave(&a9->diag.lock, flags);
++	if (seq > a9->diag.pd_seen_seq) {
++		a9->diag.pd_missed += seq - a9->diag.pd_seen_seq - 1;
++		a9->diag.pd_seen_seq = seq;
++		if (a9->rail.count && seq == a9->rail.pd_seq) {
++			a9->diag.pd_skipped_fault++;
++		} else {
++			i = a9->diag.pd_head;
++			a9->diag.pd[i].seq = seq;
++			a9->diag.pd[i].session = a9->session.id;
++			a9->diag.pd[i].at_us[0] = tr->entry.at_us;
++			a9->diag.pd[i].pg[0] = tr->entry.pg_raw;
++			a9->diag.pd[i].at_us[1] = tr->vcom_low.at_us;
++			a9->diag.pd[i].pg[1] = tr->vcom_low.pg_raw;
++			a9->diag.pd[i].at_us[2] = tr->pwrup_low.at_us;
++			a9->diag.pd[i].pg[2] = tr->pwrup_low.pg_raw;
++			a9->diag.pd_head = (i + 1) % A9_DIAG_PD;
++			a9->diag.pd_total++;
++		}
++	}
++	spin_unlock_irqrestore(&a9->diag.lock, flags);
++}
++
++/*
++ * One PG read at a waveform's end (the worker thread, after a9_run_ring
++ * returned). RECORDED, NEVER ACTED ON: a low here does not latch; the next
++ * update's own sample still decides, exactly as before. Only when the
++ * pipeline is still on (an aborted or faulted waveform has already powered
++ * down: nothing to read).
++ */
++static void a9_diag_wf_end(struct a9_eink *a9)
++{
++	struct fp9929a_status st;
++	unsigned long flags;
++	struct a9e_rect fr = a9e_rect_full();
++	bool low, first = false, full;
++	s64 up_ms;
++	int ret;
++
++	if (!READ_ONCE(a9->tx.on)) {
++		spin_lock_irqsave(&a9->diag.lock, flags);
++		a9->diag.end_skipped++;
++		spin_unlock_irqrestore(&a9->diag.lock, flags);
++		return;
++	}
++	ret = a9_hv_sample(a9, &st);
++	up_ms = ktime_to_ms(ktime_get());
++	low = !ret && st.pg_raw == 0;
++	full = a9->last.rect.x1 == fr.x1 && a9->last.rect.y1 == fr.y1 &&
++	       a9->last.rect.x2 == fr.x2 && a9->last.rect.y2 == fr.y2;
++	spin_lock_irqsave(&a9->diag.lock, flags);
++	if (ret || st.pg_raw < 0) {
++		a9->diag.end_err++;
++	} else {
++		a9->diag.end_n++;
++		if (full)
++			a9->diag.end_full_n++;
++		a9->diag.end_last_pg = st.pg_raw;
++		a9->diag.end_last_at_us = st.pg_at_us;
++		if (low) {
++			a9->diag.end_low++;
++			if (full)
++				a9->diag.end_full_low++;
++			a9->diag.end_last_low_ms = up_ms;
++			if (a9->diag.end_first_low_ms < 0) {
++				first = true;
++				a9->diag.end_first_low_ms = up_ms;
++				a9->diag.end_first_low_session = a9->session.id;
++				a9->diag.end_first_low_n = a9->diag.end_n;
++				a9->diag.end_first_low_total_us = a9->last.total_us;
++			}
++		}
++	}
++	spin_unlock_irqrestore(&a9->diag.lock, flags);
++	if (low)
++		dev_warn_ratelimited(a9->dev, "rail-diag: PG low at waveform end (not a fault, not latched;"
++			" the next update's sample decides): session %llu uptime_ms %lld first %d\n",
++			a9->session.id, up_ms, first);
++	if (!ret)
++		a9_diag_pd_push(a9, &st.pdtrace);
++}
++
+ /*
+  * Patch 0039 (run 11): the rails were not valid at an update's start with the
+  * pipeline on. Record why from the failed sample and the transport BEFORE
+@@ -1255,6 +1438,7 @@ static void a9_rail_report(struct a9_eink *a9)
+ static int a9_check_rail_sample(struct a9_eink *a9, bool was_on, int ret,
+ 			      const struct fp9929a_status *st)
+ {
++	a9_diag_rail_sample(a9, was_on, ret, st);	/* 0052: counters only */
+ 	if (!was_on || a9_hv_good(ret, st))
+ 		return 0;
+ 	a9_rail_fault(a9, ret, st);
+@@ -1750,6 +1934,7 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 		ret = a9_run_ring(a9, init_white, bin, hash ? &sc : NULL, &init_shown);
+ 		a9->wf_end = ktime_get();	/* rail-fault diagnosis (0039) */
+ 		a9->wf_ret = ret;
++		a9_diag_wf_end(a9);	/* 0052: one recorded, never-acted-on PG read */
+ 		if (init_shown)
+ 			*init_pending = false;
+ 		if (ret)
+@@ -2249,6 +2434,10 @@ static int a9_probe(struct platform_device *pdev)
+ 	platform_set_drvdata(pdev, a9);
+ 	mutex_init(&a9->shadow_lock);
+ 	mutex_init(&a9->eng_lock);
++	spin_lock_init(&a9->diag.lock);
++	a9->diag.end_first_low_ms = -1;
++	a9->diag.end_last_low_ms = -1;
++	a9->diag.end_last_pg = -ENODATA;
+ 	init_waitqueue_head(&a9->wq);
+ 	a9->mode = A9_MODE_DEFAULT;
+ 	a9->controls[0] = 30;

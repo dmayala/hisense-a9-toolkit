@@ -1,0 +1,4231 @@
+{
+  "description": "Audited LOS v8 release-signature base; platform signer retained for data compatibility. Public CTS test shim and invalid optional Exchange APK removed in release only.",
+  "system_sha256": "14525f4852a3c56f816a6de15fd45b93bdf390503b5c8e01b47b2ff6331ef793",
+  "platform_certificate_sha256": "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b",
+  "platform_apk": "system/framework/framework-res.apk",
+  "signed_files": {
+    "system/apex/com.android.adbd.apex": {
+      "sha256": "9b24260fd008de6d4fd34ff2e1223516686c833128a304d99dd461f092c2f7c4",
+      "certificates": [
+        "fe96a12ea828ee2c3520326a619047d99a99265333281e4617573c51facc92e9"
+      ]
+    },
+    "system/apex/com.android.adservices.apex": {
+      "sha256": "f2e2b01eb2a55f62092bf5eb1079565b1f42df8ab6549d32dc75e70059e90515",
+      "certificates": [
+        "a7eb11bfa37dedf78e83da715dbe1296471c2ae66efce4f2c66b4b12ee223f9e"
+      ]
+    },
+    "system/apex/com.android.apex.cts.shim.apex": {
+      "sha256": "18451d0ac06a9532a0c75f2f89544a096ebb8b2a1b4ee7357b5747d972e60a42",
+      "certificates": [
+        "a40da80a59d170caa950cf15c18c454d47a39b26989d8b640ecd745ba71bf5dc"
+      ]
+    },
+    "system/apex/com.android.appsearch.apex": {
+      "sha256": "e25f85b1741a5f7575c9488c700a54cbe990cec80d8446c9f621538a06322165",
+      "certificates": [
+        "2421eab1da53f38d1dbc36a15804c756ae9574a458e1e1f9a7aa7c029d53b7e7"
+      ]
+    },
+    "system/apex/com.android.art.apex": {
+      "sha256": "eb76d84b864ceb43c4b76da36ee5f9dc40c096c3d3ecfd6a9a07f7aa8645b9f8",
+      "certificates": [
+        "b48b51e37320cf14ca28fd94b4535bf1ca5155f9251feeb1ebed2e54d7a75aee"
+      ]
+    },
+    "system/apex/com.android.bt.apex": {
+      "sha256": "530fcf2c3df4dc2a1cbd427c18c736aed01bd6b0bf18422cd7740f672cd13144",
+      "certificates": [
+        "6ecfac0671b1c7c6b863add9377ef3f063f7d1542c689d64e300e0f640113e1d"
+      ]
+    },
+    "system/apex/com.android.cellbroadcast.apex": {
+      "sha256": "3d5c64e0c26ce356d11b985f169bfcba3cf826e5bf4bc555a49b4f46b2b0ce3d",
+      "certificates": [
+        "2c2daf3f0f1483f2c5e2753d5171268dbd24eb65b7c8059bf37320ff216b51bf"
+      ]
+    },
+    "system/apex/com.android.configinfrastructure.apex": {
+      "sha256": "e7a1e585c4aa2c89897ee5cf33cd4e5099a5b0eef309965f44be7aa3f6bef07b",
+      "certificates": [
+        "16c943505b63ab6bcd93132cd1702f752a4450faeaef517bde4394e55d49930e"
+      ]
+    },
+    "system/apex/com.android.conscrypt.apex": {
+      "sha256": "b5885d0e4c386463e63b500339fb3f852884236b8a50297070b3f42759f8e9c7",
+      "certificates": [
+        "9f8cc442b163bd5e500be7dfd706c53a2a9e55c17b85ac395c4c5ef4b72c75aa"
+      ]
+    },
+    "system/apex/com.android.crashrecovery.apex": {
+      "sha256": "17a037b75bdaf5477adea798f69eda34fe1e7ed4cd88b8cf73ec19dbfff42e1f",
+      "certificates": [
+        "c701942c81895735e53c211abf1cf6b6e5cd9dac0ca70bd4165626fc189ff708"
+      ]
+    },
+    "system/apex/com.android.devicelock.apex": {
+      "sha256": "7a915841c715ffb6db72e778c9141ed3117c53c2892bf5605798e0ddfffb5bf3",
+      "certificates": [
+        "046fc7a0b3af196d53f01f15fa03e4732d785fb5b32c63ce3916e718953a2e0b"
+      ]
+    },
+    "system/apex/com.android.extservices.apex": {
+      "sha256": "a991fd210d1917c60c798aa6c6dff8bc0f49b30d73fd9942698bd5c133730a5e",
+      "certificates": [
+        "fd8b62ff3af3fa5967ca97aff4e88a8afe584c00bb537c03e9845fd1541b295b"
+      ]
+    },
+    "system/apex/com.android.healthfitness.apex": {
+      "sha256": "6bd9243b60c483157e05ebd9fafafe22013cc711323480e94df7b641b713cb59",
+      "certificates": [
+        "10f5ddb55ee085f591f4ac561e0546aeff9c7fac4dadd2d06124b455461e4bec"
+      ]
+    },
+    "system/apex/com.android.i18n.apex": {
+      "sha256": "88f79fcc7c580a1efac01ecdb916ba7e5bbd8790dde7cb1621fee71631385233",
+      "certificates": [
+        "3c74218499cbd9e8e91ac0f316d4308ddf35da0a52e19b9dbc4518b1894a9476"
+      ]
+    },
+    "system/apex/com.android.ipsec.apex": {
+      "sha256": "f1fa0325ba4e5fc3f3f7094d9d99a28cfca3e7e08aa78674fb2d14b434436b62",
+      "certificates": [
+        "a08bdbc748c94015a5281db0899a2bd661a79957d56036e4b25390d36966305d"
+      ]
+    },
+    "system/apex/com.android.media.apex": {
+      "sha256": "b1c571615179646e3a71e4bfdf8d13800c02fda5402ceb4388728779fcaf385b",
+      "certificates": [
+        "a71f3c6664841112156cb32d061d38b1d6b0f90b78afeda6a73a730fd4dce586"
+      ]
+    },
+    "system/apex/com.android.media.swcodec.apex": {
+      "sha256": "56aa782c142c4e75db60166ba5a72462538eb0a61099d77ea6fd6f280f3672c2",
+      "certificates": [
+        "cee26d1764c78b59a82253afb26f1269a7de2137c756b51271598fa5ee77ae39"
+      ]
+    },
+    "system/apex/com.android.mediaprovider.apex": {
+      "sha256": "b8972efc53e60c580105f0782edda499ce69642ff9cee0a27533bf59fcfa4f57",
+      "certificates": [
+        "8135c95f8c6fa682c959b42a65a3a742d48b65aa7dce087f17e442cacabdf2c9"
+      ]
+    },
+    "system/apex/com.android.neuralnetworks.apex": {
+      "sha256": "b78174b9f34d01bac3fb2776238d224fae2366b409ef17e2f8acc2c80ac1cf17",
+      "certificates": [
+        "203c6b716376dfa38800810b9661bf6b79c1bb9ab0722f3debf1bc04f7c5ab38"
+      ]
+    },
+    "system/apex/com.android.nfcservices.apex": {
+      "sha256": "55794d45968b574460af934feb5c25e46b81e1d1ade4dd788fa289eb13fc932f",
+      "certificates": [
+        "dbb6d0dc84e4aa87420dc992e522514ac78a6abf78b3aaa2594e55583cb89a72"
+      ]
+    },
+    "system/apex/com.android.ondevicepersonalization.apex": {
+      "sha256": "9254b6588896bbeb21ed12c75d8110443e5fa3b59d9ca09b2e6e562ebd6ebd78",
+      "certificates": [
+        "e979c39834ddcb49f689ed54c1dd5fad988ecc68ca5263c36d23b3fe25237015"
+      ]
+    },
+    "system/apex/com.android.os.statsd.apex": {
+      "sha256": "621e60ec361ee2861977f871e192cece51f003f4afb40c707bd52653d9c9107c",
+      "certificates": [
+        "d0489e5e38fdc5b0d1d99545dd7aa8fb4b34503702cf95510a2c06b044ee8390"
+      ]
+    },
+    "system/apex/com.android.permission.apex": {
+      "sha256": "23a999b2a47c1ce09d8796fdedd25558ccaceeb9829fe2e8a7f6b47106fa37bd",
+      "certificates": [
+        "1ee517d3f9b0c7c6368f248c33bcbf6d557e538fd47e8392fe4792b0473f3b14"
+      ]
+    },
+    "system/apex/com.android.profiling.apex": {
+      "sha256": "5c41177b309fad82f8ec29f09da16d2020a0188abf7f893f683907e88e18a885",
+      "certificates": [
+        "07ae4ad25a22e4ef0dfbeb3f4e23f01d0898be1c1f67498cb32c732045688486"
+      ]
+    },
+    "system/apex/com.android.resolv.apex": {
+      "sha256": "436430818a317414d96ae1112ec59ac0a8054ed61fe19fefdb411244d350b2dc",
+      "certificates": [
+        "bf32ad06d2fc1563bea60ea2650796baeb1fd52d906d97a0efe2f4136fbc4d3c"
+      ]
+    },
+    "system/apex/com.android.rkpd.apex": {
+      "sha256": "830c326c8633fa56c988f63e88ac7774aeb53d519b59b59bd9e44895f2639933",
+      "certificates": [
+        "28fe53921bf19cce2cb0fd760e63d99e6663b0740d39bb0210204382444fb929"
+      ]
+    },
+    "system/apex/com.android.runtime.apex": {
+      "sha256": "8b2faaa4e22ca597616c7e7a43b68dbbbe19aeab42157bd2051f32cb5b23c06a",
+      "certificates": [
+        "185a793236aeadf0665b9284d80c0e49a7896bdfdb858199222527c9ba421e12"
+      ]
+    },
+    "system/apex/com.android.scheduling.apex": {
+      "sha256": "ebdcf04d378196352247eb7a811d71bc5c0b9067ff9bb75a4287000976aa3883",
+      "certificates": [
+        "6197c4ea84e833c9d0c0049fe6dbcb6829b4f8420093436ebc18c634a38f1873"
+      ]
+    },
+    "system/apex/com.android.sdkext.apex": {
+      "sha256": "eab1a056ea4b59a4704185d4bd6c85d40db20b0856de6e88363364b201c972fb",
+      "certificates": [
+        "b26d47060a76ffb20cfbe866853bfdfc616cdd54e6efc9a535789121bb3e8264"
+      ]
+    },
+    "system/apex/com.android.telephonycore.apex": {
+      "sha256": "b127e166350029b3847354a08434168d9434a2586152be5f913f3abb7f27d4fa",
+      "certificates": [
+        "a1d84ee52744b895bfa478c3305251387b9c6baf5ddfef68d2591d2d12fa4301"
+      ]
+    },
+    "system/apex/com.android.tethering.apex": {
+      "sha256": "edbf665189bbeb5beacd1bd5df0ba9606b26f75783a4933850e65cc3404fc4c2",
+      "certificates": [
+        "858d8f6f9f5f0fea4a1fc68b0cf8e1678aa23ce18f999b702f3410cebee865e7"
+      ]
+    },
+    "system/apex/com.android.tzdata.apex": {
+      "sha256": "fc87628f1c9153f72e3629b52684e97fd13ea938ea899e7c05a6fda7bd69ce1c",
+      "certificates": [
+        "3e5e69d14c13a769a8ed1645c093cab9edc65a8648f63a73f1b24cb86dd1ff3c"
+      ]
+    },
+    "system/apex/com.android.uprobestats.apex": {
+      "sha256": "105b8e212185f83a4dd0f39375191c2fb364f3bb594e6694de79c30098579314",
+      "certificates": [
+        "82362704d9b29b74a8bafbdcf8a4638abb59c22591b1ef7130e5d6b8084afabd"
+      ]
+    },
+    "system/apex/com.android.uwb.apex": {
+      "sha256": "68ce648f793dbf255b15985b84f4aa4b2217fda7f58746ee6ee7598dfc2425e2",
+      "certificates": [
+        "817996a5ea08c394ae564b30f1895ad08fca8a5f4757c078086df121ca284240"
+      ]
+    },
+    "system/apex/com.android.virt.apex": {
+      "sha256": "325ae1f319eef915b8bea64a6b0a36b7ded89ffe4cf573d6868b67a6b326f5ad",
+      "certificates": [
+        "ce6e5c9b7762b7479f59c68860a52887130da2d164e32cb753eceb6c6135914c"
+      ]
+    },
+    "system/apex/com.android.wifi.apex": {
+      "sha256": "c60e514198a2512a69556486c0f16b7d7057b383e7b7943d69cb8c3538d455cd",
+      "certificates": [
+        "74cb70488582396c8fd6c49cdfe982132044cbc048978f42e213847f79f85d54"
+      ]
+    },
+    "system/app/BasicDreams/BasicDreams.apk": {
+      "sha256": "e01e1c4bf1a78dc306fc59169ec364da9d6039cb280e7553469db9be8316482b",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/app/BluetoothMidiService/BluetoothMidiService.apk": {
+      "sha256": "c4d55ac74f9e0ac1757aca75ca83c18d171ea055c9977332c1cd796507d6cfc8",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/app/BookmarkProvider/BookmarkProvider.apk": {
+      "sha256": "e2cff7b0411cdf955e7524751314825e98e792defaded0cccbd7be1561d1c601",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/app/CameraExtensionsProxy/CameraExtensionsProxy.apk": {
+      "sha256": "9b9d7b2f6170564d06fa6dd96cf00d8c70e5a3f9867bc5fe72f8bc1b7e2f5908",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/app/CaptivePortalLogin/CaptivePortalLogin.apk": {
+      "sha256": "d14f77764bd9e29e10e4027f798a119356f81c598eb683ca31778a0e78b64f7d",
+      "certificates": [
+        "126e44b13dd3357bfdf1771bbfa1ad550c02c01e98a9fa30933aaf2f26159598"
+      ]
+    },
+    "system/app/CarrierDefaultApp/CarrierDefaultApp.apk": {
+      "sha256": "7e74bf8f5b1438611d33d6ff21646137f448c532ba023bc6291c124c9b288b40",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/app/CertInstaller/CertInstaller.apk": {
+      "sha256": "9fd221f2259453ff7e1c6979bdac9223841e6ae48ca120b1bc66ca096232da2a",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/app/CompanionDeviceManager/CompanionDeviceManager.apk": {
+      "sha256": "cd1c6ac1d4f476424ba1cce768667d6d4efc78f25b2f01de164bcbd66d7b2b49",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/app/EasterEgg/EasterEgg.apk": {
+      "sha256": "62e4d7ba60bf289d74968bd6126788a0a5fb7bdd61f9e75b9359d4719c3a5764",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/app/ExtShared/ExtShared.apk": {
+      "sha256": "7e9b59cf2f2c2d7a1972f96277ff8641576916b3165a89d648119c550fc49959",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/app/HTMLViewer/HTMLViewer.apk": {
+      "sha256": "0f77d771857ec767938730c9d34e5e9d9a64eeb4f6de83901c0917497fc929b1",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/app/KeyChain/KeyChain.apk": {
+      "sha256": "ae0a689e4ac5f090f48b6549cd1b01552829023871f66e236497e0062d182258",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/app/NoCutoutOverlay.apk": {
+      "sha256": "d1d63977261397ebeb7d7d71eaa0d88b22477e05ef1ca052784eb016c64ee400",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/app/PacProcessor/PacProcessor.apk": {
+      "sha256": "32f33fb44700e4be895b64307a38485322fc5b977e3a6dc9d79eac833634027e",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/app/PartnerBookmarksProvider/PartnerBookmarksProvider.apk": {
+      "sha256": "0aab69ee41388373c0932cbcaa3614661d95c4f6672cc22cddf8bd15f3be7940",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/app/PrintRecommendationService/PrintRecommendationService.apk": {
+      "sha256": "901a82fcd55796e111fa23749e386fae5479353afb9d5df749ff124492c6d1f4",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/app/PrintSpooler/PrintSpooler.apk": {
+      "sha256": "f16e5e33aacce4af06f190e2f8aa2e01c54784f3cf70d524426ebdb053d3f3fc",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/app/QcRilAm/QcRilAm.apk": {
+      "sha256": "dc8b59f779e7f5b4b0cce4426aa5ab3f6c33d95482116338e917d3c549cb7176",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/app/SecureElement/SecureElement.apk": {
+      "sha256": "58994121cde7331535b584c5dbc66a10ae043054af367e16d1dc4d6fc5c3506e",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/app/SimAppDialog/SimAppDialog.apk": {
+      "sha256": "2c3765f18dbbde879b42893da9ebda2777b72d27e0b6e409502cc15e9592c826",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/app/Stk/Stk.apk": {
+      "sha256": "95aee9c878662a8d50d932e67af6167c991d0b707c50a1c22ee3e3c08a6f9960",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/app/WallpaperBackup/WallpaperBackup.apk": {
+      "sha256": "69239bd2d988e461327bac3f2b6be63e1c3d308d5d75cee52d216a1385c93630",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/etc/security/fsverity/BuildManifest.apk": {
+      "sha256": "4e37ce086bfe1bddc9da3cd2b956f208146f7821bef80dfdfe90379a1193edbd",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/framework/framework-res.apk": {
+      "sha256": "3cdce1cedc5d3184907e441f1ae58619121b2bb173d32264184e4bd43ca8a725",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/framework/org.lineageos.platform-res.apk": {
+      "sha256": "e0266d1c120b1d6d60af1b02977377261bd7b2b2a8af5940e44152772e08ec2c",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/BackupRestoreConfirmation/BackupRestoreConfirmation.apk": {
+      "sha256": "bf5553e46d3195a8d8d9a7a9c77fae7fb1e319a69f52f6139090b16a76b2bdc4",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/BlockedNumberProvider/BlockedNumberProvider.apk": {
+      "sha256": "cd292d2e18acc66a96227897da4a1f3b596ab2cbf787ed2361890933a4fd8210",
+      "certificates": [
+        "23ad3a6b91d3b0cb575c5329aa258e3544a64f7efdab8011f537a4bacd6b21ca"
+      ]
+    },
+    "system/priv-app/BuiltInPrintService/BuiltInPrintService.apk": {
+      "sha256": "a61f1575ed6451fef9ec8b3e02e1ff059c9d1cbd551d2e03266863319f480b23",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/CalendarProvider/CalendarProvider.apk": {
+      "sha256": "2495b8788c24fdf0cab68431a0ebade656ab5690d575d2cf6629f7d39d584b59",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/priv-app/CallLogBackup/CallLogBackup.apk": {
+      "sha256": "fe7eea1460b686dcde98905125aa329a715cba921c8916f1b14774c927879c9c",
+      "certificates": [
+        "23ad3a6b91d3b0cb575c5329aa258e3544a64f7efdab8011f537a4bacd6b21ca"
+      ]
+    },
+    "system/priv-app/CellBroadcastLegacyApp/CellBroadcastLegacyApp.apk": {
+      "sha256": "465856a42fa1e2e3fc44eca49bddcddb05ed388f97151365f9ed88da45ac33a8",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/ContactsProvider/ContactsProvider.apk": {
+      "sha256": "510f6532f55b6f8fb91ad3d7f84d305799df1db352cfe8576d0bf27c116f9ed2",
+      "certificates": [
+        "23ad3a6b91d3b0cb575c5329aa258e3544a64f7efdab8011f537a4bacd6b21ca"
+      ]
+    },
+    "system/priv-app/CredentialManager/CredentialManager.apk": {
+      "sha256": "dbaffb6c2049c15e38ca6820540fcdb06f2bc4059907082100ac4e8830bc7f39",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/DeviceAsWebcam/DeviceAsWebcam.apk": {
+      "sha256": "102724281c8c4d6ca7dac9fe95b59d8e70e12c26a60694cdebd1e578bc2b0e2b",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/DeviceDiagnostics/DeviceDiagnostics.apk": {
+      "sha256": "e054677dd86f93dc9bea04c1fc8a2222e9df7d77e07b5bedd2260549bd5709f4",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/DocumentsUI/DocumentsUI.apk": {
+      "sha256": "a64a22603f65deebe1303fbfe7d1a8b1f135bb74de9b25e1869e7208bbbb506b",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/DownloadProvider/DownloadProvider.apk": {
+      "sha256": "70077f71e120f2f751e69188d119fc5516df5ffbe0701f756d6f941a8e82e7aa",
+      "certificates": [
+        "e84c598add62e2f10063ac63ef2ff8d7c632457bb7a0d4e67b657cc1ab1513b4"
+      ]
+    },
+    "system/priv-app/DownloadProviderUi/DownloadProviderUi.apk": {
+      "sha256": "2e19c72bb83e6613a942a3876bb40583d9c6709b7f348643007cecb93168a235",
+      "certificates": [
+        "e84c598add62e2f10063ac63ef2ff8d7c632457bb7a0d4e67b657cc1ab1513b4"
+      ]
+    },
+    "system/priv-app/DynamicSystemInstallationService/DynamicSystemInstallationService.apk": {
+      "sha256": "19f95efa37f7fe1c08d448e4f344a2cc856fb5a515480218977cb03a405adb06",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/E2eeContactKeysProvider/E2eeContactKeysProvider.apk": {
+      "sha256": "c454e67e2584b6d93bdedd73101a0b6aa574da91858ad137415b55d57249f09a",
+      "certificates": [
+        "23ad3a6b91d3b0cb575c5329aa258e3544a64f7efdab8011f537a4bacd6b21ca"
+      ]
+    },
+    "system/priv-app/ExternalStorageProvider/ExternalStorageProvider.apk": {
+      "sha256": "2193fe65ac02ec4bb76854c9db59fd87dc90bf3c53eb088951358a40b4be9703",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/FusedLocation/FusedLocation.apk": {
+      "sha256": "4b44b550f738402b8c55000529304149c902d0cbd4894c8798473ebeaae88b29",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/InputDevices/InputDevices.apk": {
+      "sha256": "de718443202f20e60e7729a09c67035fbfe23360687311322c4203f414b4c633",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/IntentResolver/IntentResolver.apk": {
+      "sha256": "3f816ef75cd4af652efbb79bcfdaa6b3af0e054c55b3cf02d57f1e914f0d8fee",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/LiveWallpapersPicker/LiveWallpapersPicker.apk": {
+      "sha256": "7f6488ed4cbd25e883f69b84ffe64d7ff64f3032b115c28bd2f4f9f6f1503ebd",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/priv-app/LocalTransport/LocalTransport.apk": {
+      "sha256": "ba6a4bb4e78ac990199e08d0450e890cd0625b2c17ecc2afc4cb3288a9c5676c",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/ManagedProvisioning/ManagedProvisioning.apk": {
+      "sha256": "d4305aa980ba525e5f1060a88243803df3306082aaf93dc3b3e0bec68fb9f3da",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/MediaProviderLegacy/MediaProviderLegacy.apk": {
+      "sha256": "3bbcb4ae47ba6e805b2f30ee0cfd08b193bb45ad703ad36da0b0859568d05279",
+      "certificates": [
+        "e84c598add62e2f10063ac63ef2ff8d7c632457bb7a0d4e67b657cc1ab1513b4"
+      ]
+    },
+    "system/priv-app/MmsService/MmsService.apk": {
+      "sha256": "14f68f3bdf3b0dcceb356a1cb630cadb22b5de459c82d819f8b2b1de74deac25",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/MtkInCallService/MtkInCallService.apk": {
+      "sha256": "b95e272622ef21d8bcae07ae780cdd6726fae1fd030ee0c7a944a59df35f6935",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/MtpService/MtpService.apk": {
+      "sha256": "ee34dafcf3bf6bbcc89838bb034b91257edd9d83e1ed322853da10bddef43939",
+      "certificates": [
+        "e84c598add62e2f10063ac63ef2ff8d7c632457bb7a0d4e67b657cc1ab1513b4"
+      ]
+    },
+    "system/priv-app/NetworkStack/NetworkStack.apk": {
+      "sha256": "7b28d558d20757ad3d2647919c244453f9718781d83cf7be6e8b66aa6198dd95",
+      "certificates": [
+        "126e44b13dd3357bfdf1771bbfa1ad550c02c01e98a9fa30933aaf2f26159598"
+      ]
+    },
+    "system/priv-app/ONS/ONS.apk": {
+      "sha256": "92534ae79c0a06693f16118d2f67516c670b7302f4395d226426df2283667d7a",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/PackageInstaller/PackageInstaller.apk": {
+      "sha256": "10eedd011872b9b2b491c5da67fa560276a82239a79f320711f852368184cd7a",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/ParanoidSense/ParanoidSense.apk": {
+      "sha256": "11ecf907c3c3bbbedb94257697138fc72a1390524fd879ca9590869f1dec1b2e",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/PrivateSpace/PrivateSpace.apk": {
+      "sha256": "63016a2f4c34dd8ac0881285700ac5a656b3341b0b10087ec5021c5a26d7340d",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/ProxyHandler/ProxyHandler.apk": {
+      "sha256": "64d32527b08b13404a8d7bfea6ca0bea2234585616936b5c384f88668af851d2",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/SettingsProvider/SettingsProvider.apk": {
+      "sha256": "4d1ac8df4be730723c36981fbc7df383e5d27ee5d534827b93aa8e27e85bd24b",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/SharedStorageBackup/SharedStorageBackup.apk": {
+      "sha256": "a85a0706ba489a775d4c650cfe7e6f4935eb674791154e3ff618a35ed02dcbd0",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/Shell/Shell.apk": {
+      "sha256": "606fe3ddb1adcfcced9dfbb75bd8ecbc9760eb94049321f43523d4dbf6463f46",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/SoundPicker/SoundPicker.apk": {
+      "sha256": "ff303e70411dde2d8eda0ae000efe381c1a6ab995fe3dfa61fb6a0980fa58aa0",
+      "certificates": [
+        "e84c598add62e2f10063ac63ef2ff8d7c632457bb7a0d4e67b657cc1ab1513b4"
+      ]
+    },
+    "system/priv-app/Tag/Tag.apk": {
+      "sha256": "84c15599eda16a153a15b4535669b2d1dfecaf3c5070b8abf5a002d3dc119340",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/priv-app/TeleService/TeleService.apk": {
+      "sha256": "74973495f61d48cf75c466491f50f1c14889a74874c74d7215a5c0e12f4ac340",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/Telecom/Telecom.apk": {
+      "sha256": "f3ce3890c6bc8bc2834104b64473ebe28c774a1931dd09fe429e0b9ee66d45e5",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/TelephonyProvider/TelephonyProvider.apk": {
+      "sha256": "3ea85c2e369fe840095b36dc9734a3cc5c438c39999881819d29354d505491d8",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/TrebleApp/TrebleApp.apk": {
+      "sha256": "3b33137f80e9ad1dfb3d1f34a371e2139076521c06dbcd6acfffe75c0aaa0d16",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/UserDictionaryProvider/UserDictionaryProvider.apk": {
+      "sha256": "d301a59a767436fe94e51794f3fe20987c70f96e735c5b503307d468facae230",
+      "certificates": [
+        "23ad3a6b91d3b0cb575c5329aa258e3544a64f7efdab8011f537a4bacd6b21ca"
+      ]
+    },
+    "system/priv-app/VpnDialogs/VpnDialogs.apk": {
+      "sha256": "9b0ef0ba56c4f4ad93f5d4368331c2e7a2d320fabbc53b4eff84ebd6e7d2ab30",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/priv-app/a9service.apk": {
+      "sha256": "06c62042722c8b9a5c2d2cf28843c6d1dec83ad6d03f26cf5ccfc1b8fd285753",
+      "certificates": [
+        "c2ee5e84899e1a4b84db7d61aa7e4f47bccd403e9bff0848487a09e504f63d97"
+      ]
+    },
+    "system/product/app/Aperture/Aperture.apk": {
+      "sha256": "77aa80fd85bfa6ac6b4a6389702b3fd2ab07179187dd233b37864e42e7a46ac7",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/app/ApertureLensLauncher/ApertureLensLauncher.apk": {
+      "sha256": "59412c24626804d742e50f95eb2127a306a0e97f9d049a2a686dfd969a5d4fe1",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/app/Backgrounds/Backgrounds.apk": {
+      "sha256": "6c831ebc2bc89ac2ecdd3f9397f09162322172403e57a5a7529012002263d76b",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/app/Camelot/Camelot.apk": {
+      "sha256": "560da108a19e7e78bc8b675b933e9c969f9f93f4f2f422abfd9988e15345eb6a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/app/DeskClock/DeskClock.apk": {
+      "sha256": "fb47d4812c3ab63453252be4b4324ea9e059e47c704014528cd93925224dcd77",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/app/Etar/Etar.apk": {
+      "sha256": "57b5c9338adb548596a8610fb118b5fd98f99519480871d60b1e9699a832615e",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/app/ExactCalculator/ExactCalculator.apk": {
+      "sha256": "fc0e6dcb3823afe1d490ad7c9d2f7ab2491a01b3cfa1a1eada4db1199658a7c3",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/app/Gallery2/Gallery2.apk": {
+      "sha256": "7dfb228230368b07e7058bc6221eafc939ae18b75a4f8b4ef0fe40103f60e3a8",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/app/Glimpse/Glimpse.apk": {
+      "sha256": "a73944faa000bbb17f11ae60cdae838b3b5ca2e21898e7dfbc97e26fc92cc38d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/app/GoogleCalendarSyncAdapter/GoogleCalendarSyncAdapter.apk": {
+      "sha256": "0b3aa6f8d4bc16645b26136dbc228f3a0fe503c01f54892f577715f61e3ef5a7",
+      "certificates": [
+        "7ce83c1b71f3d572fed04c8d40c5cb10ff75e6d87d9df6fbd53f0468c2905053"
+      ]
+    },
+    "system/product/app/GoogleContactsSyncAdapter/GoogleContactsSyncAdapter.apk": {
+      "sha256": "5396a4ddf818f69a51d34a10ab23c8356add171ef2394f5bbca9e63b74594f4e",
+      "certificates": [
+        "f0fd6c5b410f25cb25c3b53346c8972fae30f8ee7411df910480ad6b2d60db83"
+      ]
+    },
+    "system/product/app/Jelly/Jelly.apk": {
+      "sha256": "ee1881c5689887fea6a8cd9d2e015fcc8d64bf015b0a9964bb85571ee6a0188e",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/app/LatinIME/LatinIME.apk": {
+      "sha256": "962785b774bf67a2a5ce42ba301647ed644c8a5c8916a996c784396a91dc5534",
+      "certificates": [
+        "23ad3a6b91d3b0cb575c5329aa258e3544a64f7efdab8011f537a4bacd6b21ca"
+      ]
+    },
+    "system/product/app/MarkupGoogle_v2/MarkupGoogle_v2.apk": {
+      "sha256": "5f0cc86a3fab53184d728c30a7e1c6c2530f791ffae6066b7d05bd30a82b7ebe",
+      "certificates": [
+        "ba835740b0898dbb0ffdcb00f53f9c90d3194b64c39a5588478f9a1aad79144f"
+      ]
+    },
+    "system/product/app/ModuleMetadata/ModuleMetadata.apk": {
+      "sha256": "17f7cf75ba650790fa56cb3e6d9fa1f19aaeea07f01f8c6e7109cca7240cca02",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/app/PhotoTable/PhotoTable.apk": {
+      "sha256": "8c0f5888b90b95a086aad249238e07ed90accdca98570c9c7b1f3fc090c35fc7",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/app/PrebuiltExchange3Google/PrebuiltExchange3Google.apk": {
+      "sha256": "3f65c5fb9da1e341590373497a520c18b286eb44946d0b1b6a8e588e6985acdb",
+      "certificates": []
+    },
+    "system/product/app/Recorder/Recorder.apk": {
+      "sha256": "26a3cfac88141c8163d242451fb77a9d209a3861e77e1c1a88d50f6d5810407e",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/app/SpeechServicesByGoogle/SpeechServicesByGoogle.apk": {
+      "sha256": "775a036508f6fd4607414cdcb200203ca872554ef948f2b96a56250e2c89e0e1",
+      "certificates": [
+        "7ce83c1b71f3d572fed04c8d40c5cb10ff75e6d87d9df6fbd53f0468c2905053"
+      ]
+    },
+    "system/product/app/ThemesStub/ThemesStub.apk": {
+      "sha256": "fded8d0d85db81013f92c2d88a0c450bcb90a67d978671f3e6f0ceb64f086af1",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/app/Twelve/Twelve.apk": {
+      "sha256": "fc950a3e19c548252fee55c5070c4c10205ca4cb5b570031eb6679c2e7c71c6a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/app/messaging/messaging.apk": {
+      "sha256": "d32fe1427ae15ebb1334ce6c963e137b1a913fbfc4cadf50eda37375b47b84c2",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/app/talkback/talkback.apk": {
+      "sha256": "db5d112394079902f800b4361fb7e44b81880f0cc2e8aeca561adaf0b01a4b0c",
+      "certificates": [
+        "7b5ad55180a48a1f30f35377c0f9e5f911bf942fb4cf83eba255a0ebf580beef"
+      ]
+    },
+    "system/product/app/webview/webview.apk": {
+      "sha256": "04659d83f313845085e93eeb577bb3a1179c3a775bfcf24912cbced4091f1143",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-vivo-y31.apk": {
+      "sha256": "d30b816358cda4925ea1f2dde3243d965549a0d2030bcaa0d4fd179df780e033",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-STF.apk": {
+      "sha256": "2b9212cd5ce6b02b96ce7f4873919fd8ced04518c6e437c5f7c01db18c7f9a56",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/LineageParts__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "ac559235b11b374eec2fcff00750f9b0c2077f33fd8ac18667c2b3107f4d2bec",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/AvatarPicker__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "dbe1e5734dcfb843fd5cbceb8e81685191c0caea53c93fa7bf520ec9dc5750f5",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-nord5.apk": {
+      "sha256": "3868e3f7d1c7a6ea44e91dd872baeb7e04e12f0f7b7e76aa97f65ae0bea0fd52",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-6i.apk": {
+      "sha256": "fa4f73e0cab9fdf6d27a67262c673db1f9237f4ee2d0f5215a53639de414a9e5",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-teclast-m30.apk": {
+      "sha256": "1557e93fa40bea2df6ff15bb0d01fae22c74890c996ead6a7a4872f23d2482ca",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote11.apk": {
+      "sha256": "3ee0116b6109fa159059a225e09ecf0d6fd590aa2a15226be3106f0455960c6e",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-m31s-systemui.apk": {
+      "sha256": "9d020cd7fe43522b502077634530c6885347fd3772c06b1245ddd09b9746b063",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmik70ultra.apk": {
+      "sha256": "a194cef71a663c54967be7c6da8ec78d472c97acc681a5b5b2d7424a05222d67",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-sony-SO-03L.apk": {
+      "sha256": "558b5d1abbb93492363f536594c550a212584fa873942ff9f131c4743ab6a13f",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/FontGoogleSansFlex/FontGoogleSansFlexOverlay.apk": {
+      "sha256": "c5bc41e29582a08b18354e492bf7176e2f9fcc8357ec38bf40a122938d389af4",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/framework-res__device__auto_generated_characteristics_rro.apk": {
+      "sha256": "80ffd4c0a4e9396ca8de17794332ae330e05736b5e28449f90609544e1b3a016",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tecno-pova5.apk": {
+      "sha256": "6e207cadc0582e230e4700c2d18503d9cf507e7c0586077bdfa28e9846202a65",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote115g-systemui.apk": {
+      "sha256": "80708ed8f5c0a2cf8a129bf07bba48b9aac43fb801586ea88c493d977a740160",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mi11lite5g-systemui.apk": {
+      "sha256": "456eeb561e1fb9081b726ce1f154c64bd020162d9b13730c9aaf74ddd82e3f86",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-asus-zenfone5z.apk": {
+      "sha256": "2b563186e127018a793c045c84fc13cae8e4f8069c88632a25d186fec36bcb0a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote7.apk": {
+      "sha256": "9d9b4bf0a4156fdc2b9c783e1f71ff1849a20e02031218008cdcd88b0f58f21d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a03.apk": {
+      "sha256": "2bf2a5213e06c3558b7a4005271d41a33111110f046f172ad71cc55ca973609c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-pocof4-systemui.apk": {
+      "sha256": "a62807db28296d2b10906003f782e06ce5ba5909a69748b129c7306e84b04b13",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mi11lite5g.apk": {
+      "sha256": "df933c8d014bd5e0e5c904d75580671d0f541b4e3d81f5e50f8c3459b695461c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-doogee-vmax.apk": {
+      "sha256": "4052a059599a59a4d11811902ab3bf6f5c4e1bcd125573eb8134fed6e7e5f5c0",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-telephony-hw-ims.apk": {
+      "sha256": "91a13c5cd8c34209d5534516be31d720c5cdc37de730ef010849186722a54a09",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-hw-ims.apk": {
+      "sha256": "ae6fa734f94fce6ec76d8c968251f7b2b5dbee7806325e3056ad76a1af750fc4",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-hover-proximity.apk": {
+      "sha256": "0ec3f3c2f65a1577bfb62196c45493a277e336e3768c12c73de44bcbe0d9964f",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-starqltekdi.apk": {
+      "sha256": "bd925377c84d432c414188cc762fa517a236b95973d4eaeece32297d05c0b415",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-gtneo3.apk": {
+      "sha256": "d9c97950764f08743e8b2eb622f1385d18339a29804165f26987319754c816a0",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-b0q-systemui.apk": {
+      "sha256": "6e4986f77afb3e109ab612262fb4e1c67dc5d41391c383d6b6d7fbfe991fd692",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/NetworkStackOverlay.apk": {
+      "sha256": "88f3f831e845aa74d2626d0f0255322e8a39a9e74263394e089552adf0338cd6",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote6pro.apk": {
+      "sha256": "68db00f271a6236a371cef50dc924fccecdc5698634c10033d8c0d535b2ea3c5",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-gta3xl.apk": {
+      "sha256": "b9396060af4718ec44209ade2f88356c99726d3fed155c12f2b2aba1da0906b7",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-p3s-systemui.apk": {
+      "sha256": "034b232e03b50aa1321fba0449b1c6d95534bce71c7f0da6eb941a1a23b91e37",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-NavBar.apk": {
+      "sha256": "a2f709e8bd16ff501ebf86c40d4f7771830808a69b4c24e0ce6c186fef7fb76e",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-c2.apk": {
+      "sha256": "2c60343be0c4ce744506df9af5315cd18539282009d86378040d1627436309e0",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-vivo-y20-systemui.apk": {
+      "sha256": "f7960061df81969b1f3ecac71974c9454d15bcf9c7446aae147eac28e5e8fb78",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oppo-renopro2019-systemui.apk": {
+      "sha256": "8520467f48a7c8284cb892515ada143499ee3dc76630b181ab0e5ea8bc4d88a9",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a51x.apk": {
+      "sha256": "47a59d54215fb8b6376c38cf58142d7825648d62d299bcd85c4734b9d8233357",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-lenovo-k5pro.apk": {
+      "sha256": "57d196e2acd75a1603900a0d5672c2d7e94c8966adb4b038fdd050a10494b5db",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a33.apk": {
+      "sha256": "8706567dcd6263520a46c5f789061231b56ea5f988fe67e3630c74378f85212d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-gts8.apk": {
+      "sha256": "2716541bce76c142a726d85a3bbda4dc89eb68629475e6729059122e3f0cc741",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mi8.apk": {
+      "sha256": "134e638c15ea098c86c766c53320c7a6e2f3d690512b962a8f679950f4910881",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-ace2.apk": {
+      "sha256": "a1100bfdc6830dc7dec9c59427129fec530f78eaddcec02b5138b491135eb4f3",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a21s-systemui.apk": {
+      "sha256": "0b91f22ae42383cf8a2a9f1f9fed173eadaa14919918023b650e03b271f82a12",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-lg-velvet.apk": {
+      "sha256": "0dbd43672b3ede4433a3df85662e8d4b4e11cb88800e5e4662050c6ae4489f08",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-g8power.apk": {
+      "sha256": "bc447539561efdfb04b41b2ed99311151dbd5f955bb46ada195efceca2167337",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-r5q.apk": {
+      "sha256": "e3d1132dd782909cd669a27e779268ef4ff1528a47d1660e5e08eafd140bed9c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-blackview-bv6900.apk": {
+      "sha256": "01bac60ce0406837b747ad7418708d6b36dd62a1c13c254fb8706e85494dde32",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-d1q.apk": {
+      "sha256": "744079e4aa29239b0f052f46e2e11dc2c3dfa026eec305ed7c0212bb41413fcb",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-sony-J9110.apk": {
+      "sha256": "8821b609c63f164f4b3f26b44dfdae5f57117a3fc84a9c613b779f3484632a50",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/DisplayCutoutEmulationCorner/DisplayCutoutEmulationCornerOverlay.apk": {
+      "sha256": "732fd644c035c2c86bac4c8cdbdb9b4854a2bd8a12275eceedfbb3a56fdd8c00",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-sony-pdx206.apk": {
+      "sha256": "67c00ee20afb190c90ce739b6777d8e543bfb5ed266551727c3559f9a0f30c84",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-q3.apk": {
+      "sha256": "305510fed1c1a1bd22508ff43f78e29f5e2d0131d8753561eced9c4c47a94117",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-CLT.apk": {
+      "sha256": "aaf9966ab5ee7146679f303c7ab1a2141565624480ce484d15acf3cdd4727271",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-infinix-note12v2023-systemui.apk": {
+      "sha256": "ab499fd8402327f414b2fcd1ba78fefa7763bf3a3613a17f3cbefc75262989fa",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-op10pro-systemui.apk": {
+      "sha256": "94618bddff9120835aca1553156a2262d03a17d707c8133cbdec46bf3e059421",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mia2lite.apk": {
+      "sha256": "bbdf4bd68ed035747a6662bbfb6b51c403990d642620c1fcd8ab1d3154c4e56a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote12pro5g.apk": {
+      "sha256": "aef9fc21167a5296c9552711ce65d7c643b7f7387dd123060b1280d9d8ae4580",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a31-systemui.apk": {
+      "sha256": "706e6e924b5d985b093483fbb196bc422c3a982fe2b6cf72154a5506fd5713c7",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mipad5pro5g.apk": {
+      "sha256": "0872f2b419e8bb30a5cd065471e69364e601658a8c30fa467ac5ec7754a484dd",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/Launcher3QuickStep__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "f6a62b4925e2bb0821cd3d07792bb87b27ca5c5c96c5ec508eb380612329ca95",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-gt2master-systemui.apk": {
+      "sha256": "fbf647e1d1cd6592230dca226ae62895aceb71fb77748e2d85bdb5dcc9de3517",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-vsmart-live.apk": {
+      "sha256": "8d19484991f8485730bb9b036a91b9b78500ddaddbb5e75668bda8df8e743473",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-nord.apk": {
+      "sha256": "9096e6c087eb335014c9e5452d6ac837c35f3b6dd92b2bacb943f954d7c2f03d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-e6plus.apk": {
+      "sha256": "3f343987ef07fb723355709ae0c53ac4da50524215037807a7eb0d92a85cf6ba",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-touch-proximity.apk": {
+      "sha256": "081de15681b267b35c86a45439a93361b9b6918a316427cf4977ef1cf4aac523",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mi14pro-systemui.apk": {
+      "sha256": "d721156011243250fe36cc4dd90396c5be249c9cbb5fb552ec69f4c43d20b651",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-infinix-note40pro.apk": {
+      "sha256": "04ad885df1d4b19ec6b9f47a5abb2f3822c9668cc24077cea9b69d83b18a780a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmi7onc.apk": {
+      "sha256": "1fcbf52d6464eedfd255d307110b6e049566f13b827d0fb7b8937408c3d9b9a7",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-infinix-note10.apk": {
+      "sha256": "d291725578c0a73881bc774e3f15f891827f332c469229394ad225aa349bef1f",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a73.apk": {
+      "sha256": "e03b16a099d424fff5ea20b33428b54c24a5ff844a40a798718dbef589ad725d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-mtk-ims.apk": {
+      "sha256": "f640fe9cac438e7070edbd26d274e8864c1ebd47bbfdedfd3c93f5927bee4257",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mi9.apk": {
+      "sha256": "18ce5123cc380d7d2d5fe170b4c560154944b6f01fe9ad986f3cbeeb334f4521",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-sprd-ims.apk": {
+      "sha256": "3ccd6aaae51a7afa0f595f0a1bd8d58a0bd078bd0613b0e06e98dd2af1e473cf",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-asus-zenfonelivel1za550kl.apk": {
+      "sha256": "440bb6e78dcc8328779ed4f235d660defeacd0eb798df3970d77ac2e3ca761fb",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oppo-a54-systemui.apk": {
+      "sha256": "71f5d47e708a6d146366dbedb41a4190d4b9ad4ab2d7454db6211992fce87e26",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a40-systemui.apk": {
+      "sha256": "e4164a2109636d9d103d9c3a94e884d409e19131e0ebe0b455a1f170c1279e0c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-fairphone-fp3.apk": {
+      "sha256": "24e60aa6698f7b2441ab767096dd1476d64e7a4a5b8a435ebfef917ae5573550",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/FontNotoSerifSource/FontNotoSerifSourceOverlay.apk": {
+      "sha256": "cf8abaef67a40c3c6f5c5689028ac6ebfc34d5e3ca958d15e026437bba898249",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-n9q.apk": {
+      "sha256": "90a9bd72eaf68411f39def97604d0c92881f118cd0cb7d173af1cd4143c083a2",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-nordce.apk": {
+      "sha256": "284ed6483a8f5125de2e33d9bbcbeab06b336f9858235197cd678149e01d2003",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/NavigationBarMode3Button/NavigationBarMode3ButtonOverlay.apk": {
+      "sha256": "6c50d1172901d4b2e1285728d40866570f7449eb8120cf62455207162fe4ea34",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mi8pro.apk": {
+      "sha256": "4bd4ab8452bcb4e839ff2a1e8c84f103b613798c6b2e4991910dea134d31b796",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-umidigi-A13-Pro-Max-5G.apk": {
+      "sha256": "1265f83e70e10ea4bdf8cbe630e228359e04adaeed5b5743252cbae45ae8e4d8",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-8-5g.apk": {
+      "sha256": "2741fa6856c21df05ed6d3e2613c31d422d181aaafafd8ab487d0bb5f17e43f9",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-duoqin-qinf21pro.apk": {
+      "sha256": "64a09f1733716ea19d68908b73ad0e42d9a691672050112c6e884aed5cc8d815",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-pocox3gt.apk": {
+      "sha256": "31e6921058ee6648545f311582d6f4389ecc5277034310f9874bb6520c84a325",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-DUK.apk": {
+      "sha256": "8592caf3bcb154ac27c84de377bd24cd3913892b1bbf98ad7fe3c157704db731",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-teracube-2e.apk": {
+      "sha256": "024132aa16bd23d932d793d1213de84d3b6471fc6f79bf0711528773a1a553d2",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-op6t-systemui.apk": {
+      "sha256": "a78fc032aba1779a3a391ba2ff4252712bdf9ccd8c37e1ec43d61859d16b58bb",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a53.apk": {
+      "sha256": "85e1afe3c4f7ff87ddce0fa8f24a6d9fd252fa2d083eedea0e4ad34b58960319",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a54x.apk": {
+      "sha256": "bf8f4b57906547870383e9c6f159c5af2e5e8000271cfa4d43c6ede8b8a78ee5",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/EmergencyInfo__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "da56d79add212403ab8301bf84ac6c9f5ee242d0c02980233201f0380d37fd7a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-g8.apk": {
+      "sha256": "4c5c2eaf07e366aa08f71a59df3c13075deb38f86f7913984abd706e4cbb9da9",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-10pro.apk": {
+      "sha256": "33b62e8cf0e9053f051575823b76193945ac84a81185890f56b22891e4ec0097",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-q2.apk": {
+      "sha256": "a3a583d1439ed0b9e420d5be73e8ec3dc248da7fb8b224408ce684dbd0e8e9d2",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-r9q.apk": {
+      "sha256": "36311d24e177e8098997e91808cd1880a91711f915531f7995ccef030399a705",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-ANE.apk": {
+      "sha256": "34e0f95d64f9fcde9b91f8ff751c2dfb4267c1d18446f6e074b9a75008af9e84",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tecno-camon11.apk": {
+      "sha256": "fb7701639ef08de1043016e59da041e4041e5d601807a75f0682b45cefddd951",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tecno-pova4pro-systemui.apk": {
+      "sha256": "a4dcb2a431b76684833e62bee2faa83e1e5294babe10f38103f88273190fc622",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-S20fe.apk": {
+      "sha256": "3b3a2e5ca5f23eea92fb803cc090548d9bb5bfc188bfd8bab12340ee2e45c41b",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-op9-systemui.apk": {
+      "sha256": "3c408271437ecbb099e4015f464a82907ed1fa801f3c8f82a5405755a0338e5f",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-LLD.apk": {
+      "sha256": "74ad9d21ced829c22ee0245f56e6c19d297dcefcfb36f098eabed89ef3960a89",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/CompanionDeviceManager__device__auto_generated_characteristics_rro.apk": {
+      "sha256": "dfa950fc80fdfd840ed8a2661d9d60f50ab22043ac04a22b2cabf822f18853d7",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-infinix-smart8.apk": {
+      "sha256": "ba756469a683e754c146c5664bbbf642e411d902513424b111b3194fe34c93a8",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-one.apk": {
+      "sha256": "41af3c3233d5f3301bda0705e407f5914015b21f5f4109dad515e03282399230",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-onehyper.apk": {
+      "sha256": "5c70e7787a3c68c9d50884b3d1b59933abfa443c580966427ec7dfe96f5fbd33",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oukitel-wp8pro.apk": {
+      "sha256": "e9d77d9cf5f97247f3560f8faca222e4b99cb59351492e42bfa8bad04c99e1e6",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-Telephony-LTE.apk": {
+      "sha256": "133a0a26d8e7eabb64338cce307995499a3871d0152f9b37f985b2a6ef68d381",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-nubia-redmagic3s.apk": {
+      "sha256": "61d8511e9de359410dd8cec9a7224f362b7a394c8ac58807b70c7667efa8bbfd",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-RE602AL1.apk": {
+      "sha256": "b4ad404e9b9c40e05969488b06f4e602bfbb1ef1a5009a410992500a6798c58f",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-civi-systemui.apk": {
+      "sha256": "1920446b07bcbae59dc963e9f30636f11b88f21eb0cf1ae6ec5311d962664575",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-highpriomisc.apk": {
+      "sha256": "e17ab33aee694b67cb77faad4a4e4417021ad88f1d536064787529a4c72ef232",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/PermissionControllerOverlay.apk": {
+      "sha256": "0bc7a6a7e276ab21f96fe49588574456606ca31c745595f41111d656d66cce92",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-mbi-s10-systemui.apk": {
+      "sha256": "e2283bf93e0700cd9c1f2f4b6a4b52d6aea4849ca878c07fc9168882270e6245",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/GmsOverlay.apk": {
+      "sha256": "93f08590070a13e384b3b02fe64a6e28c87ec94615dd27150c15d7d1eac2d5c3",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote9promax.apk": {
+      "sha256": "2b68514f1655c9c01f002855b5f2f029ab5f672df6b16c890049d0200d1e958e",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-EML.apk": {
+      "sha256": "9eb476a1b9cf3f84538e9d3b7899f6212c04bc997c53eb86827a85f57324dde7",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-nokia-pl2-6.1.apk": {
+      "sha256": "3c1de2c9ed2946f0653da92a32ff2b1c41afd54e501c9d1ef8b53ccaaffe1894",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-nord4.apk": {
+      "sha256": "7b0736f4210f35b7300a3850183f4dfc5a7ca053e7e065d9a45494a031e3a5f6",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/GmsSettingsProviderOverlay.apk": {
+      "sha256": "c37cf11afe163d5032fffffe28269af0e5e89a35f6610582747f19a3e7ece83e",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-op6.apk": {
+      "sha256": "22c919049940aa35c157634202b7ced87023ae6174cac6bd96442b5881f43b04",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tecno-pova5pro.apk": {
+      "sha256": "ccf8f8954fdefcb297c1ec78e92beb3599f617510808ebf55c84b528321524f8",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oppo-findx3pro.apk": {
+      "sha256": "3abc039ea0a8a99b61d747205825ac9bd22d0116a7209f294d254a36487797a0",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a20.apk": {
+      "sha256": "153a5f406387b4354bdac0eaecabd9ef69dc401c7b858ec099bf65ce849751a4",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-pocof5-systemui.apk": {
+      "sha256": "75799c19cc180bad41ccccef5c4d0ca0fc671dfa751e47e8cad6af0e6de8500d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-op8.apk": {
+      "sha256": "077b353985c99cfc10ad71baaa716d74eb6f58db9c0e376edb8a9164f94c35ec",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-vsmart-active3.apk": {
+      "sha256": "2c79baec0563c4aff853ea9259890675e84937139a6b7e39e8fd3c7233ad6de9",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-unihertz-luna.apk": {
+      "sha256": "66bf2123796b14a23992fe2a5ba557317c9363fe295c392042715798e227b11c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-g6.apk": {
+      "sha256": "e030b9bfb59b2582c06d7b02f02dbce0f9d88e7ec133b35f91c2751ea2c3e372",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-hiphi.apk": {
+      "sha256": "f155be701424bf6a0f3ace10f095a80a2ec94c97b7cf3c5e0fa4d3725e38fe8d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-d1q-systemui.apk": {
+      "sha256": "81fb9996a67cfcf3f45bb07d547cb926302823b765b691f2b273d79c414536b1",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/LineageSettingsProvider__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "1e3698534116968f966dc89da4857b09f3c310f43f932dde4106ade9569aa517",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-umidigi-A5pro.apk": {
+      "sha256": "a9637be2d2a4ae76b0f6294412b5f824e73ae8f7dc8fa60d95fb8f01074e7d9f",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mi9se.apk": {
+      "sha256": "9471e654b80b22ae6b6eb64fd5fcf98b7ac395edb3cf99df583658a741161b81",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-S10pq.apk": {
+      "sha256": "19bd55a7c7fad4ff1cb99e94a9526221f2908e1d3151906b3ebd4fd80676a57d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmi8a.apk": {
+      "sha256": "938d5c69d55cbb5f51386de265c7a4ab7107b000a7737470515936af52995a5a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-infinix-note40.apk": {
+      "sha256": "304536883577e7beeb5af4fd7d0feb9193e4f8b0301fd6c7b717bbe1c255a720",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/ImsServiceEntitlement__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "86d227baf8dd3d3ce628181dcc21e07db46f38c735ca6e7b489daddd58a8b1cb",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mi13t.apk": {
+      "sha256": "4e906cfcd949b17e5bf50399aa9a72d82f50b99213c00e0fa89f563ddd7d03a6",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-vsmart-joy3.apk": {
+      "sha256": "b66d2d0cf1dfecca9b228e80fb9fce4b7da0407aad388390c80759a970500ac3",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/ParanoidSense__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "8dd478df0d355612c07d3b589d6bad36d915597820bf5015a802514d37d6db61",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-Hisense-HLTE556N.apk": {
+      "sha256": "35021dd2e984c592b20d6ec0829d982a1215bcceab38da00b15ff86fb1ebd676",
+      "certificates": [
+        "c2ee5e84899e1a4b84db7d61aa7e4f47bccd403e9bff0848487a09e504f63d97"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote115g.apk": {
+      "sha256": "1ca6ba7d71ea3854ec8bffb9fcb1fe2079062e110e8972c5eba570aa294e37c9",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-infinix-hot60proplus-systemui.apk": {
+      "sha256": "4294f5f4fa8237eecb6cdd9aa2b638509d80763860c65f3992c7d54a8706afc1",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-onn-mid7019.apk": {
+      "sha256": "ec20f72bb3f345636804c2e7efaabdc8cacf339c85575092dea2815a4b14186d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-gta7litewifi.apk": {
+      "sha256": "4f759a2c3f572c90408b2ee5471a829242504dfeaee391bceaea81a84e30a382",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a23.apk": {
+      "sha256": "95a146253b015de841d857031c910c327c45851dfabe5688dfcbdae82f8b5b38",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-g7play.apk": {
+      "sha256": "02ac839295c15c6dbae0b52595d726e15812ca00ac1b567a60331101c704b317",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-nokia-drg-6.1plus-x6.apk": {
+      "sha256": "6604fa86b718622f41c31fdab7a6c3a51b2037e99549651fb1226778fac3b3b2",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-wifi.apk": {
+      "sha256": "4e0124ca3988fc4d8323420a6f52013660e6771d2874b1ac84d342fd482f18a7",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-tundra-systemui.apk": {
+      "sha256": "acb915925095268120a4340c1c0ed9e30ec698922cface9db6491f035878c079",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-hotwav-w10pro.apk": {
+      "sha256": "21ebbda19fdf675bce3206496aad06ce7a21a07fb8feb1189055d81e06ea166e",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-sony-XZ2.apk": {
+      "sha256": "beb7ff179c5c7c33f0d7ed52bbb6b7e34ebed5a1f15a2aea8fb756516ed19fec",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote9s.apk": {
+      "sha256": "98be1746a3075609b5d261629d322197bc7de81161b0c270a61d4ee24c188c89",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-unihertz-jelly2.apk": {
+      "sha256": "3fbc2b9e8f897e2b5b8b8d3543e77c5b2810cacb9fb5f8e343f1c84506e57ea8",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-nubia-redmagic6series.apk": {
+      "sha256": "cac9b3e1731d3a99fc1c4df15596647fbd1f30ded2c29a922de6ed4a4eace24d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/ParanoidSenseOverlay.apk": {
+      "sha256": "757a2386170dd11049fd6505eff4c99f51c937df932908348da7a3cf69b94568",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a52.apk": {
+      "sha256": "a5b48d75c982ff10429f2ca41643a6d7364c6e16ead2eb26b8bf151a218e5802",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/GmsSetupWizardOverlay.apk": {
+      "sha256": "babf1529c19ac741356c1f4e6f46d9043be2575111938b5a90d296e80c76434d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-blackview-shark8-systemui.apk": {
+      "sha256": "4f773046924ced3c514f2c32291213f133ca68d7c1efc91b8c7b2780fc9ec4af",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-op12-systemui.apk": {
+      "sha256": "a72fa39ba1504ac69b22bc6d1e5bf32ff470fb468a710555fe18af91e37ff686",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-COR.apk": {
+      "sha256": "977997b75abdef7c6a57e6c36bbb5f2b4bcd59d9cdb357f29c5e3bc880d3cede",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-rhodep.apk": {
+      "sha256": "ce624708858587f9254747f13beff11c5c0d2d6fbb42573a197fb9dacba327b0",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-RNE.apk": {
+      "sha256": "476916754345f42d7926da29b0580b9b84827c788d6a70d1e66b7e7b35988a94",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote13pro4g.apk": {
+      "sha256": "9d7bfa5787d9c21f5b5d053c8871e590f58324885f4d00831b4a0e8023cff1a5",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-lg-g7.apk": {
+      "sha256": "81612af6bc3514052beadd6b449b1351d3933ad52b8b64e52f848ead429cb1f1",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/ManagedProvisioning__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "0897e8ee40d8443c5399464380a1846cd52a0c13c59d33b92c449d83553f24e4",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-one-action.apk": {
+      "sha256": "8faa47fee965831507d9dd29f79f26893ac4989037d4a6a394b6d64083c268e5",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-sony-pdx213.apk": {
+      "sha256": "53885152f76daddd7069e1055f442a6c8a5ae6261387cc87d46799b431b87796",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-gta2xl.apk": {
+      "sha256": "369e16fef56552e51c8e2608a822d91d01d17c4686a4f0f6226a9d13f314732a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote10.apk": {
+      "sha256": "60350e1aa48f49bbdc3533c7a1b250c9d8d818d18ce099a2be0cc149acc89b5c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-mbi-s10.apk": {
+      "sha256": "14318edf034abffbbb8739a597dd979c905838fe4064266ec55a3b3b64912013",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/NavigationBarModeGestural/NavigationBarModeGesturalOverlay.apk": {
+      "sha256": "9b6277a240d3f42cd6952c3f36df7a1e24d3e62a0098e450243a014b2d07241e",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-nokia-ctl-7-1.apk": {
+      "sha256": "faf73ab84d2b1f93579116b0d231ffb9e0fd2414f9d1e5fe6124613d9bad21ba",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-SystemUI-FalseLocks.apk": {
+      "sha256": "0ca496611d519475cbd4f84a0a0662571145287cafb76c7b0bebaba6cf90c636",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tecno-pova5pro-systemui.apk": {
+      "sha256": "eeb3a2f204651d10ef317f2f598b46b06fc4be5a3e032df67c0213131ccc822d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tecno-camon18p.apk": {
+      "sha256": "8bbebd2fbc2012e24aa432c5ec09ed4179adffa206d9fba83bcfe11f8421895d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-t2s.apk": {
+      "sha256": "d91ea6afcd113f95240e13c9bb7925d2f23aa2f4fdec9a3ee0998684b1765d2c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmik20pro.apk": {
+      "sha256": "0626f417ca88bd91076d4c19ba1076ab6e29645818e8125206385c002167823a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-COL.apk": {
+      "sha256": "d908addee7666344fe208682f74de34029d8f38da4b71946b661f57c10aa8db5",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-n2.apk": {
+      "sha256": "ad5f2b8f8a0c01dde9602d0465e84c3f030c80ce3788f512b62176d0c834592d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-gt2pro.apk": {
+      "sha256": "16ea06937f1dacfd6a545063fa7b70052d756caa45e3df75607dd55627a34301",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-physical-proximity.apk": {
+      "sha256": "1083c06d331e00c139efe97f7ae8a9b60fa9f235d0c1c6af1945988ad77609d7",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-9i-systemui.apk": {
+      "sha256": "c9d43d8224f715dc45791fa0bb911a724959e6663696f47891d5eda74e91e9ad",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-narzo10a.apk": {
+      "sha256": "675311ad681e7c431c5746015255bb15f433d9652834635a8cba319f47fbb61d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-razr.apk": {
+      "sha256": "970ae45b2c476ea94a86c7e10c2d3f8d1802ce7e210e0ee80302e957c7ec06c2",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tecno-spark10pro.apk": {
+      "sha256": "56bf46934422907c9c5f4be4748e85928993263c6604bcceef44db48a412bcfc",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-lenovo-y700_2023.apk": {
+      "sha256": "6991edaedc1c1b52e9db212e17efba72efba1e0fafafb949b606b5d86132a5c8",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-tesla.apk": {
+      "sha256": "8fcdd2249f196ac33c94d3b536867e73c48a07baedc248ee9ea75d8ea08b9e88",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tecno-pova4-systemui.apk": {
+      "sha256": "28403b047c769d996f2224ddd2f40770a8fc52894a323e2ebd4075aca1dc8cb4",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-m31.apk": {
+      "sha256": "c5ae69d04367455518376e95e84d0223dc736cb493645e3e6abba097b5819467",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote10s-systemui.apk": {
+      "sha256": "2af7cfef83932a58a7dc36c1e121ad912aa0bfc6341bf0f3f84cfe22bdb2a978",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-htc-u12plus.apk": {
+      "sha256": "46ffbc32538e52023a0a46d2205b381c88fd3181e99bb48ac8de9ccead244d80",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oppo-findx3pro-systemui.apk": {
+      "sha256": "a7c20109c5f553bd45386ce1f9e4e49874997fa6cc87ca2b51ae341d09417462",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-ace2-systemui.apk": {
+      "sha256": "8aee6a5deaeefae5c7c4cde55b42c0b35ceeafff6deca2c677b1aa4400aa9efd",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-nokia-b2n-7plus.apk": {
+      "sha256": "b0b58fbbc36cc10e1e05ecba0504bfc316384cada1c06ddd8bff9801c3bd8f04",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a33-systemui.apk": {
+      "sha256": "b5f6851e6c7cfa6dc118e5478737bb006161c3c1f87b13ab51b71fb262f6fa33",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-nubia-z18mini.apk": {
+      "sha256": "23a02855a0b0a15cc01d1c124c1b2917d4569fc647f8b2a1b72d0fa74ac1de01",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-acepro.apk": {
+      "sha256": "0652bf8356e6a128e83533c9299f9ecabc8bb2f357f6af607347537e11ba834f",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-6.apk": {
+      "sha256": "5c80c9962ec0c8376ee21971d4e366d9cbcd4fc81d50e6be8c337ad1be66036f",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-JKM.apk": {
+      "sha256": "eac9d716bbfcfd6ec889813161139dc8aa68e41a8d5f9cdb69f2ddfe00751b41",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-onefusion.apk": {
+      "sha256": "bf30180d411bf4f5a800fb24f4441bc42c8e2a9d73326226e489f028daa9decf",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-n200.apk": {
+      "sha256": "b2faee7e76cc2583badc9189f08c5212ccdb4f8ff6f448aac81aad5d96961139",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-meizu-m2461-systemui.apk": {
+      "sha256": "389b0d993275b54a0f3652fe2e7cb090d64eeb875b09a6c3369342fad4f2cc2e",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-r0q-systemui.apk": {
+      "sha256": "49f3aaf9c94d3ca19683993bc03036883c3102ac5d87e468ff9a33d06cb1abd9",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-duoqin-qin2pro.apk": {
+      "sha256": "086f086f6aa2ef836bba3a1d3088d6184ce3ce334028d193b86f00b30d34e02b",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-teclast-p20hd.apk": {
+      "sha256": "8d70ad63c3798775d0c76809919f95d744a639144cadc9946046c5365e30da79",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-BND.apk": {
+      "sha256": "0f7ea90c07ddbb4d5cfa923b9e0701d137c02449a6487011ad58608c767e2641",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-blackview-shark8.apk": {
+      "sha256": "e694e398a8aa746f94256a462c9833bbb4baf7a4d2cce740a9b4720c1d3f99c4",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-asus-zenfone5.apk": {
+      "sha256": "8cdb8df245c2a926932ed53cd8e78fe3859e0b36238845d75e41faa0f19ec571",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote135g.apk": {
+      "sha256": "43771eed3374cd8fe86d0666a4910caf26fde8a0302216114e9e9e3e79970617",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-wifi5g.apk": {
+      "sha256": "fc0ba370d9037429ea9f67f425b987c9ce202c4f0ed77970eef44ee5503423c4",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmigo.apk": {
+      "sha256": "f575baf5be2fade0cba058874be55ccaab1eda3a53f722b6898c3058af378ba8",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-gpure.apk": {
+      "sha256": "5993b62541b81dbbac89d537fb668b046fe625e1acfa46f6d3c27de5111fd337",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-nio.apk": {
+      "sha256": "b9b70c8cc3d3458064b64296a219ab3a6333cb411a248d3076ec12e4de52b1c2",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote12s.apk": {
+      "sha256": "cf6a030700a39983e4f8bbac4a579cc88f6f6c1d6b855c8094ba294cce8b6898",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-lenovo-s5.apk": {
+      "sha256": "53eb90bafff02dcded9b7a9b544ed3647e2bb26bb186b34ecff209fce26d580f",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-pocom5.apk": {
+      "sha256": "a51b165024443744efdd33e2953b3f8816618471abb9412656f3262b0e7602a6",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-z3q.apk": {
+      "sha256": "4ac643a9fa4b1abb464eff49619eafc41f944bd077e86d86ab0e0d870f75bac0",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-devinputjack.apk": {
+      "sha256": "c3c75a1595688ff15ef4f5e75101115b0445eb1670a40dc1fbd8ae39adc3bce9",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-VTR.apk": {
+      "sha256": "850e9265feb99eecbcab10a6b001c5a507bd6cd99f61a0c6da0a5ae78e8739f9",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-AUM.apk": {
+      "sha256": "999e48b9fa922e0fe050843d52f0a6588031ac928565293fed50f7d3f362784d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-misc-dt2w.apk": {
+      "sha256": "dcd1d9be7b1ee68a782bdf5d09879ee12350197edd651782af45ef18674036e2",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmi7a.apk": {
+      "sha256": "b77449623ff874be61fca0e5d859ce45b6661ef0d6ae2377f1973fe42a8013af",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-MAR.apk": {
+      "sha256": "f2a634e6d90c4a0ca3b179d7494bbdb24f9d5550d9494cbbe86fe0c1d9e38bcc",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-essential-ph_1.apk": {
+      "sha256": "539bf60f6a7f91d69e8de84b4a9b924e63850f04892d2ff6b36fe88750a6e621",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-asus-zenfonemaxm2.apk": {
+      "sha256": "22cfbf2d84d26c69827e772a9f9f7fb679a695bbb85a44f1871de32326ca3ed1",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-sony-pdx215.apk": {
+      "sha256": "4585e0082c28cabcfb17a0575604512f39e7db5dd6504a7a8839f7c694f12b2b",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-r0s.apk": {
+      "sha256": "7283719924f79880399197c0f844d914147b775c8597bf893feb3cf4d5902e61",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-lenovo-tabv7.apk": {
+      "sha256": "bc8112aed6da3af5b08235d7ac1b859e7aeac96ad010f50c04877fb8bf458871",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-telephony-sprd-ims.apk": {
+      "sha256": "804a37448141ca8a9010c51b7e269ad5054c3ee7cfa92c4812c4713db7fe9977",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-gt2master.apk": {
+      "sha256": "c21522a5011f4f0f2af703ae9f772c4ed65284304d9fa3924f87ecadd51b9d31",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a82xq.apk": {
+      "sha256": "2e1afc33d719754cc2adbcb6aa7fb7b6d3eea709908d4b189793857ed943a765",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oppo-findx.apk": {
+      "sha256": "90af880551b1bd93b9defa6c8493fc6f1e7926cef16cb0a79cf43f6c7d241f7d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a9.apk": {
+      "sha256": "100ebff52c81a4405028e92d399fa604d9eeeda00753f9af649872d8d9cf3e06",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-sharp-s2.apk": {
+      "sha256": "1e58490b16ed66d065db9ad08c83b57fed7a429c5422cda0484b834aaaa4550a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-nokia-pda_sprout-5.1plus-x5.apk": {
+      "sha256": "f423adb7cea0ea94af4d4daf92a172cdb74f14cb120af511f421a51e84282b72",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-8-5g-systemui.apk": {
+      "sha256": "a38f26cbfdc7ea64b5f35abe127888bfeee749d1f2e0c734e925baa47dcf2cba",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-caf-ims.apk": {
+      "sha256": "24d7ebf9f913978a0b3440586c9b5ede8acb450a5f85ed02a8728f2ac71b7840",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mi12lite-systemui.apk": {
+      "sha256": "8c09dda0337a728516fefd76fc86011ecbad27fa08a9c435650df2a8e8c3c04d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-lenovo-z5.apk": {
+      "sha256": "7f7db46ce369161802d48a58fac26417869ca23dfafa538318d7daf32514fcf1",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote9t.apk": {
+      "sha256": "76cff61be29c0d418e68ce54162b0fe2f0a5f7f3458c80c69f470640b483864f",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-nordce-systemui.apk": {
+      "sha256": "c37d8dc85cf8f98000ffc4243a4de761fb98545d10520aed9dd404fc91ea60bc",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-nord5-systemui.apk": {
+      "sha256": "4ac60e1dbe68cf59788bb17859f8caefe164a79240bf0f1ecca827b8cda01ba1",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a7.apk": {
+      "sha256": "84dfd7c615fa9e148c72121d90a3468f50cd30614577929d76ef881d56db5210",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-ace2v.apk": {
+      "sha256": "76cd100ea11b5e22a827bd9f6e40e345e7711164afdfaf98b30d789d2ef75451",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-umidigi-power.apk": {
+      "sha256": "289fe3018ff837d4551e6cebac7c8a7580adda44a630a3d5575682e0a8c7eff8",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mimix3-systemui.apk": {
+      "sha256": "06f1d9e434bcbcf1ed1ba4d91a5f0f1f64eb11ff4f8633b1145bb04121a7d23f",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-op12.apk": {
+      "sha256": "f3653b0b5acea6eae7371e854c30fff1c2911beb90ab221b7abfb339656583b4",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote13pro5g.apk": {
+      "sha256": "765b00ec4febe3633a3e030eb72bef6abf4508a5295fe4a51501340b151a2331",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-op8-systemui.apk": {
+      "sha256": "8844b608b8d88e906e0196ea7f9aefc02ce450e946d87ccf3bf8462a9deb6887",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-lge-mfh505glm.apk": {
+      "sha256": "525462b678b1dbccb38017e027e7f0393f2ad15497ec4cdd6824d71c5817dd6c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-9i.apk": {
+      "sha256": "944a57cf765d18a10c2eaa6ae010622242071201af4a99880baaa9492efbbf48",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-PIC.apk": {
+      "sha256": "37241d0092788f53b7dbb0a8304aba13e441a7f637b1c9e96158c75daf485d4a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a32-systemui.apk": {
+      "sha256": "a9becac37c89677ec3346e9c895dfa01316c6f38c431a0ba95070bd611a33859",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-nord4-systemui.apk": {
+      "sha256": "e81ee452433272be056bbcce9760b7515b8076f51e65d89ab5c73c942ef4068f",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-pocof1.apk": {
+      "sha256": "afc7a1a81e65b7a7c0704024e1adc59123af39aaaadf7152e95d6233f4a34c5e",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a51-systemui.apk": {
+      "sha256": "bcd030a6ab1fa74da48bdca987bd017786e8964a01f6ed07b5f5a73fdb708e3b",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-s9q.apk": {
+      "sha256": "bad3a1355cf937c8913e75cd0377d723f9a35a4805f707413d125af6ccd2eb68",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a71.apk": {
+      "sha256": "93738aec9dfcbd450ef095ec00a3a8039c02464665a002a56e9acdce16cf6ed4",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-meizu-m2181.apk": {
+      "sha256": "4ce291734a50d1663b8151a0ff5e457f929d8ce67aa56d54a3a7cdbeb0bc4169",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-vivo-y20.apk": {
+      "sha256": "e3518419f030f8a185a860a83ea4e33afb53f5d79b16309a3f88f9589fb93ce2",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmi9a.apk": {
+      "sha256": "86c9370af230e8cd0bb781852ca0849fe90171ed12e06e8206d13ff53e94671d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/ApertureFrameworksBaseOverlay.apk": {
+      "sha256": "8a154c0c9ce1f3c698e40559d8f0bbe4a19a37e545a63b2c566c07aaec9670d7",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tecno-spark6.apk": {
+      "sha256": "b4e7bb373bc9039346c9c8b2df347ef9111e928e18e5a3b613728431b6b5efd3",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-q2-systemui.apk": {
+      "sha256": "d16c62e0844edaffe8e9a81f14617b62c7144d8ac224a54367941c789418c3c5",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/StorageManager__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "a20f3c73cf7b925abc5e96352d211aa90bb06db61a3c636586d46266444a0bd6",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-misc-aod.apk": {
+      "sha256": "d3581923415f12a4d50da866e83832bf392049a4984360dadf064259ba9fb268",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/Aperture__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "36c7a32fcf2af7887dbab38c9b1e384a51448466d45c6b3ade4b705f7486cb3b",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a70.apk": {
+      "sha256": "f0ad91b20c86de83739b569d5865c6d3eb5f1927f7999df713f077a4584056cf",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-asus-zenfonemaxshot.apk": {
+      "sha256": "67d9b3d432b2671b4994b44677a2480946a56bcd03577ab5d5d34dc498c7ba1c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-n200-systemui.apk": {
+      "sha256": "ab6ddd7ed9f60757dd3f06d4071a28ef20192f176b2ad3fc52f006e6b72c8b8c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mi6x.apk": {
+      "sha256": "a041e96373c12cdbc6b39fb3699d57260ddf6c28ca52509e1e4fc719f7a7c6f3",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote9pro.apk": {
+      "sha256": "59b55b58a1fab270fef610913449f8bdb2aff58017680cdd43d8a88a5be75efd",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-lge-mfh505glm-systemui.apk": {
+      "sha256": "e944f277f8c8271a6c11c428d64f33ef6c1fd0417f6699d169665e0c0739a53f",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/IntentResolver__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "73bf8c1a69f444a4c19fa8d1b5f9bacd3298ebbcb33cf4c99184372b04027d58",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmi6pro.apk": {
+      "sha256": "27210460224d1807d3f6a14bdf1f229ba40e78b28774f81d43c74f455b958cfb",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-infinix-zeroxpro.apk": {
+      "sha256": "9cf2ddb770ead2d4680797ee8b04e4c2fb5d0741eaa9a1974509582605af6b31",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a51.apk": {
+      "sha256": "c772589260a8c0b6db1d78c362deebe3d7a484ad279dee315b233ac08134113a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a54x-systemui.apk": {
+      "sha256": "6e22479153bb394664d7fa4a497d0388c91fc817fb2e040521af8e69746d8bae",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-lge-timelm.apk": {
+      "sha256": "1c46896b037636cdacc245ba7d3042dd3a1a23a1081f0854e51e4fb7042ddcff",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-misc-minimal-brightness.apk": {
+      "sha256": "c25d9039c040989b1674d69611327150e6cd7732333eb67bdd5f719edcd418fe",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-telephony-slsi-ims.apk": {
+      "sha256": "6b18803605a5f70af65eb1b6571a678a3fb74965d41c9598bf49634fe9e28bb8",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-lg-phoenix_lao_com-phoenix_sprout.apk": {
+      "sha256": "4e54a57c01934a94d0672d2ee809535d1e255cb59fa9e6c11d1239aa33b31a57",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-r0s-systemui.apk": {
+      "sha256": "bd6fcbb22dc7a15bf26dc916e9e2566a11e24936e74840fc2b1f6d76786fb2de",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-infinix-note30-systemui.apk": {
+      "sha256": "dd5a2970d139b657a4ad4222a59ce5b97f6159c10aa1f0eafeb93a2e283c9df8",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oppo-reno6-5g.apk": {
+      "sha256": "72d9cc86a8419c5b92282cfd272df61a0ae9c1ed7b405782c3adfe28c22271db",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-nokia-pnx-8.1-x7.apk": {
+      "sha256": "9b691a407e66a2be98880cf7630e0d43563b9f4c28d520dffbc97cb39992fa54",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-telephony-floss-ims.apk": {
+      "sha256": "b948d0b24ae24645bb8d4b416839ebe12dea4b5f8d708973a1ecac001dadada5",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-ace3v-systemui.apk": {
+      "sha256": "6d227fe4ca073a3e01f334e4078d83834ae82fc25b117d7a1a4f56b8a2e83234",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mimix2s.apk": {
+      "sha256": "d6b263adc57fbbb4012c903f7a775aee288b92d228765760b423bb71f7206816",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/GlimpseFrameworksBaseOverlay.apk": {
+      "sha256": "19d446e376cf3d313e36e06d91ff2e3654698cf8588ca7cb0a63060225c8c4d5",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tethering.apk": {
+      "sha256": "cbd3e952637439b41cba3cd4281439d77d8b9323dcd850d30d0395807472f44d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-misc-spen-pointer.apk": {
+      "sha256": "10a3a0b500d2dabc8650531f276a8955f6f7251ab39b5144c5a2b0f11ccecc8a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-onefusionplus.apk": {
+      "sha256": "84c763d85a22fc77bde22a68f3c925d14761df5132384d4bdddfb99eb9bc9df6",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-e5plus.apk": {
+      "sha256": "f2e6dd44202bb26d06af7d772253ef3f002d6ad287442cb7aef911fdf3d9b4c0",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-gtmaster.apk": {
+      "sha256": "09f2ed4f239af5cd6ddd489fbf384fe3756df8d4caa4578625452fb1bf7b2dd7",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-lenovo-Q706F.apk": {
+      "sha256": "ffbfddd12d263660dd8b5445235f3ed0a3a1ffaac96cf0ffcf4d382d8a018886",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-8pro.apk": {
+      "sha256": "e5f5739fa2547d35a5fbda5c684032c0fb99fa24940ff7fe5ecfbf369a21e2b6",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/SettingsProvider__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "51af69cd6fc72527a69753fd1072902fbf593877d28f374b9d44e02f9f034737",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-j6.apk": {
+      "sha256": "f7dcd18920683c60b8d3563288e6cda0ba04bd2f2e3121c122983d548c2b413d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote135g-systemui.apk": {
+      "sha256": "494cec6783366153bfd110fe520db8d69d490b2643b0584e6553bc7119dffe6c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-op10pro.apk": {
+      "sha256": "33c4c7e681457fb526f73ae882709d96a99f173f1696fabca32148bbdb4d3cdd",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oppo-findx-systemui.apk": {
+      "sha256": "4a348845aa3b1d2fb53107b75d1907d4f379279b9e4bbaa134d848bce7153e6a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tecno-pova7ultra.apk": {
+      "sha256": "f443fd0828f4a64d06674e44f5905fa9c05d13bc0ffddecbfe1c9bf616ef5eb7",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mi13.apk": {
+      "sha256": "b8d241dd7675c3f3e481eeed63b50379f6172f7b0e386b828a486862303325c9",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tecno-pova4.apk": {
+      "sha256": "878a3277765267f96e721365beb6919deb6e6d402c6d9652c2c74bb34def7682",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-infinix-note8.apk": {
+      "sha256": "40ffcf4751c2321c585f58256cbf95c23266b0441f0435ef1d205b1e233b2d5c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-d1x.apk": {
+      "sha256": "ec70300e9629bfa180b5ea64a5705b07f434fa3f1455c21df18e27cba5695771",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/DisplayCutoutEmulationWaterfall/DisplayCutoutEmulationWaterfallOverlay.apk": {
+      "sha256": "9ac39f1d59a6f21c1c605940b79e12ec7603f4946be3616da0e6b4a70a8c7a17",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-ARE.apk": {
+      "sha256": "39cd93719fafa188a6b133cfc2a0d79109b5440e1a2ed2d96a877569c7023235",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmi6.apk": {
+      "sha256": "73b50a945756e9a16fe8b12325a9e97d40bedf8ac3364295e221abb239fc1122",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/TransparentNavigationBar/TransparentNavigationBarOverlay.apk": {
+      "sha256": "aea28df9f8c884580ba063330c0da3948c7848d6cb4f25afb994660e87f441ad",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-hiphi-systemui.apk": {
+      "sha256": "0f3c8ce5348519b6ae44acdae0f478be0a7e95e8877a1565185d12ff691494a0",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-gtneo3-systemui.apk": {
+      "sha256": "89351cffffbce9071cce58132b5d47de3b2a22a3b4da018d313ca999724c9e0a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mi11tpro.apk": {
+      "sha256": "28f42318d852001e687aef692341a3de0b59a92d8ff4b393ff2b77e653805567",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-pocof5.apk": {
+      "sha256": "c61139fc87ff8cbcf1b33df5c29542a364c6ab00a5ac0aa78aba4e817d2e8a08",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-n10.apk": {
+      "sha256": "3c56935ed0a5a212aaf9f467641ddbe004a7e01ea1e0d2b2a26d631612f8cf50",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-n20.apk": {
+      "sha256": "4e891fde34df6745e84d4776c7c4e9b8e53f26dae8dce561e252eecd7d564d5a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a82xq-systemui.apk": {
+      "sha256": "28e8e7b54686dfcd7a164ea95f92dc59ed70a75aa6390f2f585883cae9b87689",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mimix3.apk": {
+      "sha256": "77716a593f26703abfb5d9956452b79984279fa62efb44562f5b7cd0c9ecfad9",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmik70ultra-systemui.apk": {
+      "sha256": "c59d69dca8b50609a6898ec2054ab188caa1037350fa2926149f90a8a32ff9b7",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a20s.apk": {
+      "sha256": "74223a881d158167115ad4dc768340cee15f70eace0366dbfe1a3b9c75b00e50",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote12s-systemui.apk": {
+      "sha256": "19cbdea6d67842a61651df0f0e0612052d1bfb6d9dffc8ca3d3025ce95f98128",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-infinix-note7.apk": {
+      "sha256": "9e450b160089154ffd62b24ac253d465c719e1f3b22708a2320acf70f73f8947",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-gtmasterexplorer-systemui.apk": {
+      "sha256": "02c5aecbd08bbb75322d7daa26c0aeacc5b2f022ae9ddf18800a28b40aa0de6e",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a22.apk": {
+      "sha256": "9cf71fce2c27196b12b7b1558a833297a04943f2573509387e662d267541d2d5",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/LineageBlackTheme/LineageBlackTheme.apk": {
+      "sha256": "6e066dad0de282b935b9e3d3460f31645d87ab73147d19a314344e74fb3a3000",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-S20-systemui.apk": {
+      "sha256": "96d1874b834af7ec2063738da0d067e3608f68a664b620f7eb8d30dbf78730a0",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-nokia-nokia_4_2.apk": {
+      "sha256": "ee3c88e2a3163c864ade87a929f8614749211ad1e3ba645c63b753f8a2738e2d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/DisplayCutoutEmulationDouble/DisplayCutoutEmulationDoubleOverlay.apk": {
+      "sha256": "9a058fb945aae3508024c2090106bb954f2a0918245f6d845ac16e274bfb5ce0",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-S10q.apk": {
+      "sha256": "5d16d20f15dfe47e607b7d0ff620662b9776ebe7de79cd2d94da6b7855bbbc96",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-lenovo-tabv7-systemui.apk": {
+      "sha256": "bed1faf858995487c8eab1c97cd765e1d2f5c06de37d6a117ca397bcfdfb6fd5",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote145g.apk": {
+      "sha256": "1027b14b19d501d27065765b0e1a36508f5207cf1bc9128c1b39e25e4ce8c7b9",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a10s.apk": {
+      "sha256": "506645f67f4448a0c5f179990f3d9bc0bae4264194bab88b7f8ba92a4f4f7ccf",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/DocumentsUIOverlay.apk": {
+      "sha256": "79198ccbf33ddfb8be6b23388e3fe683ed71e88dbee1b73e1da23f3b8007fbc8",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-10pro-systemui.apk": {
+      "sha256": "25d023d74f35190f83b50cbd12897ab6fc18ad1fc2b9d8bf0f54d124f1428727",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-infinix-note12v2023.apk": {
+      "sha256": "5162eb81aa39c4e10f68b33ebdf77d0b4331d37cef994292afa1af296bb32404",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmik70-systemui.apk": {
+      "sha256": "f33679a892d906d3254a0e53b3f2d472b44c1aaf59113014192abb6dd0943f57",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/Dialer__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "45711afb9d4903d9a68b229e57745ffc88f98337dcc80ae686774b65484d6fbf",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmi9t.apk": {
+      "sha256": "e6aaa99890738176c0054a6de2497928a4594cfe4fe63a1487ccc9c68278e302",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tecno-pova4pro.apk": {
+      "sha256": "f843ac50db790c26fef6553841bb652fa43cbe5dcf53a15e03f6c668afc2ad1a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oppo-f11.apk": {
+      "sha256": "d922021389b54c33390de90b214923ae109c85063c424babac0dcd9405d52301",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-infinix-s4.apk": {
+      "sha256": "37caa7da453d4fc12ee874823ae8b471aa8d55f7aa35ad52527b3a14855f7867",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-ace2v-systemui.apk": {
+      "sha256": "4c5f41e6198f74a6d66215f14b3b57832b7b81549e7330f9d804c865fde78a2e",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote13pro4g-systemui.apk": {
+      "sha256": "e59dc2a40eeea9d39a5855e9154c120f17b16501481a569bf0539d67b8a2c707",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-infinix-note30pro-systemui.apk": {
+      "sha256": "c1c1c6cd75391cebae9d78a997e713d0b2abbb9bedd74dc86f760fdfa58d000b",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/GmsSettingsOverlay.apk": {
+      "sha256": "a8784e6c0ec692d4b3c36755ab057d40cdb2a03205a6ee47ac22c65099f3783b",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-S20fe-systemui.apk": {
+      "sha256": "00ac2e89d8fc7ed876893d48e61be9d472a72ddfe89fcc7889e35a5d016cc4ed",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-tundra.apk": {
+      "sha256": "bcdfcee21f32c659bb0a15cc18345080deac025a135a860265eef85133cbb2ad",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote8.apk": {
+      "sha256": "6cfcc15d87cf5746092788629c44cafa0cd939cb75551d7882b3e4a5ba38050c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmi9.apk": {
+      "sha256": "364b1081c4e6299e1d6887b4ecaa28d2b1feb97bbd7e95c615ac33adb0dd09fc",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-infinix-note30.apk": {
+      "sha256": "feaa3fc939d47c4aef70231a6ee3ab8b3f66ae6cab7054aa6cbc4da0baf0bacc",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-infinix-note10pro.apk": {
+      "sha256": "a94eff5459d579f6be65f09c6a54da4ce1b11e2b5dd72ffb094d407003903e41",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-lenovo-y700_2023-systemui.apk": {
+      "sha256": "e7f29649b0b1c1b1edb0c9f16c2149fa76727ece87404236d76cccbae667c176",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote114g.apk": {
+      "sha256": "d80cbe3e8ed659c327ebb919631497f4d7ab4265bab21066f7eaaf185632fc40",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-infinix-note30pro.apk": {
+      "sha256": "3d3c623a4a0e26f269e0f61bf83ad41b7858d725bc32e23207231888ad06ca6a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-r0q.apk": {
+      "sha256": "f3f122aca0c91b6c86d0d7b8251715840ac87c74dc95e18edcb0548de3c6693d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-pocom5-systemui.apk": {
+      "sha256": "f3eb10b0558624436fe882f009c80d72fdf1267ceceb411d29be9f044b60ac62",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-m31-systemui.apk": {
+      "sha256": "c44bf0ef1b1542955ef4c7d647e1fa65559707e800fdf8de3217b4b820b8d2a3",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmi10x5g-systemui.apk": {
+      "sha256": "112c665aaa6abcb2f7139ee632be25a5b852185de3edffc0edd8af77706e3752",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-sony-pdx213-systemui.apk": {
+      "sha256": "34c04ab9846f3bb618e95f1e1bf8d8627b44ba7ef7df523c9b06c3f91d06a93d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tecno-spark5.apk": {
+      "sha256": "b1b43615c5ab93b517aba7c1bc1fc1d43bf21f26b65d80c93f7701841fc1d47b",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-asus-zenfone8.apk": {
+      "sha256": "6583187dafcd5d29f00e415eb0ada115ae539e3bd908a78fa5d9b615d67d1334",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a60q.apk": {
+      "sha256": "76788a5883d004f752667424262857cf098e7149c460789a7ee14bbeb1d0be2a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a30.apk": {
+      "sha256": "fda181313154d93bd9f35c141d0fcd069946393ec2586318634084aa6e8060c9",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-duoqin-qin3ultra.apk": {
+      "sha256": "5a11eebd4fc9bfe7be9a754efe8a176b323fcef9ee96bdcfdbdf4811c0700241",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-14proplus-systemui.apk": {
+      "sha256": "e09c20d4f77b9c1fc28c7b0516c9c08eaf563825ae7bf48c6ae0f2cae7293622",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-htc-exodus1.apk": {
+      "sha256": "c1923c665387b6b60a4f8fb9ba778c91c357597347035df415ee1fd9b3ae7389",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-infinix-hot60proplus.apk": {
+      "sha256": "46790101abc5b14fa6d111756a76c7614b6494c0a149616c84955a7f511f6a28",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-NightMode.apk": {
+      "sha256": "89e9a469707bed457d09968d45c5d5e68a7c17577352dec79dfba2f553bb4279",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tecno-pova5-systemui.apk": {
+      "sha256": "b88b2e233698bacc1894e8d36b773b9883cd63d425089128d278a0ac016b6400",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oppo-a54.apk": {
+      "sha256": "41380cf2d4a097d989351d22296fdd1fe0805c8b78bb47449e45408861c06b5f",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-SHT.apk": {
+      "sha256": "7a82f871cea005a6c2306aaf4e06fb6e0a9998877c9e2516ae33edff20bb3224",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote8pro.apk": {
+      "sha256": "1f332cdd5704986878015bcbba00e7e48ebf394b2617711e91fd7d8eab3bcf7e",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-asus-rogphone.apk": {
+      "sha256": "606a862fe1fc91d07311421311bfd1d9c56bd8f9726b6629c40ed1dc34d4a82c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-ace3.apk": {
+      "sha256": "4fb0d1953fcc51b466e91e38fa926e8c3bcc8f85bde751f46d09204e68b6d60f",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mi12lite.apk": {
+      "sha256": "8b5edea5e9cd95e40050a99580a6a93aa68137e533c7edfceaf1df648238cf64",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote5.apk": {
+      "sha256": "918c4cc1ca05732e5f565622d290f5a4f2f464892a5afb4c4b637a305a82665a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-pocom3pro5g.apk": {
+      "sha256": "dcfaed18fe90f625be51cf1e517dfd9c717658b8e9d7875f5eeba7c680a7a3dd",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-acepro-systemui.apk": {
+      "sha256": "ba7f6a1a615a23cc8c47671edb2b90dc43fbca421cbb398805745c2ab3aad091",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-infinix-hot10.apk": {
+      "sha256": "0056190b7aaddda1cdaa79998d0345c4bba3bc3332fcda84e9961bac43dd4483",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tecno-spark8pro.apk": {
+      "sha256": "8464a307ed663c2d8cc5a791b1781efc5c4be4552dbadb05aeea4401e0593459",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-gts8p.apk": {
+      "sha256": "df3c985057b0b5da1ea3cae695959f33d742f8f3eab75f08095ce04dfae3b330",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-multilaser-m84gso0v.apk": {
+      "sha256": "be770b68cab75d7b0cebc108dc3c1bc34f122e85b1021211225b93aab588305c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-teracube-v7101o.apk": {
+      "sha256": "184bb7fb987ad20808d23edb40a1d97e5a45c0c41c5f8f7e6b0f2cf4a277c6a7",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-op9.apk": {
+      "sha256": "ec2f4e115b1991a1baf0cb09c6823a7762bd0f9b46ec65fde588b86e8d7816a7",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-nokia-nokia_7_2.apk": {
+      "sha256": "6d978ffce7aba1b22f95e58a4eeecf01925ffe366b58820d4863007836e9a7d9",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tecno-camon50ultra.apk": {
+      "sha256": "f5239758d746734ea2c12f886235dbfdc379714e276e1663aea16c11cf79da2f",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-blackview-bv9500plus.apk": {
+      "sha256": "789c897d4902895fa2bcd50e920296b13675addcafe2c95aa91f73fe8198494f",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-x2pro.apk": {
+      "sha256": "736c05e8b4bf1f6fb7f041ee978e66b9c03eb83f4a040137e7ed319ac122b184",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-pocof4.apk": {
+      "sha256": "14befc34d116bdd30f077628e70e6bbfe528db00043407f109197bcad35cc72c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-pocom4pro5g-systemui.apk": {
+      "sha256": "e53d1d220dcb672850452f80f5c0e377d723dfc15b934899599f6e49f41866b5",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-op6t.apk": {
+      "sha256": "1cd57a0d6b7f591ea9938d22c4236148b844f7425a2985bbd835f824fa009272",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-civi.apk": {
+      "sha256": "c6950b926067b732e5d43ce0869294ab8d98003227a69508830b117ae5810bfd",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tethering-nobpf.apk": {
+      "sha256": "f85d742ec2fe4105f8984b2f0c9150b3717910ebdd71e7cb4d19fcd32751adce",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-civi4pro-systemui.apk": {
+      "sha256": "df9b8e299219b1d4051056512ad3633b478131dbd3cadf0813e3cec19c60f674",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-rhodep-systemui.apk": {
+      "sha256": "dcff07cd545977c5ff4192be387bdce0062a48533b8bcd15c59f5e9a0801a431",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-BKL.apk": {
+      "sha256": "fb6a52d2bb3bcd5ccec2cd11155674f9cb551d00f7d2a2623bcd90cd84b41831",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-civi4pro.apk": {
+      "sha256": "09bc2e54589e5b0da10eb6014bc46df8bcbcbf242a6808119ae5eb840599127a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mi8se.apk": {
+      "sha256": "9c2e35d90c5e2dfb0379e95ebbf184289c171b5458370c84f369f90bcc97d059",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/NavigationBarMode2Button/NavigationBarMode2ButtonOverlay.apk": {
+      "sha256": "11f85825e33cc083980e75e3b7e6692103d28c1d77f35506dc6c56a526a97643",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-misc-launcher3.apk": {
+      "sha256": "8c0cf3b0b41164e0961843f196a35842814829c8d0b6d2afd20547fb24752906",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmik20pro-systemui.apk": {
+      "sha256": "45ad9e7e467ca5035a1ae0761cfb9374905db79e426fba98476894c8fe155040",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-d1x-systemui.apk": {
+      "sha256": "99d43424b93d43fdca00626f557f38d3607fe0b2074a4d8d2151640ad03057a7",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tecno-camon20pro4g-systemui.apk": {
+      "sha256": "ef6d15f15168dfa5905deeb0c46d696c7da76bfbf9f6a12429633e50897fa41b",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-lenovo-Y70.apk": {
+      "sha256": "f1f10e141861e3324448129a58924a5f73d5309633ec0165b74ab7dba72333ac",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/LatinIME__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "77743cfe715fa2ffcf51ab70fb5c4cf2367b86399f3da2c7f744056f66d01c47",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a31.apk": {
+      "sha256": "75648b4ed54bb973d4dfd63933c95ec6d227266d006b9f953904a737bfeb8504",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-POT.apk": {
+      "sha256": "ca93cef74e211381a69c08a4548cde48a3089abd6e0beadfeff46cfdf08e5485",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-m52.apk": {
+      "sha256": "6f920a718871629160655a7abcaf13ef94cb19f39c4314adc3639c3ceedf57eb",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote10s.apk": {
+      "sha256": "36a5d73f7e557e57c52c51afef484c9b6dff12a928f12a80feeb3309b904f4df",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-gt2pro-systemui.apk": {
+      "sha256": "47ee2aea9e584f5fbe2edb4fe283f264efc3e08a3a20f694636a4ffadf21c979",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-n10-systemui.apk": {
+      "sha256": "3c56935ed0a5a212aaf9f467641ddbe004a7e01ea1e0d2b2a26d631612f8cf50",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-teclast-t30.apk": {
+      "sha256": "5b0b78209760a352216efe9c0270aa928ef3694520682233df93f6d249a0b022",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oppo-reno6-5g-systemui.apk": {
+      "sha256": "2365cc9797b997d5b4d98adf4753a766b7fa3adf2e90bd422cecc540cf79d592",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmi9-systemui.apk": {
+      "sha256": "e67d365ad6b31f46a4030fc9cd5d8c16bd243f1e7bfab79154fe82aac794b1fc",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-meizu-m2181-systemui.apk": {
+      "sha256": "7eb71803ab126f895e5b3a2b0e7ac1a5376d88fc64da0259709bc9c46b3e70cf",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a21s.apk": {
+      "sha256": "8827b9d4e5d4048186d17c55863882fadfeb0c3e25e763853bef5a38442d0437",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote125g.apk": {
+      "sha256": "b8d533301e80cfd0e2e786336a5b74d81927b36955f96da4b01ad1db2a1a097c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-gts7xllite.apk": {
+      "sha256": "78a702b918e00ae4d1789009623139966ed08f13859a105465265deb7cd56a22",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a02q-systemui.apk": {
+      "sha256": "56142acfcb2e910db0a2e566d04cc41333cae6d146a304498eea33e469b1c4d6",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmi6a.apk": {
+      "sha256": "3479dc7d1ac570ab4682186f6386a1b684181fbb523beebd97ad8d631fecf13c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/DisplayCutoutNoCutout/NoCutoutOverlay.apk": {
+      "sha256": "635c1660cea5fbb87674e33ab93c67634d7712c067854e185647e220e4981bca",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-p3s.apk": {
+      "sha256": "eae7fcbb63fd33add6b6a9ba3ca5008c878606644fe7181fb9087919b8854e22",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-razer-cheryl.apk": {
+      "sha256": "e810a54749eeb81babd3dcbf94e9935ed85be651479f49dadb04c269009f788e",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmi10x5g.apk": {
+      "sha256": "1688a1c591cdd9024135324fe430f88f276f166d692044c0c90b934655bcbcd1",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-onefusion-systemui.apk": {
+      "sha256": "2b7255f1ebd2c7ddc9e462a70b0025ad1d1a58713b7eb6e830e1af801879ad76",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mia2.apk": {
+      "sha256": "b77a20648df05af07efda7d3f0e539d4a74a5a0501243eb299406c64b5fe62e9",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmik50ultra.apk": {
+      "sha256": "4bb77133729eb643b5bd4bb2e29355519872010a9b82c6682a0ec31c8dbc5765",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-g7power.apk": {
+      "sha256": "9c429d7ebc5b437f20e6bd0521c8debb7e858ef246b88f7e52d9ee73ef27f31e",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-unihertz-titanpocketeea.apk": {
+      "sha256": "f6b08b5ec57ed5c3e8a78ca79e0fc095bcbc6c3b1206973ec450dcfb2070435f",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-o1s.apk": {
+      "sha256": "1feb9a5ba12aa3c41ef7070cf4f122ee4da718cabd3ce24c4a1a0bebb62ce7ab",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/DisplayCutoutEmulationHole/DisplayCutoutEmulationHoleOverlay.apk": {
+      "sha256": "df3ed10d624683bcb6e1bc7548ce5b36fe8abf482099fb32187f7e44502f759f",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-infinix-note5.apk": {
+      "sha256": "616cbaa09fd6819e61c8d5cb242966e6c49c1246415157997e25b6435264ccdd",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-ace3v.apk": {
+      "sha256": "d17fe473af2cfb3540dc3a4340a3ed6540355ac5db0e308080802ba8a6b04aa2",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-infinix-zero6.apk": {
+      "sha256": "6101e0b7ad5f07f4e8e0488679fbc4463827fdc9e5e53510f8cc205bebc50bc1",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-meizu-m2461.apk": {
+      "sha256": "5a095c58649d6d27c5da55bd08b793bae1dfa9da1c3bf5facc547584d4076cff",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/SystemUI__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "f578a8b60bc2a388eb948eb4e351dc83fbd3fdde6918bf8e0d7e79c48a2270ad",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a40.apk": {
+      "sha256": "f35b713acc84911a4c118aa1cad4396ac127c3e53de2aeb4dd07ffb30273dc3a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/DeviceDiagnostics__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "5e8bf2b2532fc9e0bc67ffb1c9b80f4b1b06bb564cbcc41882ed1f611335b9ba",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-thor.apk": {
+      "sha256": "d55c83ee80053248a741c12e0a52e2b8569619099dc81ba4de8777373260ee1a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote6pro-systemui.apk": {
+      "sha256": "af443bc52f0ab5ed8b8643ef8ddae0b883c02557f8162e7c860c1428286cffb9",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-sony-pdx223.apk": {
+      "sha256": "b259f6b08822b48a42644a9c801606ba525b6024c68d4868b82a430c8998e88d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmi8.apk": {
+      "sha256": "58aa708305b5ea028297def31a704aba9ffc87ec8c1b1e2df5f360709ec7c810",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-gta4l.apk": {
+      "sha256": "2a68a62d5f36559dc7766058a8df2328df59ea1abef3429055cd9ede93065c10",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a02q.apk": {
+      "sha256": "22d23afd0f67ee3a3e81e6fc9b304c8bf279186139f5ef7c1693fcfae2b18485",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-misc-aod-systemui.apk": {
+      "sha256": "c3399ca3367080347609ad41a936183b697793504a6f0275d3f475a2a695a728",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-n2-systemui.apk": {
+      "sha256": "d3fd96f65cf2972529209d19a47312bbf6026e7c19539b95d0bb6b7f49f1cea1",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-gtmaster-systemui.apk": {
+      "sha256": "bd710f008c9cbf109de4b1feb55e198a9419184deaa92ccec668dd7182871b64",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-alldocube-xneo.apk": {
+      "sha256": "2c11f7d4855db97d53d8bb7b522deaf042d8b2fb3fa6cb5876273e033c079ea7",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-ace3-systemui.apk": {
+      "sha256": "784b3bed4714a8ab6d3739ab7250b38fe63e50569ad7932a4b5c56fdafd43bc8",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmis2.apk": {
+      "sha256": "767bdacfa8fd97fc7adc490c7d72a0e640d01af6612be33595d53a6c615437e5",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mi14pro.apk": {
+      "sha256": "4f0bcc6bc135da6743aa8d1c3478d27d73a011832b984bb135e4000916d51881",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-tesla-systemui.apk": {
+      "sha256": "6d09392a1083f852977f962a9c30d2b691527769723daefdaae8656ff1542ee4",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tecno-camon50ultra-systemui.apk": {
+      "sha256": "9cb32dc23076b0ed1cdef5ed084baef9f43d3a09e2655e9cfa77a0337c6a62b9",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oukitel-c18pro.apk": {
+      "sha256": "7f7d896f2ffac51f519171e5cac47510b3c4551ebf2ccddb0d5d47ae5ef1977e",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-telephony-caf-ims.apk": {
+      "sha256": "e520019b9d84391b8081ea94b00e45a01dd1b496277abc6e3c5246733458d9fd",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-pocom4pro5g.apk": {
+      "sha256": "7c92514c8703798930fa8657fa7ddd81de3c85495e6f37469872093eae48632c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-miplay.apk": {
+      "sha256": "8e1c14079342f390bed847af33d45e02c6e9afec7ddf77dcd888a0ceac6b9eee",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-WAS.apk": {
+      "sha256": "7dc968be9358bc993b4647c3ce919f68299ae89c1572a9a7a99852cb158aa265",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-bq-jeice.apk": {
+      "sha256": "26950a7d3283447cabbaab184c22c8c2b44efc1c352ce3d2f9a34f999e1e8648",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/LineageSetupWizard__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "b7c373e384d01eae3f7b9bb21df20538765258e2bec37fb6ed148e268d97e9e5",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-nokia-pnx-8.1-x7-systemui.apk": {
+      "sha256": "133620001311205bbe38b5f764631eed98a6ed8274a5d31a83a8ef164558b218",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote10pro.apk": {
+      "sha256": "1a1527e8cb418079e72a32f72079a73afd7d97430c3f9b1997188dc775fb519b",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-cubot-kkxpro.apk": {
+      "sha256": "707420f4d9c75797d2a60e4f29de94879615e723c0a7f41cf08904c51771ccc8",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-telephony-mtk-ims.apk": {
+      "sha256": "7f0593bbfc899fc886b8d117da5f49625d1a0acd778bf2d53d12387fd68d2634",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-n20-systemui.apk": {
+      "sha256": "0737e467059b070c7963b0816c9f5a9955354f026af05c511cd7586b61fe0b21",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/SimpleDeviceConfig__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "ee601940cad7643185d96822edd2ebb6e999d8c359e2496bc115ab6ec9cf0b5a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-nokia-nokia_3_2.apk": {
+      "sha256": "49dbcc830bf40ef2276c7aecc5fa17eead0bae8170173e622adec77da1f2cd21",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-PRA.apk": {
+      "sha256": "9b98387bd17ddf954c9924342395cb1acfef4cc96eacee72c9edd483ab272b5b",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tecno-camon20pro4g.apk": {
+      "sha256": "c2959f4c544d20fb4e11ab6ffa10112ef4f0b7e1785336ce20c64eccbc86a01c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mi8lite.apk": {
+      "sha256": "bc6c3f2ac17f370d8687c3092e2bca1dafb83c153b418eff43b90acd7d4fc4b3",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-tecno-pova7.apk": {
+      "sha256": "dc74eccb41ea70ccb19370f7897b75c9ec95899347299b3b851b430215856f80",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a50.apk": {
+      "sha256": "0e6693c933692bbc7c511d96bf39fe795a97f993adeddbcedb89912d8f37befc",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/TeleService__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "5ffa0d9cabdee28f2bf775220bbaf8971ffb002d16ac867bad0580dcac09e219",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/DisplayCutoutEmulationTall/DisplayCutoutEmulationTallOverlay.apk": {
+      "sha256": "39d4a00409a6872ac29fc2b1c87df61dc9a17637229e1e834b9799926cb96f23",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oppo-renopro2019.apk": {
+      "sha256": "3227d595ca4cfaaa86ca44210886f1123be693d920947b07362587a3c137ac26",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/TeleService__device__auto_generated_characteristics_rro.apk": {
+      "sha256": "9dddb97194aa6b6f2d192d03c2ea88ec4468506756998efca9563d1af8aa6636",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-gtmasterexplorer.apk": {
+      "sha256": "e5f636f65371dc0b4922867d41df8cf1ead122784e351c1df4b27636509adc4b",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-g8plus.apk": {
+      "sha256": "88cedf387a9aa02f1df7f8913e441a71c79b5e7f7f52b4f2febe3a78d179c0ba",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-FIG.apk": {
+      "sha256": "a398723db562d034bd9aab808146622f233f1b52138a044b4207238945462488",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/Settings__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "b115a5abad3db2d638b04205eb52e1d7edc6689ddc15fa1b860ad9e3e65baa67",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redmik70.apk": {
+      "sha256": "910d4d17f1ab7c61fd8c7a3a4c9445c94e4f604013f5fdfb6752710d08950291",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-starqltekdi-systemui.apk": {
+      "sha256": "60771c1cf553edcab15881d12ce0676203ad79d5151cf071a6a4d3887da72e71",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a20s-systemui.apk": {
+      "sha256": "42e713f9c8f0d7f166afe611a676b4a04c12cac481836d568e845b7bf16182a0",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-g6plus.apk": {
+      "sha256": "746db73b86efe92311e7dd323515575a4614a727090d27b77ed1923006be55df",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mimax3.apk": {
+      "sha256": "ab286ee89100ec97da60aecb0bda5ba968dffb87445e4f23845743fda00dc295",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mipad4.apk": {
+      "sha256": "175b03e094228962edb7d4ea66474266f46b69e759b78882326f079769cd01a9",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-c3.apk": {
+      "sha256": "717a6c08aaf23dd820f84ca46e730c80023f6fa575d7d499013c088bd4507050",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-lenovo-s5pro.apk": {
+      "sha256": "35dcf92507fa76ea18c289cdba162c94e0a990c65aa860f04a7105a698035e1d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei-ATU.apk": {
+      "sha256": "7a3876435bd6a428311f317daf18477023f1adab5ad7400337c613882749b5c6",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-misc-transparent-pointer.apk": {
+      "sha256": "2c68a8fce0ff5b98d731e1eee0dfc92727f2739d20b29cdef48f43b085b01b4a",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/Launcher3Overlay.apk": {
+      "sha256": "d1432b93cad6173971d469d26be1dd8a9222a89c6ed3b0fce37976a7fff81f99",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a80.apk": {
+      "sha256": "1460d249fe935f3e22af5364f9656554bbafae52aef2de803bb88c97ac4ae57d",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/framework-res__lineage_gsi__auto_generated_rro_product.apk": {
+      "sha256": "3bfabe979d908f6492e3bb3ad37a3c8101e3e006dbd4cce82f33898ca81716b6",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-lenovo-p11_pro_plus.apk": {
+      "sha256": "667cd4595bc6089d18717b44b3593597d0793e5303ad18d84eacfb62979aa476",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a32.apk": {
+      "sha256": "f4e8e515c435076b83609e46755525f7c5110d08494f382d07a068895522be10",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-misc-biometrics.apk": {
+      "sha256": "f9bb32677b69801f4954eaba5dde0483727a3d801eb4decd8b24c4184c899215",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/TelephonyProvider__device__auto_generated_characteristics_rro.apk": {
+      "sha256": "5cab45b932637beb49bae899b7cb46f9154fe47f0602c9bd81d0f4a0bfab0ad2",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-s10e.apk": {
+      "sha256": "bc359ca0584ea009aa8ef8fdb21f1be6da712f93714773e3051a795fc96ff857",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-r9s.apk": {
+      "sha256": "317e7c5971e0adf97f39c2c2d7c644bed30e282c17a7b650f5ed97f02d66e1a7",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mi13-systemui.apk": {
+      "sha256": "125a528e3987d9c460c50500ab8f7adad97b6aa260cc4bc4e5d7cab5612dc0a2",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-umidigi-A3S.apk": {
+      "sha256": "f273fc0321ae54cb0673e3723bebf7e8ff66f8a27ebeb3f823314e22f1963dc7",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-lg-v40.apk": {
+      "sha256": "6419b4336aeee5f93c88963d002ed0b917ddfb6ec4edec286d19921d2c0a6e8c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-sec-ims.apk": {
+      "sha256": "50722257a0a86248df9b5d1bd5b2fd01e037be89abb131922c4838ceada696a4",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/NotesRoleEnabled/NotesRoleEnabledOverlay.apk": {
+      "sha256": "a085c6947e73addbd048151713788e4ce1e57d366db00a5f3a2454b1aa979d06",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/product/overlay/treble-overlay-realme-14proplus.apk": {
+      "sha256": "a62fc0fb7e644a06b383fe175f14ef17cee6a4ce4b83440afee2422c18c61841",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-oneplus-nord-systemui.apk": {
+      "sha256": "77b1b0368eec020dc4c28023556e37fa7a6e43b27ba939934522ee212dc722cb",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-sony-pdx206-kddi.apk": {
+      "sha256": "ffb7e3f5b85e2c773f64c950043f3799907e0420cd204d78ab799aa7d2865dc7",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-asus-zenfone5-10.apk": {
+      "sha256": "4b693348f2d0d4dabe1b23d4f30c1056e2bc00c4e9172380c1baf7f9cd79e3c0",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-b0q.apk": {
+      "sha256": "0036633e9f0d210317546a759f2a149404d063db8474b258cd03f00cda767e39",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-lge-lm_v500n.apk": {
+      "sha256": "09d5b84b5b29855aa1ca50e4c1c0dd2a6e97bc254683cdf2cf126d4b2e842b35",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-g6play.apk": {
+      "sha256": "d8529429916237d924e8e60e1d5420db989837f4514e414aeb85ed5f13e4f3cd",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-a53-systemui.apk": {
+      "sha256": "3827750b3a2c43f927d8ee0bbdecd6c1fda6a01a6982fc174851ac5edefd1f83",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-redminote114g-systemui.apk": {
+      "sha256": "ca9bc28292a5fa8fafc896d63ffcde10a462d927f3947230c6a51563b661b385",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-m31s.apk": {
+      "sha256": "1132d4586b01e4de90cba9b24f45cc7b3b9e08ededb3e541516dca888d427869",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-duoqin-qin3ultra-systemui.apk": {
+      "sha256": "a14acaa4a50098ad156ff47c3ec1187d06d60ed00fd2c6540224df0e190343e9",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-s9pq.apk": {
+      "sha256": "e12e690c19dd4fa7bd5289e4f0118e8bc4b14d1f9fe355e83abccde896d25438",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-g31.apk": {
+      "sha256": "5add62d6077864196b8c4724de7b7245d524bb9e554d06990c502534d375da40",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-xiaomi-mi8ee.apk": {
+      "sha256": "552cdea9a494bc03eecb7e653a4b4de22428c00f8cfa0c8cdb6d4c6eec78d860",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-samsung-S20.apk": {
+      "sha256": "a438b9ebddc44d3b9cea4f0a05b808c7664b27be1446bc2025177c34362e1a86",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-sony-XZ3.apk": {
+      "sha256": "89053c31e849c883497b01f42f0712d3340bc73f3b7bcb4090257d250a8b5c23",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-nokia-nokia_7_2-systemui.apk": {
+      "sha256": "577b1f02abc9379c0f822318ca964df64d2057caa7128c65f707c69c20bae24c",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-huawei.apk": {
+      "sha256": "6e8e8d25e4b569df5e0dc099d3fac3d03d0a4c654d5d30b4f7efae86adad1608",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/overlay/treble-overlay-moto-e5.apk": {
+      "sha256": "55053eb54950c8e1e78abe65675d6af4aac5823143b4cd2b242fe5ecea438912",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/priv-app/AndroidAutoStub/AndroidAutoStub.apk": {
+      "sha256": "ccf1a6bac466b83e2c4fe16871ff536062598fba95deb98d7fcc1acf2b8469d9",
+      "certificates": [
+        "1ca8dcc0bed3cbd872d2cb791200c0292ca9975768a82d676b8b424fb65b5295"
+      ]
+    },
+    "system/product/priv-app/Contacts/Contacts.apk": {
+      "sha256": "1a0a46c13626efaec5303f12f4d6affb292c60e28dc10e3fc4062ac07fa66df5",
+      "certificates": [
+        "23ad3a6b91d3b0cb575c5329aa258e3544a64f7efdab8011f537a4bacd6b21ca"
+      ]
+    },
+    "system/product/priv-app/Dialer/Dialer.apk": {
+      "sha256": "a275c599266f6c27f71fc226df1eb43cfd77221178f8a6b6bba2f20d0cb75acd",
+      "certificates": [
+        "23ad3a6b91d3b0cb575c5329aa258e3544a64f7efdab8011f537a4bacd6b21ca"
+      ]
+    },
+    "system/product/priv-app/GmsCore/GmsCore.apk": {
+      "sha256": "25c27184482da38ea7ddc8b75488eaeb49e756dae1096ded20912092ea30c19b",
+      "certificates": [
+        "5f2391277b1dbd489000467e4c2fa6af802430080457dce2f618992e9dfb5402"
+      ]
+    },
+    "system/product/priv-app/GooglePartnerSetup/GooglePartnerSetup.apk": {
+      "sha256": "e9fb81095b86cf2429040f45bf0be7f75481a30dbd5b80e26c9d3210a5ac7971",
+      "certificates": [
+        "f0fd6c5b410f25cb25c3b53346c8972fae30f8ee7411df910480ad6b2d60db83"
+      ]
+    },
+    "system/product/priv-app/GoogleRestore/GoogleRestore.apk": {
+      "sha256": "03a5ff1e45a4156bbd97d76cbfa40a5d8c210538e03d36a3f7a0b0a0ee07f67a",
+      "certificates": [
+        "e4c43ce273303895c4ebd281cc8f64af74c088b7de703cd327afd984f49d9478"
+      ]
+    },
+    "system/product/priv-app/ImsServiceEntitlement/ImsServiceEntitlement.apk": {
+      "sha256": "afa8a64f3d5b95e2bf264f9d2f96b6eaed9bacd1f57fd7d0fbfb24cf9f033f53",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/priv-app/Phonesky/Phonesky.apk": {
+      "sha256": "8ee254546102d2a6accf269abe62869c54b098e1ba54fd538a47d2f79b9991d2",
+      "certificates": [
+        "7ce83c1b71f3d572fed04c8d40c5cb10ff75e6d87d9df6fbd53f0468c2905053"
+      ]
+    },
+    "system/product/priv-app/SettingsIntelligence/SettingsIntelligence.apk": {
+      "sha256": "05d94348f2a93886c2b2b844175497072c8fe06e85abf596dfee7bdbb6bd6383",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/product/priv-app/Velvet/Velvet.apk": {
+      "sha256": "59895254da4ac8cb7cf0bc379a226b8c78e1aa1fdc64d5b5ea5337916ac78440",
+      "certificates": [
+        "7ce83c1b71f3d572fed04c8d40c5cb10ff75e6d87d9df6fbd53f0468c2905053"
+      ]
+    },
+    "system/product/priv-app/Wellbeing/Wellbeing.apk": {
+      "sha256": "9add03eb90ab2b9297f7669b2973d43e97cb58abd7d66e948a8e6481a5052545",
+      "certificates": [
+        "e4d6a46d54ece6ca90f4e87f67f5ec4f262fc55c2ed840adbf649de55fe49094"
+      ]
+    },
+    "system/system_ext/apex/com.android.compos.apex": {
+      "sha256": "8ac83b9a6700731954d24b9b2659452948980213198bb18b8cb2fac435b9b247",
+      "certificates": [
+        "0c651e76e9f19e9afc6e2dfd6a31cf9bfa5ed45b37d9296aa338d6e308a90ad0"
+      ]
+    },
+    "system/system_ext/apex/com.android.vndk.v28.apex": {
+      "sha256": "55f0d88493c15b3c3d524ccdd8424d51b1c799fab933c3e1677054080b004995",
+      "certificates": [
+        "ae0a71129a4e7ac2e0fe7b8a124732bc01668d5820da8af97f246696dc50752c"
+      ]
+    },
+    "system/system_ext/apex/com.android.vndk.v29.apex": {
+      "sha256": "a3509cbc345034f42417638490849942fe579d356b953959b6f313e5dbf26314",
+      "certificates": [
+        "ae0a71129a4e7ac2e0fe7b8a124732bc01668d5820da8af97f246696dc50752c"
+      ]
+    },
+    "system/system_ext/apex/com.android.vndk.v30.apex": {
+      "sha256": "da35d5bff904b582b7745ff400200e75178a2baca5b18b94c263ea890a658bef",
+      "certificates": [
+        "ae0a71129a4e7ac2e0fe7b8a124732bc01668d5820da8af97f246696dc50752c"
+      ]
+    },
+    "system/system_ext/apex/com.android.vndk.v31.apex": {
+      "sha256": "47d0906898e65766089129387d3216432fc3b32cf9605d9ffec550e39d70a123",
+      "certificates": [
+        "ae0a71129a4e7ac2e0fe7b8a124732bc01668d5820da8af97f246696dc50752c"
+      ]
+    },
+    "system/system_ext/apex/com.android.vndk.v32.apex": {
+      "sha256": "ee90c31f3bd710957407f49c6b37ecb79a286dd0b995302aa2914744eafb5fad",
+      "certificates": [
+        "ae0a71129a4e7ac2e0fe7b8a124732bc01668d5820da8af97f246696dc50752c"
+      ]
+    },
+    "system/system_ext/apex/com.android.vndk.v33.apex": {
+      "sha256": "53b165bb8bfe5f045515eade53c168c4b202aa8eaddbed2baf68e2f524278d44",
+      "certificates": [
+        "ae0a71129a4e7ac2e0fe7b8a124732bc01668d5820da8af97f246696dc50752c"
+      ]
+    },
+    "system/system_ext/apex/com.android.vndk.v34.apex": {
+      "sha256": "9df15c3b0899b3b94688f8c6797aa7143fd5104c0e390fb7c5c7498d6901b5e8",
+      "certificates": [
+        "ae0a71129a4e7ac2e0fe7b8a124732bc01668d5820da8af97f246696dc50752c"
+      ]
+    },
+    "system/system_ext/app/AccessibilityMenu/AccessibilityMenu.apk": {
+      "sha256": "586c8e41724f7aa3bde26c837b251ce84b6f1c1965b57430d8a3afac6c791b52",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/system_ext/app/LocalContactsBackup/LocalContactsBackup.apk": {
+      "sha256": "8c1b5c02501a933875662abd0582e32c85506a501ecbddf9832d087f1f88b592",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/system_ext/app/Profiles/Profiles.apk": {
+      "sha256": "1fc19f4bc6653b132ce9a8215494d018feea9c6d1079ad3ce47dbc5f448be5bd",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/system_ext/app/SimpleSettingsConfig/SimpleSettingsConfig.apk": {
+      "sha256": "476e2c8537cacf587e92e717d83e4b5f28162d96f8464242916a98095cda445e",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/system_ext/app/WAPPushManager/WAPPushManager.apk": {
+      "sha256": "e25ea591b69020b48f1679b88ab72ea8297d68e681380f19cc8cd2901122a035",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/system_ext/overlay/gsi_overlay_framework.apk": {
+      "sha256": "c511a30a1557a206d43be6c4d61c61848dfdbfe691b8822a8dac658e319eea92",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/system_ext/overlay/gsi_overlay_systemui.apk": {
+      "sha256": "2e53e8538e2e11caa96730ffedba774a15c12e8df17453c623dd82c3fb231f49",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/system_ext/priv-app/AudioFX/AudioFX.apk": {
+      "sha256": "34e70c858f4bf71d3021f87b2a51cc4af523d3abfb54a5a69ccdab80a089bde7",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/system_ext/priv-app/AvatarPicker/AvatarPicker.apk": {
+      "sha256": "6294c39be5c83b5ac37b3fabde2530c9b8a731e99e0de41e5f0ca05cf08a87ae",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/system_ext/priv-app/CarrierConfig/CarrierConfig.apk": {
+      "sha256": "8b77758831a5c7bd449ea96c4c2833ae18f4f82df1bd7fd026099f29add044f9",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/system_ext/priv-app/EmergencyInfo/EmergencyInfo.apk": {
+      "sha256": "b2dae85617d7c165e2a541fc22eed96b4eb6da19487d08521dbac0c4f73bb4ae",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/system_ext/priv-app/GoogleFeedback/GoogleFeedback.apk": {
+      "sha256": "6b2ecd2f310410bc368202e9d97ef7b443d7c02947c845dd351b04ec040683f3",
+      "certificates": [
+        "f0fd6c5b410f25cb25c3b53346c8972fae30f8ee7411df910480ad6b2d60db83"
+      ]
+    },
+    "system/system_ext/priv-app/GoogleServicesFramework/GoogleServicesFramework.apk": {
+      "sha256": "41c0d547ac1466e87ccf783e36192cacbda0f6010128327a2503b4330dc8b534",
+      "certificates": [
+        "7ce83c1b71f3d572fed04c8d40c5cb10ff75e6d87d9df6fbd53f0468c2905053"
+      ]
+    },
+    "system/system_ext/priv-app/Iwlan/Iwlan.apk": {
+      "sha256": "7ba813e06208e9be0c491cef093617151937c24e3116d349ed90501635444791",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/system_ext/priv-app/Launcher3QuickStep/Launcher3QuickStep.apk": {
+      "sha256": "2bb3bee92f155ed9524fe75ad23ee71cc81fbb2a4410577244921582d7760fe7",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    },
+    "system/system_ext/priv-app/LineageParts/LineageParts.apk": {
+      "sha256": "8dab21927d9062f7616e64fa0162415073c010c13b394c3241d47d471cc1e70f",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/system_ext/priv-app/LineageSettingsProvider/LineageSettingsProvider.apk": {
+      "sha256": "de89bba5952ddb02eb3571a86607884a902e5ecefca05cc0046ec32edeace36d",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/system_ext/priv-app/LineageSetupWizard/LineageSetupWizard.apk": {
+      "sha256": "afea3da9421522bfe51d000cb3aac937ecf15e6805332803d46e7ee21f38a7e0",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/system_ext/priv-app/QualifiedNetworksService/QualifiedNetworksService.apk": {
+      "sha256": "651aa83f167b9e804091111115447f46e422b0dfcc7da56636de1b17b3b1b90b",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/system_ext/priv-app/QuickAccessWallet/QuickAccessWallet.apk": {
+      "sha256": "f990ff1eafad498d02cb92616d575253c9a1c051f07f6a059d43d4a1497f3c7e",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/system_ext/priv-app/Seedvault/Seedvault.apk": {
+      "sha256": "a1779e806fafdc845560c2908f5dd8686e0d029b4cf75164b22dd7573094bb43",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/system_ext/priv-app/Settings/Settings.apk": {
+      "sha256": "09a0babd98a230833c65205e8c89b1de3c6981a24d65bc2010d7ea9ec2285516",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/system_ext/priv-app/SetupWizard/SetupWizard.apk": {
+      "sha256": "ea8fffab89ca4ac161057d21b5abe0f9e6cd7bb2f9970df3173c02c23a21b8fd",
+      "certificates": [
+        "f0fd6c5b410f25cb25c3b53346c8972fae30f8ee7411df910480ad6b2d60db83"
+      ]
+    },
+    "system/system_ext/priv-app/SimpleDeviceConfig/SimpleDeviceConfig.apk": {
+      "sha256": "195c8049a279bcb68af78244c276746dd9e4bcea54edcde1536c91ccb77bc7bf",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/system_ext/priv-app/StatementService/StatementService.apk": {
+      "sha256": "a9bef762a91fe29f04859bd118a3edda0db1e719b33f397b4e5864e4a7381617",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/system_ext/priv-app/StorageManager/StorageManager.apk": {
+      "sha256": "79d45d5de2ca93d9512cdf1e7dc4d5ccb5afb7e60cc119ce50bab1413aba215b",
+      "certificates": [
+        "a82af580b4247139a966a8eb8b79ceecd148952d981a59cda9086a834d2f020b"
+      ]
+    },
+    "system/system_ext/priv-app/SystemUI/SystemUI.apk": {
+      "sha256": "0a80b13095ceeedcac6e40cb5adfe5c79b1ba5e247eede1457fad178e9217cf5",
+      "certificates": [
+        "c2ee5e84899e1a4b84db7d61aa7e4f47bccd403e9bff0848487a09e504f63d97"
+      ]
+    },
+    "system/system_ext/priv-app/ThemePicker/ThemePicker.apk": {
+      "sha256": "437b59b90761893650a336e0d30d4fe293fb6ffa18579f0f85bc7f76b9c92a90",
+      "certificates": [
+        "0a2cfbf728c42ebdf996560b309f04b57f1d869fb88174144b2307eeff3fc09d"
+      ]
+    }
+  },
+  "remove": [
+    "system/apex/com.android.apex.cts.shim.apex",
+    "system/product/app/PrebuiltExchange3Google/PrebuiltExchange3Google.apk"
+  ],
+  "resign_apexes": [
+    "system/system_ext/apex/com.android.vndk.v28.apex",
+    "system/system_ext/apex/com.android.vndk.v29.apex",
+    "system/system_ext/apex/com.android.vndk.v30.apex",
+    "system/system_ext/apex/com.android.vndk.v31.apex",
+    "system/system_ext/apex/com.android.vndk.v32.apex",
+    "system/system_ext/apex/com.android.vndk.v33.apex",
+    "system/system_ext/apex/com.android.vndk.v34.apex"
+  ]
+}

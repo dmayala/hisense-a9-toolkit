@@ -1,0 +1,43 @@
+# Thermal/power sysfs of the phone on the step1b thermal kernel (0001-0046), 2026-10-16. MEASURED, read-only
+# listings; no device identifiers. Sources (host side, ~/A9-build/mainline/thermal/step1b/):
+#   evidence/checks-1-5.txt   zone type + mode + temp, in `thermal_zone*` glob order (0,1,10..17,2..9), cooling devices
+#   evidence3/step-*-cpu4-thermal-91000-*.txt   cpu4-thermal = thermal_zone6; cdev cpufreq-cpu4 0 -> 1 -> 0
+#   evidence3/step-*-quiet-therm-thermal-46000-*.txt   quiet-therm-thermal = thermal_zone17
+#   evidence3/cd-*.txt        cpufreq-cpu4 frequency table: 9 steps -> max_state 8
+#   evidence3/soak.txt        15-min idle soak (peak cpu6 49.3 C, battery 32.2 C, quiet-therm 37.0 C, cooling 0)
+# power_supply values: healthd kmsg line of the same day's bundles (runs/*/android/dmesg.txt,
+#   "healthd: battery l=96 v=4408 t=31.9 h=2 st=3 c=-229644 chg=u"), i.e. what BatteryMonitor read from sysfs.
+# Format: zone <index> <type> <temp m°C> | cdev <index> <type> <cur_state> <max_state|-> | psy <name>/<attr> <value>
+zone 0  mapss-thermal       39400
+zone 1  cdsp-hvx-thermal    38100
+zone 10 cpu45-thermal       37800
+zone 11 cpu67-thermal       40600
+zone 12 cpu0123-thermal     38700
+zone 13 modem0-thermal      37500
+zone 14 display-thermal     38100
+zone 15 gpu-thermal         37200
+zone 16 battery             30600
+zone 17 quiet-therm-thermal 34264
+zone 2  wlan-thermal        37500
+zone 3  camera-thermal      37200
+zone 4  video-thermal       37800
+zone 5  modem1-thermal      36900
+zone 6  cpu4-thermal        38400
+zone 7  cpu5-thermal        38100
+zone 8  cpu6-thermal        38400
+zone 9  cpu7-thermal        40600
+cdev 0 cpufreq-cpu0 0 -
+cdev 1 cpufreq-cpu4 0 8
+psy battery/type        Battery
+psy battery/present     1
+psy battery/status      Discharging
+psy battery/health      Good
+psy battery/capacity    96
+psy battery/voltage_now 4408000
+psy battery/current_now -229644
+psy battery/temp        319
+psy battery/technology  Li-ion
+psy battery/scope       System
+psy a9-usb/type         USB
+psy a9-usb/present      1
+psy a9-usb/online       1

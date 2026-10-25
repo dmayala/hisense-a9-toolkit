@@ -1,0 +1,244 @@
+From ba1de301b9fb7f8f405eb5f0054aa100b3168884 Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 23:47:19 -0700
+Subject: [PATCH 1/3] regulator: fp9929a: hard max-on timer for the E Ink rails
+ (max_on_ms)
+
+A consumer that leaves vpanel enabled (hung TCON thread, lost disable,
+userspace killed mid-update) keeps the panel under drive voltage and VCOM
+indefinitely. Add a driver-side limit independent of the consumer:
+
+- module parameter max_on_ms (uint, 0644, default 20000, 0 = no limit),
+  read at each successful power-up, arms a delayed work;
+- if the rails are still up when it fires, the work runs the stock
+  power-down (fp9929a_power_down, under fp->lock), latches forced_off and
+  logs dev_crit("max_on_ms %u expired: E Ink rails forced down");
+- while latched, fp9929a_enable returns -EIO. The latch is cleared by the
+  next normal disable (the consumer acknowledging it) or by writing 1 to
+  the new write-only parameter clear_fault;
+- disable and shutdown cancel the work with cancel_delayed_work_sync
+  outside fp->lock (the work takes the lock); remove goes through
+  shutdown, and devm_delayed_work_autocancel, registered before the
+  regulator, cancels it once more after the regulator is unregistered;
+- struct fp9929a_status gains forced_off.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/regulator/fp9929a.c       | 105 ++++++++++++++++++++++++++++--
+ include/linux/regulator/fp9929a.h |   1 +
+ 2 files changed, 102 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/regulator/fp9929a.c b/drivers/regulator/fp9929a.c
+index 40727047c..f8db7e432 100644
+--- a/drivers/regulator/fp9929a.c
++++ b/drivers/regulator/fp9929a.c
+@@ -25,13 +25,20 @@
+  *    /sys/module/fp9929a/parameters/allow_power_on;
+  *  - probe never talks I2C; it only takes the GPIOs and, if the bootloader left
+  *    the rails up, runs the power-DOWN sequence above;
+- *  - shutdown/remove always power down.
++ *  - shutdown/remove always power down;
++ *  - hard on-time limit: fp9929a.max_on_ms (default 20000, 0 = off). If the
++ *    rails are still up that long after a power-up, the work below runs the
++ *    stock power-down and LATCHES a fault: every power-up returns -EIO until
++ *    the consumer completes a normal disable, or 1 is written to
++ *    /sys/module/fp9929a/parameters/clear_fault.
+  *
+  * Modelled on drivers/regulator/fp9931.c (Andreas Kemnade), which drives the
+  * related FP9931 with a different register map.
+  */
+ 
++#include <linux/atomic.h>
+ #include <linux/delay.h>
++#include <linux/devm-helpers.h>
+ #include <linux/gpio/consumer.h>
+ #include <linux/hwmon.h>
+ #include <linux/i2c.h>
+@@ -44,6 +51,7 @@
+ #include <linux/regulator/fp9929a.h>
+ #include <linux/regulator/of_regulator.h>
+ #include <linux/string.h>
++#include <linux/workqueue.h>
+ 
+ #define FP9929A_REG_TMST	0x00	/* temperature, unsigned deg C */
+ #define FP9929A_REG_VCOM	0x02	/* VCOM code */
+@@ -58,6 +66,34 @@ module_param(allow_power_on, bool, 0644);
+ MODULE_PARM_DESC(allow_power_on,
+ 		 "Allow the E Ink high-voltage rails to be switched on (default: no)");
+ 
++static unsigned int max_on_ms = 20000;
++module_param(max_on_ms, uint, 0644);
++MODULE_PARM_DESC(max_on_ms,
++		 "Force the E Ink rails down and latch a fault if they stay on longer than this (ms, 0 = no limit; read at each power-up)");
++
++/* bumped by every write of 1 to clear_fault; a latch older than it is void */
++static atomic_t fp9929a_clear_gen = ATOMIC_INIT(0);
++
++static int fp9929a_clear_fault_set(const char *val, const struct kernel_param *kp)
++{
++	bool clear;
++	int ret;
++
++	ret = kstrtobool(val, &clear);
++	if (ret)
++		return ret;
++	if (clear)
++		atomic_inc(&fp9929a_clear_gen);
++	return 0;
++}
++
++static const struct kernel_param_ops fp9929a_clear_fault_ops = {
++	.set = fp9929a_clear_fault_set,
++};
++module_param_cb(clear_fault, &fp9929a_clear_fault_ops, NULL, 0200);
++MODULE_PARM_DESC(clear_fault,
++		 "Write 1 to clear a latched max_on_ms fault (write-only)");
++
+ struct fp9929a {
+ 	struct device *dev;
+ 	struct i2c_client *client;
+@@ -69,6 +105,10 @@ struct fp9929a {
+ 	u8 vcom_code;
+ 	const char *vcom_src;	/* "cmdline", "dt" or "default" */
+ 	bool on;
++	bool forced_off;	/* max_on_ms fault latched */
++	int forced_gen;		/* fp9929a_clear_gen when it latched */
++	unsigned int max_on_ms;	/* limit armed by the current power-up */
++	struct delayed_work max_on_work;
+ 	struct notifier_block panic_nb;
+ 	bool have_temp;
+ 	int temp_c;
+@@ -114,6 +154,36 @@ static void fp9929a_power_down(struct fp9929a *fp)
+ 	fp->on = false;
+ }
+ 
++/* called with lock held: whether a max_on_ms fault is still latched */
++static bool fp9929a_fault_latched(struct fp9929a *fp)
++{
++	if (fp->forced_off && fp->forced_gen != atomic_read(&fp9929a_clear_gen)) {
++		fp->forced_off = false;
++		dev_info(fp->dev, "max_on_ms fault cleared (clear_fault)\n");
++	}
++	return fp->forced_off;
++}
++
++/*
++ * max_on_ms expired. Takes the lock itself, so it must never be cancelled
++ * synchronously with the lock held.
++ */
++static void fp9929a_max_on_work(struct work_struct *work)
++{
++	struct fp9929a *fp = container_of(to_delayed_work(work), struct fp9929a,
++					  max_on_work);
++
++	mutex_lock(&fp->lock);
++	if (fp->on) {
++		fp9929a_power_down(fp);
++		fp->forced_off = true;
++		fp->forced_gen = atomic_read(&fp9929a_clear_gen);
++		dev_crit(fp->dev, "max_on_ms %u expired: E Ink rails forced down\n",
++			 fp->max_on_ms);
++	}
++	mutex_unlock(&fp->lock);
++}
++
+ static int fp9929a_write_vcom(struct fp9929a *fp)
+ {
+ 	int i, ret = -EIO;
+@@ -153,6 +223,12 @@ static int fp9929a_enable(struct regulator_dev *rdev)
+ 		mutex_unlock(&fp->lock);
+ 		return 0;
+ 	}
++	if (fp9929a_fault_latched(fp)) {
++		mutex_unlock(&fp->lock);
++		dev_err_ratelimited(fp->dev,
++				    "power-up refused: max_on_ms fault latched (disable, or write 1 to clear_fault)\n");
++		return -EIO;
++	}
+ 
+ 	fp->have_temp = false;	/* only this power-up's sample counts */
+ 	gpiod_set_value_cansleep(fp->pwrup, 1);
+@@ -176,6 +252,10 @@ static int fp9929a_enable(struct regulator_dev *rdev)
+ 
+ 	gpiod_set_value_cansleep(fp->vcom_en, 1);
+ 	fp->on = true;
++	fp->max_on_ms = READ_ONCE(max_on_ms);
++	if (fp->max_on_ms)
++		mod_delayed_work(system_wq, &fp->max_on_work,
++				 msecs_to_jiffies(fp->max_on_ms));
+ 	dev_info(fp->dev, "on: VCOM %u mV (code 0x%02x), temp %d C, PG %d\n",
+ 		 fp->vcom_mv, fp->vcom_code, fp->have_temp ? fp->temp_c : -1,
+ 		 fp->pg ? gpiod_get_value_cansleep(fp->pg) : -1);
+@@ -187,9 +267,15 @@ static int fp9929a_disable(struct regulator_dev *rdev)
+ {
+ 	struct fp9929a *fp = rdev_get_drvdata(rdev);
+ 
++	/* outside the lock: the work takes it */
++	cancel_delayed_work_sync(&fp->max_on_work);
+ 	mutex_lock(&fp->lock);
+ 	if (fp->on)
+ 		fp9929a_power_down(fp);
++	/* a normal disable is the consumer acknowledging the fault */
++	if (fp->forced_off)
++		dev_info(fp->dev, "max_on_ms fault cleared (disable)\n");
++	fp->forced_off = false;
+ 	mutex_unlock(&fp->lock);
+ 	return 0;
+ }
+@@ -295,6 +381,14 @@ static int fp9929a_probe(struct i2c_client *client)
+ 	fp->dev = dev;
+ 	fp->client = client;
+ 	mutex_init(&fp->lock);
++	/*
++	 * Before the regulator is registered, so that devm cancels the work
++	 * only after the regulator (the only thing that arms it) is gone.
++	 */
++	ret = devm_delayed_work_autocancel(dev, &fp->max_on_work,
++					   fp9929a_max_on_work);
++	if (ret)
++		return ret;
+ 
+ 	/* ASIS: look at what the bootloader left before changing anything */
+ 	fp->pwrup = devm_gpiod_get(dev, "pwrup", GPIOD_ASIS);
+@@ -342,9 +436,10 @@ static int fp9929a_probe(struct i2c_client *client)
+ 	}
+ 	fp->vcom_mv = mv;
+ 	fp->vcom_code = fp9929a_vcom_code(mv);
+-	dev_info(dev, "VCOM %u mV (from %s) -> code 0x%02x; power-up %s\n", mv,
+-		 fp->vcom_src, fp->vcom_code,
+-		 allow_power_on ? "ALLOWED" : "refused (safe default)");
++	dev_info(dev, "VCOM %u mV (from %s) -> code 0x%02x; power-up %s; max_on_ms %u\n",
++		 mv, fp->vcom_src, fp->vcom_code,
++		 allow_power_on ? "ALLOWED" : "refused (safe default)",
++		 READ_ONCE(max_on_ms));
+ 
+ 	i2c_set_clientdata(client, fp);
+ 
+@@ -396,6 +491,7 @@ int fp9929a_get_status(struct device_node *np, struct fp9929a_status *st)
+ 	if (st) {
+ 		mutex_lock(&fp->lock);
+ 		st->on = fp->on;
++		st->forced_off = fp9929a_fault_latched(fp);
+ 		st->temp_valid = fp->have_temp;
+ 		st->temp_c = fp->temp_c;
+ 		st->pg_valid = !!fp->pg;
+@@ -413,6 +509,7 @@ static void fp9929a_shutdown(struct i2c_client *client)
+ 
+ 	if (!fp)
+ 		return;
++	cancel_delayed_work_sync(&fp->max_on_work);	/* outside the lock */
+ 	mutex_lock(&fp->lock);
+ 	if (fp->on)
+ 		fp9929a_power_down(fp);
+diff --git a/include/linux/regulator/fp9929a.h b/include/linux/regulator/fp9929a.h
+index aaada7e8a..247470324 100644
+--- a/include/linux/regulator/fp9929a.h
++++ b/include/linux/regulator/fp9929a.h
+@@ -9,6 +9,7 @@ struct device_node;
+ 
+ struct fp9929a_status {
+ 	bool on;		/* rails up (power-up sequence completed) */
++	bool forced_off;	/* max_on_ms fault latched: power-up returns -EIO */
+ 	bool pg_valid;		/* a PG line is wired */
+ 	bool pg_good;		/* PG raw level 0 (MEASURED: 0 when on, 1 when off) */
+ 	bool temp_valid;	/* a TMST sample exists */

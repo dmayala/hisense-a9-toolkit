@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: dmayala <dmayala@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 22:55:29 -0700
+Subject: [PATCH 0049b] regulator: fp9929a: minimum off time default 500 ms
+ (datasheet VLD)
+
+POWER-PATH CANDIDATE. UNREVIEWED. NOT IN THE SERIES. NOT FOR PHONE USE until an
+independent power review signs it off. Supersedes the withdrawn 0049 (200 ms),
+which review 67 rejected: stock's ~200 ms is a composer guard, not a measured
+discharge, and the FP9929A datasheet (fig. 5, p. 11) gives VLD >= 500 ms.
+
+fp9929a.min_off_ms default 1000 -> 500. The accepted range stays 500..10000
+(0 and anything below 500 still refused). Default only: no new knob, no new
+code path.
+
+Why 500: it is the datasheet's minimum for VGL to discharge to -7.4 V, and it
+is still stricter than the stock kernel, which was measured re-powering after
+257 / 277 / 616 ms. The original 1000 ms (patch 0025) was a 2x margin chosen
+before stock was compared.
+
+Expected gain: a power-up right after a 3 s idle power-down used to wait up to
+1000 ms (the measured ~730 ms waits); it now waits up to 500 ms, so those waits
+drop to about 230 ms, a saving of about 500 ms per cold restart. Not measured
+on a phone.
+
+Unchanged: ordered shutdown, PG wait/latch, max_on_ms 20000, gate checks every
+20 ms during the wait, off-timestamp origin, VCOM readback, a9_eink admission.
+Companion (must be adopted together): 0049b-companion-a9-eink-seq.
+---
+ drivers/regulator/fp9929a.c | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/regulator/fp9929a.c b/drivers/regulator/fp9929a.c
+index 0530e33ad..1ed4bc846 100644
+--- a/drivers/regulator/fp9929a.c
++++ b/drivers/regulator/fp9929a.c
+@@ -30,7 +30,7 @@
+  *  - VCOM check: after the VCOM write, register 1 bit 0 (VCOM from the I2C DAC,
+  *    reset default, never written) and the register 2 readback must match,
+  *    else the power-up is refused (-EIO) with the ordered power-down;
+- *  - minimum off time: fp9929a.min_off_ms (500..10000, default 1000) from the
++ *  - minimum off time: fp9929a.min_off_ms (500..10000, default 500) from the
+  *    last completed power-down to the next energize (datasheet VGL discharge
+  *    VLD >= 500 ms); an earlier power-up waits, checking the gate;
+  *  - TMST (register 0) is a signed byte; range policy belongs to the consumer;
+@@ -296,11 +296,12 @@ MODULE_PARM_DESC(max_on_ms,
+  * energize. Datasheet fig. 5: VGL needs VLD >= 500 ms to discharge to -7.4 V
+  * after power-off; a power-up inside that window waits (checking the gate
+  * every 20 ms) instead of re-energizing rails that may not have discharged.
+- * 500..10000 ms, default 1000; 0 is refused, there is no "off".
++ * 500..10000 ms, default 500 = the datasheet VLD minimum (fig. 5, p. 11); 0 and
++ * anything below 500 are refused, there is no "off".
+  */
+ #define FP9929A_MIN_OFF_MIN	500
+ #define FP9929A_MIN_OFF_MAX	10000
+-static unsigned int min_off_ms = 1000;
++static unsigned int min_off_ms = 500;
+ 
+ static int fp9929a_min_off_set(const char *val, const struct kernel_param *kp)
+ {
+@@ -321,7 +322,7 @@ static const struct kernel_param_ops fp9929a_min_off_ops = {
+ };
+ module_param_cb(min_off_ms, &fp9929a_min_off_ops, &min_off_ms, 0644);
+ MODULE_PARM_DESC(min_off_ms,
+-		 "Minimum time from a completed power-down to the next power-up (ms, 500..10000, default 1000; datasheet VGL discharge >= 500 ms)");
++		 "Minimum time from a completed power-down to the next power-up (ms, 500..10000, default 500 = datasheet VGL discharge minimum)");
+ 
+ static u8 fp9929a_vcom_code(unsigned int mv)
+ {

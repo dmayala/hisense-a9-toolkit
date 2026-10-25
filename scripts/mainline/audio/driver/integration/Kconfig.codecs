@@ -1,0 +1,7 @@
+config SND_SOC_ES9218_A9
+ tristate "Experimental Hisense A9 ESS HiFi DAC"
+ depends on I2C && GPIOLIB
+ select REGMAP_I2C
+ help
+   Board-specific control sequence recovered from the stock A9 ES9218/ESS9318
+   module. Unvalidated hardware bring-up support; requires opt-in board DT.

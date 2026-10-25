@@ -1,0 +1,34 @@
+{
+  "reference": "PaddleStroke/hisense-a6l-lineageos/device/hisense/a6l/camera/libcamera/patches",
+  "patches": [
+    {
+      "name": "0016-a6l-focus-exposure-capture-completion.patch",
+      "sha256": "a7fe4622b65cd2a501e26faeb27566810bde2d639edf40925f1cb480219d44b5"
+    },
+    {
+      "name": "0017-a6l-jpeg-bounds-aestate-quality-diagnostics.patch",
+      "sha256": "f9fa593060f2450b665407d66f508ee6fa4099030f1f36ac8c7b0005e0e71f58"
+    },
+    {
+      "name": "0019-a6l-cache-guard-statistics-ownership.patch",
+      "sha256": "35d02f3ea745a699475144d1aaaedf21e4c1e36779cdc47147cd025c4aa9bd02"
+    },
+    {
+      "name": "0020-a6l-terminal-request-drain.patch",
+      "sha256": "e029669df0725841a3b96f9ff56bfa7c6e8156732ab321c0ede5eb12a8eaee5e"
+    },
+    {
+      "name": "0021-a6l-bounded-relative-agc.patch",
+      "sha256": "ff87d3472336c6b05799429ee134327c89c92367f0011dea927caf38d604e8ad"
+    }
+  ],
+  "adaptations": [
+    "Keep A9 0002 partial-result fix and 0003 JPEG bounds/unaligned footer; no replacement with the A6L JPEG scratch sink.",
+    "Omit optional 0018 raw-FOV resampling and only its dependent 0019 row-cache/bounds hunks.",
+    "Recreate a retired isolated SoftwareIsp on configure; never reuse its retired shared statistics block.",
+    "AF implementation is inert for A9: no Af tuning block or lens device added.",
+    "Snapshot controls per captured buffer: delayed ring uses sensor sequence with frame events, driver-cache readback at dequeue without events. Do not push a ring that cannot advance. The cache fallback does not claim frame-exact hardware exposure.",
+    "Consolidated patch uses zero-context hunks like the existing carry; build.sh already applies with --unidiff-zero."
+  ],
+  "reference_commit": "ede802bcb12d3c8854b8ed0e147d6477d0ea0f9d"
+}

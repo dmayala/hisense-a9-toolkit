@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: dmayala <dmayala@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 05:55:51 -0700
+Subject: [PATCH 0058z] drm/a9_eink: read the vblank count under t->lock
+ (review 89e C2)
+
+a9x_vblank() read t->vbl_ref and t->ms->crtc without the transport lock;
+a9x_free_locked() (msm unbind) clears t->ms before vbl_ref under that lock,
+so a settle racing an unbind could dereference a NULL or freed modeset.
+Take t->lock and check t->ms. The settle loop holds no transport lock.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/a9_eink/a9_eink_transport.c | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_transport.c b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+index c704f644a..209468939 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_transport.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+@@ -722,16 +722,21 @@ int a9x_power_on(struct a9x_transport *t)
+ 
+ /*
+  * F6b (review 89d): the scanout's vblank count and time, for the PG settle
+- * trace. Read-only and lockless: while the transport is on it holds a vblank
+- * reference (vbl_ref), so the count is live; 0 otherwise.
++ * trace. Read-only. Under t->lock (review 89e C2): a9x_free_locked() clears
++ * t->ms and vbl_ref under the same lock when msm unbinds, so the modeset is
++ * never used after it is freed. The callers (the settle loop, worker thread)
++ * hold no transport lock and no lock that nests inside t->lock. 0 when no
++ * vblank reference is held or the modeset is gone.
+  */
+ u64 a9x_vblank(struct a9x_transport *t, s64 *at_us)
+ {
+ 	ktime_t kt = 0;
+ 	u64 n = 0;
+ 
+-	if (READ_ONCE(t->vbl_ref))
++	mutex_lock(&t->lock);
++	if (t->vbl_ref && t->ms)
+ 		n = drm_crtc_vblank_count_and_time(t->ms->crtc, &kt);
++	mutex_unlock(&t->lock);
+ 	*at_us = ktime_to_us(kt);
+ 	return n;
+ }

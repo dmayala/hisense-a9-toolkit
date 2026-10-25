@@ -1,0 +1,11 @@
+
+# Candidate2 vendor radio/IMS properties. Existing vendor.a9ml label retained.
+persist.vendor.radio. u:object_r:vendor_radio_prop:s0 prefix string
+vendor.radio. u:object_r:vendor_radio_prop:s0 prefix string
+ro.vendor.radio. u:object_r:vendor_radio_prop:s0 prefix string
+ro.vendor.ril. u:object_r:vendor_radio_prop:s0 prefix string
+vendor.ims. u:object_r:vendor_ims_prop:s0 prefix string
+persist.vendor.ims. u:object_r:vendor_ims_prop:s0 prefix string
+persist.vendor.data.dont_use_epc u:object_r:vendor_dataqdp_prop:s0 exact string
+persist.vendor.data.dont_use_npflag u:object_r:vendor_dataqdp_prop:s0 exact string
+persist.vendor.data.profile_update u:object_r:vendor_dataqdp_prop:s0 exact string

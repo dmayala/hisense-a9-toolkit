@@ -1,0 +1,50 @@
+--- a/dumb_driver.c
++++ b/dumb_driver.c
+@@ -73,7 +73,46 @@
+ INIT_DUMB_DRIVER_WITH_NAME(sun4i_drm, "sun4i-drm")
+ INIT_DUMB_DRIVER(synaptics)
+ INIT_DUMB_DRIVER(udl)
+-INIT_DUMB_DRIVER(vkms)
++/* A9: Mesa's shipped fallback importer has no lock_ycbcr. Refuse YUV
++ * textures before a handle can reach SurfaceFlinger's fatal import path.
++ * Codec2 uses private CPU-readable NV12 CAPTURE and converts to RGB for BQ. */
++static void vkms_resolve_format_and_use_flags(struct driver *drv, uint32_t format,
++                                              uint64_t use_flags, uint32_t *out_format,
++                                              uint64_t *out_use_flags)
++{
++	drv_resolve_format_and_use_flags_helper(drv, format, use_flags, out_format, out_use_flags);
++	if ((use_flags & (BO_USE_TEXTURE | BO_USE_SCANOUT | BO_USE_RENDERING)) &&
++	    (*out_format == DRM_FORMAT_NV12 || *out_format == DRM_FORMAT_NV21 ||
++	     *out_format == DRM_FORMAT_YVU420 || *out_format == DRM_FORMAT_YVU420_ANDROID)) {
++		drv_loge("A9: YUV display import unsupported; use Codec2 RGBA output\n");
++		*out_format = DRM_FORMAT_NONE;
++	}
++}
++
++static int vkms_bo_create(struct bo *bo, uint32_t width, uint32_t height,
++                          uint32_t format, uint64_t use_flags)
++{
++	if (format == DRM_FORMAT_NV12 && (use_flags & BO_USE_HW_VIDEO_DECODER)) {
++		/* Venus linear NV12: shared 128-byte stride, 32 Y scanlines.
++		 * Align storage, not bo->meta visible dimensions. Codec2 patch0009
++		 * already supplies driver bytesperline/scanlines (384x256 fixture). */
++		width = ALIGN(width, 128);
++		height = ALIGN(height, 32);
++	}
++	return drv_dumb_bo_create(bo, width, height, format, use_flags);
++}
++
++const struct backend backend_vkms = {
++	.name = "vkms",
++	.init = dumb_driver_init,
++	.bo_create = vkms_bo_create,
++	.bo_create_with_modifiers = dumb_bo_create_with_modifiers,
++	.bo_destroy = drv_dumb_bo_destroy,
++	.bo_import = drv_prime_bo_import,
++	.bo_map = drv_dumb_bo_map,
++	.bo_unmap = drv_bo_munmap,
++	.resolve_format_and_use_flags = vkms_resolve_format_and_use_flags,
++};
+ 
+ #ifndef DRV_ROCKCHIP
+ INIT_DUMB_DRIVER(rockchip)

@@ -1,0 +1,175 @@
+; Round 6, main6e2d925 / tested cam-aod-surf vendor. Development POC policy.
+; SRC = current executable/init path; OBS = sanitized evidence-avc-cas.
+; The capture has audit loss: absence of a denial is not permission evidence.
+; Functional domains remain enforcing; only existing a9ml_rootsh is permissive.
+
+; SRC standalone allocator now lives outside the CF APEX and init supplies its
+; private wrapper LD_LIBRARY_PATH. A6L/round5 noatsecure pattern, targeted to
+; this transition only. Keep global core/mapper libraries' existing labels.
+(allow init_202504 hal_graphics_allocator_default (process (noatsecure)))
+(type a9ml_gralloc_lib_file) (roletype object_r a9ml_gralloc_lib_file)
+(typeattributeset file_type (a9ml_gralloc_lib_file))
+(typeattributeset vendor_file_type (a9ml_gralloc_lib_file))
+(allow hal_graphics_allocator_default a9ml_gralloc_lib_file (dir (read open search getattr)))
+(allow hal_graphics_allocator_default a9ml_gralloc_lib_file (file (read open getattr map execute)))
+(allow hal_graphics_allocator_default a9ml_gralloc_lib_file (lnk_file (read getattr)))
+; OBS new allocator's DRM_IOCTL_VERSION; PRIME and CREATE_DUMB are in avc-f.
+(allowx hal_graphics_allocator_default graphics_device_202504 (ioctl chr_file (0x6400)))
+; Codec2 RGBA maps CPU graphics buffers and reads A9 flags; Camera2 uses the
+; same global mapper. Existing init noatsecure/private-lib rules remain active.
+(typeattributeset a9ml_prop_reader (mediacodec hal_camera_default hal_audio_default))
+
+; SRC manual tools are real enforcing domains, including when launched by the
+; intentionally permissive coordinator console. Invoke executable paths directly
+; (not `sh script`, which bypasses script entrypoint transitions).
+(type a9ml_audio) (roletype r a9ml_audio)
+(type a9ml_audio_exec) (roletype object_r a9ml_audio_exec)
+(type a9ml_camcap) (roletype r a9ml_camcap)
+(type a9ml_camcap_exec) (roletype object_r a9ml_camcap_exec)
+(type a9ml_key_aod) (roletype r a9ml_key_aod)
+(type a9ml_key_aod_exec) (roletype object_r a9ml_key_aod_exec)
+(typeattributeset domain (a9ml_audio a9ml_camcap a9ml_key_aod))
+(typeattributeset file_type (a9ml_audio_exec a9ml_camcap_exec a9ml_key_aod_exec))
+(typeattributeset exec_type (a9ml_audio_exec a9ml_camcap_exec a9ml_key_aod_exec))
+(typeattributeset vendor_file_type (a9ml_audio_exec a9ml_camcap_exec a9ml_key_aod_exec))
+(typeattributeset a9ml_script_domain (a9ml_audio a9ml_key_aod))
+(typetransition a9ml_rootsh a9ml_audio_exec process a9ml_audio)
+(typetransition a9ml_rootsh a9ml_camcap_exec process a9ml_camcap)
+(typetransition a9ml_rootsh a9ml_key_aod_exec process a9ml_key_aod)
+(allow a9ml_rootsh a9ml_audio (process (transition siginh rlimitinh)))
+(allow a9ml_rootsh a9ml_camcap (process (transition siginh rlimitinh)))
+(allow a9ml_rootsh a9ml_key_aod (process (transition siginh rlimitinh)))
+(allow a9ml_audio a9ml_audio_exec (file (entrypoint read open getattr map execute execute_no_trans)))
+(allow a9ml_camcap a9ml_camcap_exec (file (entrypoint read open getattr map execute execute_no_trans)))
+(allow a9ml_key_aod a9ml_key_aod_exec (file (entrypoint read open getattr map execute execute_no_trans)))
+(allow a9ml_audio a9ml_rootsh (fd (use)))
+(allow a9ml_camcap a9ml_rootsh (fd (use)))
+(allow a9ml_key_aod a9ml_rootsh (fd (use)))
+(allow a9ml_audio a9ml_rootsh (fifo_file (read write getattr ioctl)))
+(allow a9ml_camcap a9ml_rootsh (fifo_file (read write getattr ioctl)))
+(allow a9ml_key_aod a9ml_rootsh (fifo_file (read write getattr ioctl)))
+
+; Only use the existing console's inherited I/O; no bind/connect grant.
+(typeattribute a9ml_manual_tool)
+(typeattributeset a9ml_manual_tool (a9ml_audio a9ml_camcap a9ml_key_aod))
+(allow a9ml_manual_tool a9ml_rootsh (tcp_socket (read write getattr ioctl getopt)))
+(allow a9ml_manual_tool a9ml_rootsh (process (sigchld)))
+
+; binder_use equivalent for the framework cmd/settings clients; standard
+; Binder client ioctls only, no context-manager permission.
+(typeattribute a9ml_framework_client)
+(typeattributeset a9ml_framework_client (a9ml_audio a9ml_key_aod))
+(allow a9ml_framework_client binder_device_202504 (chr_file (read write open getattr ioctl map)))
+(allowx a9ml_framework_client binder_device_202504 (ioctl chr_file (0x6201 0x6205 0x6208 0x6209 0x6210 0x6211)))
+(allow servicemanager_202504 a9ml_framework_client (binder (call transfer)))
+(allow servicemanager_202504 a9ml_framework_client (dir (search)))
+(allow servicemanager_202504 a9ml_framework_client (file (read open)))
+(allow servicemanager_202504 a9ml_framework_client (process (getattr)))
+
+; SRC ALSA control/PCM helpers: mixer/U and PCM/A ioctls only on sound nodes.
+; load retains the existing manual module loader; no automatic output route.
+(allow a9ml_audio audio_device_202504 (dir (read open search getattr)))
+(allow a9ml_audio audio_device_202504 (chr_file (read write open getattr ioctl map)))
+(allowx a9ml_audio audio_device_202504 (ioctl chr_file ((range 0x4100 0x41ff) (range 0x5500 0x55ff))))
+(allow a9ml_audio proc_asound_202504 (dir (read open search getattr)))
+(allow a9ml_audio proc_asound_202504 (file (read open getattr)))
+(allow a9ml_audio self (capability (sys_module dac_override)))
+(allow a9ml_audio vendor_kernel_modules_202504 (dir (read open search getattr)))
+(allow a9ml_audio vendor_kernel_modules_202504 (file (read open getattr map)))
+(allow a9ml_audio vendor_kernel_modules_202504 (system (module_load)))
+(allow a9ml_audio servicemanager_202504 (binder (call transfer)))
+(allow a9ml_audio system_server_202504 (binder (call transfer)))
+(allow a9ml_audio media_session_service_202504 (service_manager (find)))
+(allow system_server_202504 a9ml_audio (binder (call transfer)))
+(allow system_server_202504 a9ml_audio (fd (use)))
+
+; SRC raw CAMSS enumerator, static binary: media/subdevice/V4L2 capture, no
+; dynamic private libraries or new init noatsecure exception needed.
+(allow a9ml_camcap self (capability (dac_override)))
+(allow a9ml_camcap device_202504 (dir (read open search getattr)))
+(allow a9ml_camcap device_202504 (chr_file (getattr)))
+(allow a9ml_camcap video_device_202504 (chr_file (read write open getattr ioctl map)))
+(allowx a9ml_camcap video_device_202504 (ioctl chr_file ((range 0x5600 0x56ff) (range 0x7c00 0x7cff))))
+(allow a9ml_camcap shell_data_file_202504 (dir (read open search getattr write add_name)))
+(allow a9ml_camcap shell_data_file_202504 (file (create read write open getattr setattr)))
+; Isolated IPA statistics travel in MemFd-backed SharedMem between provider
+; and its proxy. Give those new files a private, non-executable tmpfs type.
+(type a9ml_camera_shm_file) (roletype object_r a9ml_camera_shm_file)
+(typeattributeset file_type (a9ml_camera_shm_file))
+(typetransition hal_camera_default tmpfs_202504 file a9ml_camera_shm_file)
+(allow hal_camera_default a9ml_camera_shm_file (file (create read write open getattr setattr map ioctl lock)))
+(allow a9ml_camera_shm_file tmpfs_202504 (filesystem (associate)))
+; Provider keeps init->hal_camera_default noatsecure/LD_PRELOAD from round2;
+; IPA proxy runs in the provider domain, not in the diagnostic root domain.
+(allow hal_camera_default vendor_file_202504 (file (execute_no_trans)))
+
+; SRC app_process preferences jar and existing manual key/AOD helper. ART
+; uses anonymous JIT/userfaultfd memory. This is a root-only development helper,
+; not an app domain: it must edit the specified app's SharedPreferences and
+; restore its app-data context/ownership. No gate/panel sysfs write is granted.
+(typeattributeset mlstrustedsubject (a9ml_key_aod))
+(allow a9ml_key_aod zygote_exec_202504 (file (read open getattr map execute execute_no_trans)))
+(allow a9ml_key_aod self (process (execmem)))
+(type a9ml_aod_shm_file) (roletype object_r a9ml_aod_shm_file)
+(typeattributeset file_type (a9ml_aod_shm_file))
+(typetransition a9ml_key_aod tmpfs_202504 file a9ml_aod_shm_file)
+(allow a9ml_key_aod a9ml_aod_shm_file (file (create read write open getattr setattr map execute ioctl lock)))
+(allow a9ml_aod_shm_file tmpfs_202504 (filesystem (associate)))
+(allow a9ml_key_aod self (anon_inode (create read write getattr ioctl)))
+(allowx a9ml_key_aod self (ioctl anon_inode ((range 0xaa00 0xaa3f))))
+(allow a9ml_key_aod ashmem_device_202504 (chr_file (read write open getattr ioctl map)))
+(allow a9ml_key_aod dalvikcache_data_file_202504 (dir (read open search getattr)))
+(allow a9ml_key_aod dalvikcache_data_file_202504 (file (read open getattr map execute)))
+(allow a9ml_key_aod system_data_file_202504 (dir (search getattr)))
+(allow a9ml_key_aod system_userdir_file_202504 (dir (search getattr)))
+(typeattribute a9ml_aod_app_data)
+(typeattributeset a9ml_aod_app_data (app_data_file_202504 privapp_data_file_202504 system_app_data_file_202504))
+(allow a9ml_key_aod a9ml_aod_app_data (dir (read open search getattr create write add_name remove_name setattr relabelfrom relabelto)))
+(allow a9ml_key_aod a9ml_aod_app_data (file (read open getattr create write append unlink rename setattr relabelfrom relabelto)))
+(allow a9ml_key_aod self (capability (chown fowner dac_override dac_read_search)))
+(allow a9ml_key_aod a9ml_sysfs_gate (dir (read open search getattr)))
+(allow a9ml_key_aod a9ml_sysfs_gate (file (read open getattr)))
+(allow a9ml_key_aod a9ml_sysfs_eink (dir (read open search getattr)))
+(allow a9ml_key_aod a9ml_sysfs_eink (file (read open getattr)))
+(allow a9ml_key_aod input_device_202504 (dir (read open search getattr)))
+(allow a9ml_key_aod input_device_202504 (chr_file (read write open getattr ioctl)))
+(allow a9ml_key_aod servicemanager_202504 (binder (call transfer)))
+(allow a9ml_key_aod system_server_202504 (binder (call transfer)))
+; SettingsProvider runs as system_app on the GSI, reached through content.
+(allow a9ml_key_aod system_app_202504 (binder (call transfer)))
+(allow system_app_202504 a9ml_key_aod (binder (call transfer)))
+(allow system_app_202504 a9ml_key_aod (fd (use)))
+(allow a9ml_key_aod packages_list_file_202504 (file (read open getattr)))
+(allow a9ml_key_aod selinuxfs_202504 (file (read write open getattr)))
+(allow a9ml_key_aod kernel_202504 (security (check_context)))
+(allow system_server_202504 a9ml_key_aod (binder (call transfer)))
+(allow system_server_202504 a9ml_key_aod (fd (use)))
+(typeattribute a9ml_aod_service)
+(typeattributeset a9ml_aod_service (activity_service_202504 activity_task_service_202504 package_service_202504 content_service_202504 settings_service_202504 overlay_service_202504 accessibility_service_202504 display_service_202504 power_service_202504 deviceidle_service_202504 appops_service_202504))
+(allow a9ml_key_aod a9ml_aod_service (service_manager (find)))
+; POC GSI debug.a9.colorfade/doze.display.* fall through to default_prop.
+; sys.linevibrator_type instead matches sys./system_prop (fixed in round10).
+(allow a9ml_key_aod default_prop_202504 (file (read open getattr map)))
+(allow a9ml_key_aod default_prop_202504 (property_service (set)))
+(allow a9ml_key_aod a9ml_prop (file (read open getattr map)))
+; GLES helper maps to a9ml_gpu; explicit core GLES property is init fallback's
+; existing setting, but the helper must be able to publish the measured value.
+(allow a9ml_gpu graphics_config_prop_202504 (property_service (set)))
+
+; SRC GNSS new HAL->child UTC command pipe uses the same hal_gnss_default
+; domain, BOOTTIME/REALTIME reads (not setting system time) and QRTR transport.
+(allow hal_gnss_default self (fifo_file (create read write open getattr ioctl)))
+; OBS cas: strace's socket-FD decoder queries INET_DIAG; proc ownership
+; metadata checks also request the namespaced form of its existing sys_ptrace
+; capability. Neither grants process ptrace across SELinux domains or RF I/O.
+(allow a9_wifi_radio self (cap_userns (sys_ptrace)))
+(allow a9_wifi_radio self (netlink_tcpdiag_socket (create bind read write getattr getopt setopt nlmsg_read)))
+; OBS USB HAL reads canonical sysfs state outside the UDC-labelled subtree.
+(allow hal_usb_gadget_default sysfs_202504 (file (read open getattr)))
+; OBS cas Wi-Fi RAM formatting and proc/session vectors are already covered
+; by a9ml.cil/avc-f/source-round3. Keep those rules and round5 noatsecure;
+; do not translate the failed sysfs create probes or physical block ioctls
+; into new grants. RAM-only e2fs/fsck writes are retained from a9ml.cil.
+; logd stays the real logd domain; its system-file entrypoint rule and fallback
+; triggers are already present. It has no private LD path, so noatsecure is not
+; widened to logd. Existing Wi-Fi/camera/Codec2 noatsecure rules are preserved.

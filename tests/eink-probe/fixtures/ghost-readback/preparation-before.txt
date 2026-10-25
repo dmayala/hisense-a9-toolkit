@@ -1,0 +1,15 @@
+SAFE3_GATE 
+SAFE3_BOOL a9_eink/parameters/enable N
+SAFE3_BOOL fp9929a/parameters/allow_power_on N
+SAFE3_BOOL panel_hisense_hlte556n_eink/parameters/enable N
+enable 0 waveform 0 transport 0 hv_on 0 stall_fault 0 template 0
+updates 0 aborts 0 frames 0 late 0 vbl_skips 0 commit_fail 0 max_gap_us 0 late_drive 0 vbl_skips_drive 0 max_gap_drive_us 0
+last mode 0x0 pre 0x0 clear 0 type 0 bin 0 t1 0 t2 0 frames 0 steps 0 dry 0 aborted 0 rect 0,0-0,0 begin_us 0 total_us 0 prep_us 0
+pace commit_max_us 0 commit_slow 0 compose_max_us 0 render_max_us 0 prefill_us 0 ring_min 0 underruns 0
+flip_phases valid 0 phase 0 age_us 0 prepare_us 0 fences_us 0 dependencies_us 0 wait_prev_us 0 program_us 0 flip_done_us 0 cleanup_us 0
+flip_max prepare_us 0 fences_us 0 dependencies_us 0 wait_prev_us 0 program_us 0 flip_done_us 0 cleanup_us 0 total_us 0 modeset_us 0 flips 0 modesets 0
+rail_fault 0 rail_faults 0 rail_at_ms 0 rail_getter 0 rail_pg_raw 0 rail_on 0 rail_energized 0 rail_forced 0 rail_emergency 0 rail_pg_valid 0 rail_tx_on 0 rail_gone 0 rail_front_null 0 rail_armed 0 rail_session_ms 0 rail_since_wf_ms 0 rail_wf_ret 0 force_clear 0
+session id 0 frames 0 full_frames 0 waveforms 0 done 0 full_started 0 full_done 0 clear_started 0 clear_done 0 transition_started 0 transition_done 0
+rail_session id 0 frames 0 full_frames 0 waveforms 0 done 0 full_started 0 full_done 0 clear_started 0 clear_done 0 transition_started 0 transition_done 0
+rail_pg_at_us 0 pd_off_confirmed 0 pd_valid 0 pd_getter 0 pd_seq_before 0 pd_seq 0 pd_entry_at_us 0 pd_entry_pg 0 pd_vcom_at_us 0 pd_vcom_pg 0 pd_pwrup_at_us 0 pd_pwrup_pg 0
+SAFE3_ROOT_RC 1

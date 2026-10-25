@@ -1,0 +1,43 @@
+gpiochip0: 114 GPIOs, parent: platform/500000.pinctrl, 500000.pinctrl:
+ gpio0   : out low  func1 2mA pull up
+ gpio1   : out low  func1 2mA pull up
+ gpio2   : out high func0 8mA pull up
+ gpio6   : in  low  func1 2mA pull up
+ gpio7   : in  low  func1 2mA pull up
+ gpio12  : out low  func1 2mA no pull
+ gpio13  : in  low  func1 2mA no pull
+ gpio21  : out low  func0 2mA pull down
+ gpio25  : out high func0 8mA pull up
+ gpio26  : out high func0 8mA pull up
+ gpio31  : out high func0 8mA pull up
+ gpio33  : out high func0 8mA pull up
+ gpio34  : out high func0 8mA pull up
+ gpio36  : out low  func0 8mA pull up
+ gpio71  : in  low  func0 2mA pull down
+ gpio80  : in  low  func0 2mA no pull
+ gpio81  : out high func0 8mA pull up
+ gpio82  : in  low  func0 2mA no pull
+ gpio84  : in  low  func0 2mA pull down
+ gpio86  : out low  func0 8mA pull up
+ gpio108 : out low  func0 2mA pull down
+
+gpiochip1: 9 GPIOs, parent: platform/1c40000.spmi:pmic@0:gpio@c000, 1c40000.spmi:pmic@0:gpio@c000:
+ gpio1 : out  high normal  vin-1 pull-down 10uA              push-pull  medium  atest-1 dtest-0
+ gpio2 : in   low  normal  vin-0 pull-down 10uA              push-pull  low     atest-1 dtest-0
+ gpio3 : ---
+ gpio4 : ---
+ gpio5 : in   high normal  vin-0 pull-up 30uA                push-pull  no      atest-1 dtest-0
+ gpio6 : in   low  normal  vin-0 pull-down 10uA              push-pull  low     atest-1 dtest-0
+ gpio7 : in   low  normal  vin-0 pull-down 10uA              push-pull  low     atest-1 dtest-0
+ gpio8 : out  low  func1   vin-0 no pull                     push-pull  high    atest-1 dtest-0
+ gpio9 : in   low  normal  vin-1 pull-down 10uA              push-pull  low     atest-1 dtest-0
+
+gpiochip2: 8 GPIOs, parent: platform/1c40000.spmi:pmic@2:gpio@c000, 1c40000.spmi:pmic@2:gpio@c000:
+ gpio1 : ---
+ gpio2 : in   low  normal  vin-0 pull-down 10uA              push-pull  low     atest-1 dtest-0
+ gpio3 : in   low  normal  vin-0 pull-down 10uA              push-pull  low     atest-1 dtest-0
+ gpio4 : ---
+ gpio5 : out  low  func1   vin-0 pull-down 10uA              open-drain low     atest-1 dtest-0
+ gpio6 : out  high normal  vin-0 pull-down 10uA              push-pull  low     atest-1 dtest-0
+ gpio7 : in   low  normal  vin-0 pull-down 10uA              push-pull  low     atest-1 dtest-0
+ gpio8 : in   low  normal  vin-0 pull-down 10uA              push-pull  low     atest-1 dtest-0

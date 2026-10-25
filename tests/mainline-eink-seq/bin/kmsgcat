@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+# test stand-in for "cat /dev/kmsg": print the record file, then follow it (20 ms)
+import os, sys, time
+with open(sys.argv[1], 'rb') as f:
+    while True:
+        b = f.readline()
+        if b:
+            try:
+                sys.stdout.buffer.write(b); sys.stdout.flush()
+            except BrokenPipeError:
+                break
+        else:
+            if not os.path.exists(sys.argv[1]):
+                break               # test tree removed: stop following
+            time.sleep(0.02)

@@ -1,0 +1,177 @@
+--- /dev/null
++++ b/include/libcamera/internal/a9_frame_timing.h
+@@ -0,0 +1,24 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++#pragma once
++#include <stdint.h>
++namespace libcamera {
++/* Separate ioctls: VBLANK changes the kernel's EXPOSURE range. On failure
++ * never issue the operation that depends on the failed range change. */
++template<typename Blank, typename Exposure>
++int a9ApplyFrameTiming(int32_t &current, int32_t desired, Blank blank, Exposure exposure)
++{
++	if (desired > current) {
++		int ret = blank(desired);
++		if (ret) return ret;
++		current = desired;
++	}
++	int ret = exposure();
++	if (ret) return ret;
++	if (desired < current) {
++		ret = blank(desired);
++		if (ret) return ret;
++		current = desired;
++	}
++	return 0;
++}
++} /* namespace libcamera */
+--- a/include/libcamera/ipa/soft.mojom
++++ b/include/libcamera/ipa/soft.mojom
+@@ -13,0 +14,4 @@
++	/* A9 POC: zero disables dynamic timing on other simple-pipeline sensors. */
++	uint32 minFrameLines;
++	uint32 maxFrameLines;
++	uint32 exposureMargin;
+--- a/src/android/camera_capabilities.cpp
++++ b/src/android/camera_capabilities.cpp
+@@ -715 +715 @@
+-				1e9 / static_cast<unsigned int>(floor(1e9 / minFrameDuration + 0.05f));
++				1e9 / static_cast<unsigned int>(std::lround(1e9 / minFrameDuration));
+--- a/src/android/camera_device.cpp
++++ b/src/android/camera_device.cpp
+@@ -11,0 +12 @@
++#include <array>
+@@ -963,0 +965,10 @@
++	if (camera_->controls().count(&controls::FrameDurationLimits) &&
++	    settings.getEntry(ANDROID_CONTROL_AE_TARGET_FPS_RANGE, &entry)) {
++		if (entry.count != 2 || entry.data.i32[0] < 15 || entry.data.i32[1] > 30 ||
++		    entry.data.i32[0] > entry.data.i32[1]) return -EINVAL;
++		const std::array<int64_t, 2> limits{
++			(1000000 + entry.data.i32[1] - 1) / entry.data.i32[1],
++			(1000000 + entry.data.i32[0] - 1) / entry.data.i32[0] };
++		controls.set(controls::FrameDurationLimits, limits);
++	}
++
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -58,0 +59,11 @@
++	const auto &agc = context.configuration.agc;
++	if (agc.maxFrameLines) {
++		int32_t minLines = agc.minFrameLines, maxLines = agc.maxFrameLines;
++		if (auto limits = request.get(controls::FrameDurationLimits)) {
++			const double lineUs = agc.lineDuration.get<std::micro>();
++			minLines = std::clamp<int64_t>(std::ceil((*limits)[0] / lineUs), minLines, maxLines);
++			maxLines = std::clamp<int64_t>(std::ceil((*limits)[1] / lineUs), minLines, maxLines);
++		}
++		frameContext.minFrameLines = minLines;
++		frameContext.exposureMax = maxLines - agc.exposureMargin;
++	}
+@@ -128,0 +140,5 @@
++	if (frameContext.exposureMax) {
++		if (context.configuration.agc.exposureMax != frameContext.exposureMax)
++			aeState_ = controls::AeStateSearching;
++		context.configuration.agc.exposureMax = frameContext.exposureMax;
++	}
+@@ -145,0 +162,6 @@
++	/* Metadata above describes the capture; constrain the next sensor write
++	 * even on first-frame invalid/empty statistics after a narrower request. */
++	frameContext.sensor.exposure = std::clamp(frameContext.sensor.exposure,
++		context.configuration.agc.exposureMin, context.configuration.agc.exposureMax);
++	context.activeState.agc.exposure = std::clamp(context.activeState.agc.exposure,
++		context.configuration.agc.exposureMin, context.configuration.agc.exposureMax);
+--- a/src/ipa/simple/ipa_context.h
++++ b/src/ipa/simple/ipa_context.h
+@@ -31,0 +32 @@
++		int32_t minFrameLines = 0, maxFrameLines = 0, exposureMargin = 0;
+@@ -76,0 +78 @@
++	int32_t minFrameLines = 0, exposureMax = 0;
+--- a/src/ipa/simple/soft_simple.cpp
++++ b/src/ipa/simple/soft_simple.cpp
+@@ -234,0 +235,6 @@
++	if (configInfo.minFrameLines && configInfo.maxFrameLines) {
++		context_.configuration.agc.minFrameLines = configInfo.minFrameLines;
++		context_.configuration.agc.maxFrameLines = configInfo.maxFrameLines;
++		context_.configuration.agc.exposureMargin = configInfo.exposureMargin;
++		context_.configuration.agc.exposureMax = configInfo.maxFrameLines - configInfo.exposureMargin;
++	}
+@@ -375,0 +382,6 @@
++	if (context_.configuration.agc.maxFrameLines) {
++		const int32_t lines = std::clamp(frameContext.sensor.exposure +
++			context_.configuration.agc.exposureMargin, frameContext.minFrameLines,
++			frameContext.exposureMax + context_.configuration.agc.exposureMargin);
++		ctrls.set(V4L2_CID_VBLANK, lines - int32_t(context_.sensorInfo.outputSize.height));
++	}
+--- a/src/libcamera/pipeline/simple/simple.cpp
++++ b/src/libcamera/pipeline/simple/simple.cpp
+@@ -36,0 +37 @@
++#include "libcamera/internal/a9_frame_timing.h"
+@@ -375,0 +377,3 @@
++	int32_t minFrameLines_ = 0, maxFrameLines_ = 0, currentFrameLines_ = 0;
++	int32_t sensorHeight_ = 0, exposureMargin_ = 0;
++	int64_t lineLength_ = 0, pixelRate_ = 0;
+@@ -1109 +1113,17 @@
+-		const int ret = sensor_->setControls(&ctrls);
++		int ret;
++		if (maxFrameLines_ && ctrls.contains(V4L2_CID_VBLANK)) {
++			const int32_t desired = std::clamp(sensorHeight_ +
++				ctrls.get(V4L2_CID_VBLANK).get<int32_t>(), minFrameLines_, maxFrameLines_);
++			ctrls.clear();
++			ctrls.set(V4L2_CID_EXPOSURE, sensorControls.get(V4L2_CID_EXPOSURE));
++			ctrls.set(V4L2_CID_ANALOGUE_GAIN, sensorControls.get(V4L2_CID_ANALOGUE_GAIN));
++			ret = a9ApplyFrameTiming(currentFrameLines_, desired,
++				[&](int32_t lines) {
++					ControlList blank(sensor_->controls());
++					blank.set(V4L2_CID_VBLANK, lines - sensorHeight_);
++					return sensor_->setControls(&blank);
++				}, [&]() { return sensor_->setControls(&ctrls); });
++			frameDuration_ = (lineLength_ * currentFrameLines_ * 1000000 + pixelRate_ - 1) / pixelRate_;
++		} else {
++			ret = sensor_->setControls(&ctrls);
++		}
+@@ -1113,0 +1134 @@
++				<< " frame_lines=" << currentFrameLines_ << " frame_duration_us=" << frameDuration_
+@@ -1620,2 +1641,3 @@
+-	/*
+-	 * The simple IPA does not control VBLANK. Publish the actual fixed
++	data->minFrameLines_ = data->maxFrameLines_ = 0;
++	/*
++	 * A9 POC controls VBLANK with exposure. Other sensors retain fixed
+@@ -1642 +1664,3 @@
+-		/* Match the Android HAL's 30 fps cap using real sensor blanking. */
++		const bool a9 = !data->frameStartEmitter_ &&
++			(data->sensor_->model() == "s5k3l6" || data->sensor_->model() == "hi556");
++		/* Reset A9 timing at configure: a previous session may have used15fps. */
+@@ -1645 +1669 @@
+-		if (frameLength < targetLines) {
++		if (a9 || frameLength < targetLines) {
+@@ -1648 +1672,2 @@
+-				targetLines - format.size.height, vblank.max().get<int32_t>());
++				std::max<int64_t>(targetLines - format.size.height, vblank.min().get<int32_t>()),
++				vblank.max().get<int32_t>());
+@@ -1659,0 +1685,17 @@
++		int64_t maxFrameLength = frameLength;
++		if (a9) {
++			data->sensor_->device()->updateControlInfo();
++			const auto &sensorControls = data->sensor_->controls();
++			const int32_t margin = frameLength - sensorControls.at(V4L2_CID_EXPOSURE).max().get<int32_t>();
++			/* Both A9 POC drivers expose a mode-specific eight-line margin. */
++			if (margin != 8) return -EINVAL;
++			maxFrameLength = std::min<int64_t>((pixelRate + lineLength * 15 - 1) / (lineLength * 15),
++				format.size.height + sensorControls.at(V4L2_CID_VBLANK).max().get<int32_t>());
++			data->minFrameLines_ = frameLength;
++			data->maxFrameLines_ = maxFrameLength;
++			data->currentFrameLines_ = frameLength;
++			data->sensorHeight_ = format.size.height;
++			data->exposureMargin_ = margin;
++			data->lineLength_ = lineLength;
++			data->pixelRate_ = pixelRate;
++		}
+@@ -1665,0 +1708 @@
++		const int64_t maxDuration = (lineLength * maxFrameLength * 1000000 + pixelRate - 1) / pixelRate;
+@@ -1667 +1710 @@
+-			ControlInfo(duration, duration, duration));
++			ControlInfo(duration, maxDuration, duration));
+@@ -1755,0 +1799,3 @@
++		configInfo.minFrameLines = data->minFrameLines_;
++		configInfo.maxFrameLines = data->maxFrameLines_;
++		configInfo.exposureMargin = data->exposureMargin_;

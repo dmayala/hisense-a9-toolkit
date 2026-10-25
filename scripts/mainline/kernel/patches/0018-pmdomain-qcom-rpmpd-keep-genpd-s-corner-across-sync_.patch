@@ -1,0 +1,66 @@
+From 2626a38e006acbd40763d77e1b29fb7f6d3dbe28 Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 23:47:52 -0700
+Subject: [PATCH 2/3] pmdomain: qcom: rpmpd: keep genpd's corner across
+ sync_state
+
+rpmpd_sync_state() zeroes pd->corner for every domain that is off at
+that moment. genpd does not know: its performance_state stays at the
+aggregate it last set, and _genpd_set_performance_state() returns early
+while that aggregate is unchanged. A consumer that got a default state
+from required-opps at attach (genpd_set_required_opp) and is
+runtime-suspended when sync_state runs (domain off) therefore has its
+vote lost: on its first runtime resume rpm_pstate is 0, genpd restores
+nothing, and rpmpd_power_on() skips the corner because pd->corner is 0.
+The domain is enabled at corner 0 until the consumer happens to go
+through one runtime suspend/resume cycle.
+
+Hit by the DSI PHY's MX vote on the Hisense A9 (SM6115): the phy probes,
+votes MX NOM via required-opps, is suspended, rpmpd sync_state runs,
+and the first CRTC enable powers MX on at level 0 (inferred from the
+code, not measured).
+
+Still send 0 for a domain that is off, but restore the stored corner
+afterwards so the next power_on sends it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/pmdomain/qcom/rpmpd.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/drivers/pmdomain/qcom/rpmpd.c b/drivers/pmdomain/qcom/rpmpd.c
+index 5f55fc791..df5b665bb 100644
+--- a/drivers/pmdomain/qcom/rpmpd.c
++++ b/drivers/pmdomain/qcom/rpmpd.c
+@@ -1155,18 +1155,31 @@ static void rpmpd_sync_state(struct device *dev)
+ 
+ 	mutex_lock(&rpmpd_lock);
+ 	for (i = 0; i < desc->num_pds; i++) {
++		unsigned int corner;
++
+ 		pd = rpmpds[i];
+ 		if (!pd)
+ 			continue;
+ 
+ 		pd->state_synced = true;
+ 
++		/*
++		 * Vote 0 for a domain that is off, but keep the corner genpd
++		 * last set: genpd does not call set_performance_state again
++		 * while its aggregate is unchanged, so a consumer whose
++		 * default (required-opps) state was set at attach and that
++		 * is runtime-suspended now would otherwise power the domain
++		 * on later at corner 0.
++		 */
++		corner = pd->corner;
+ 		if (!pd->enabled)
+ 			pd->corner = 0;
+ 
+ 		ret = rpmpd_aggregate_corner(pd);
+ 		if (ret)
+ 			dev_err(dev, "failed to sync %s: %d\n", pd->pd.name, ret);
++
++		pd->corner = corner;
+ 	}
+ 	mutex_unlock(&rpmpd_lock);
+ }

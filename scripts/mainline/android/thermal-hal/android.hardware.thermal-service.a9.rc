@@ -1,0 +1,5 @@
+# A9 mainline thermal HAL (scripts/mainline/android/thermal-hal, A9_THERMAL_HAL=1 build-vendor.sh)
+service vendor.thermal-a9 /vendor/bin/hw/android.hardware.thermal-service.a9
+    class hal
+    user system
+    group system

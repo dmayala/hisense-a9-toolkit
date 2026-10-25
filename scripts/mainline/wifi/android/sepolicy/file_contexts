@@ -1,0 +1,5 @@
+/vendor/bin/(a9-wifi-sandbox|rmtfs|tqftpserv|pd-mapper|diag-router|a9ml-wifi-modules\.sh|a9ml-wifi-firmware\.sh) u:object_r:a9_wifi_radio_exec:s0
+/vendor/etc/a9-wifi(/.*)? u:object_r:a9_wifi_private_file:s0
+/mnt/a9-wifi(/.*)? u:object_r:a9_wifi_ram_file:s0
+/dev/qcom_rmtfs_mem1 u:object_r:a9_wifi_rmtfs_device:s0
+/vendor/etc/wifi(/.*)? u:object_r:vendor_configs_file:s0

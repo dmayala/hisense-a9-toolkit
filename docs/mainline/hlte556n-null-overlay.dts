@@ -1,0 +1,21 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
+/*
+ * Minimal board overlay for a mainline A9 image (2026-10-14). The A9 ABL always
+ * applies a board-id 0x1000b overlay; this one changes nothing but carries one
+ * fixup (to a label that exists in the mainline DTB) because libufdt rejects an
+ * overlay without __fixups__ ("Bad overlay_fixups"). Build: dtc -@ -I dts -O dtb,
+ * then scripts/mainline/mkdtbo.py. Use as --recovery_dtbo or as the dtbo image.
+ */
+/dts-v1/;
+/plugin/;
+/ {
+	model = "Hisense A9 (HLTE556N)";
+	compatible = "hisense,hlte556n", "qcom,sm6115";
+	qcom,board-id = <0x1000b 0>;
+
+	fragment@0 {
+		target = <&tlmm>;
+		__overlay__ {
+		};
+	};
+};

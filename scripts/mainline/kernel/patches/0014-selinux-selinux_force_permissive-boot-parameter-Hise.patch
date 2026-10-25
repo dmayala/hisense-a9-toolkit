@@ -1,0 +1,58 @@
+From 56d1033958188642abe1fb22863c00e86e76f2b4 Mon Sep 17 00:00:00 2001
+From: A9 bring-up <dmayala@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 22:57:26 -0700
+Subject: [PATCH] selinux: selinux_force_permissive boot parameter (Hisense A9
+ Android bring-up)
+
+selinux_force_permissive=1 makes writes of 1 to /sys/fs/selinux/enforce a
+logged no-op that returns success. Writes of 0 behave as before. With
+enforcing=0 (CONFIG_SECURITY_SELINUX_DEVELOP=y) the kernel boots permissive
+and stays permissive. For the A16 GSI, whose user-build init ignores
+androidboot.selinux=permissive and calls security_setenforce(1).
+Not for production.
+---
+ security/selinux/selinuxfs.c | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
+index 5aaaf6941..ff2148699 100644
+--- a/security/selinux/selinuxfs.c
++++ b/security/selinux/selinuxfs.c
+@@ -129,6 +129,24 @@ static ssize_t sel_read_enforce(struct file *filp, char __user *buf,
+ }
+ 
+ #ifdef CONFIG_SECURITY_SELINUX_DEVELOP
++/*
++ * Hisense A9 bring-up: selinux_force_permissive=1 turns every setenforce(1)
++ * into a logged no-op that reports success, so a user-build init (which
++ * ignores androidboot.selinux=permissive and writes 1 here) keeps running
++ * permissive. Boot with enforcing=0 as well. Never for production.
++ */
++static bool selinux_force_permissive __ro_after_init;
++
++static int __init selinux_force_permissive_setup(char *str)
++{
++	unsigned long v;
++
++	if (!kstrtoul(str, 0, &v))
++		selinux_force_permissive = !!v;
++	return 1;
++}
++__setup("selinux_force_permissive=", selinux_force_permissive_setup);
++
+ static ssize_t sel_write_enforce(struct file *file, const char __user *buf,
+ 				 size_t count, loff_t *ppos)
+ 
+@@ -155,6 +173,12 @@ static ssize_t sel_write_enforce(struct file *file, const char __user *buf,
+ 
+ 	new_value = !!scan_value;
+ 
++	if (selinux_force_permissive && new_value) {
++		pr_info_once("selinux: a9 forced permissive, ignoring setenforce 1\n");
++		length = count;
++		goto out;
++	}
++
+ 	old_value = enforcing_enabled();
+ 	if (new_value != old_value) {
+ 		length = avc_has_perm(current_sid(), SECINITSID_SECURITY,

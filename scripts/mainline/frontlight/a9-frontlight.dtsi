@@ -1,0 +1,60 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/* Include AFTER sm6115-hisense-hlte556n.dts; merge its disabled placeholders. */
+#include <dt-bindings/gpio/gpio.h>
+
+&i2c0 {
+	status = "okay";
+
+	backlight@36 {
+		compatible = "hisense,a9-aw99703-frontlight";
+		reg = <0x36>;
+		enable-gpios = <&tlmm 85 GPIO_ACTIVE_HIGH>;
+		label = "a9:white:center";
+		default-state = "keep";
+		status = "okay";
+	};
+
+	backlight@35 {
+		/* Stock ABL and kernel cannot detect this optional IC on our A9. */
+		compatible = "hisense,a9-ktd3137-frontlight";
+		reg = <0x35>;
+		enable-gpios = <&tlmm 101 GPIO_ACTIVE_HIGH>;
+		label = "a9:white:edge";
+		default-state = "keep";
+		status = "disabled";
+	};
+};
+
+&i2c1 {
+	status = "okay";
+
+	backlight@36 {
+		compatible = "hisense,a9-aw99703-frontlight";
+		reg = <0x36>;
+		enable-gpios = <&tlmm 83 GPIO_ACTIVE_HIGH>;
+		label = "a9:warm:center";
+		default-state = "keep";
+		status = "okay";
+	};
+
+	backlight@35 {
+		/* Stock ABL and kernel cannot detect this optional IC on our A9. */
+		compatible = "hisense,a9-ktd3137-frontlight";
+		reg = <0x35>;
+		enable-gpios = <&tlmm 88 GPIO_ACTIVE_HIGH>;
+		label = "a9:warm:edge";
+		default-state = "keep";
+		status = "disabled";
+	};
+};
+
+&tlmm {
+	/* Reopen AW HWEN 83/85 and QUP1 SDA/SCL 4/5. Keep optional KTD pins shut. */
+	gpio-reserved-ranges = <3 1>, <8 4>, <14 7>, <22 3>, <27 4>, <32 1>,
+			       <35 1>, <37 34>, <72 8>, <87 21>, <109 5>;
+};
+
+/* Keep the stock-disabled SD controller off; GPIO88 remains reserved. */
+&sdhc_2 {
+	status = "disabled";
+};

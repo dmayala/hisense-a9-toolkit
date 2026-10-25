@@ -1,0 +1,4 @@
+<resources>
+    <!-- WCD MBHC reports ALSA/input SW_HEADPHONE_INSERT and SW_MICROPHONE_INSERT. -->
+    <bool name="config_useDevInputEventForAudioJack">true</bool>
+</resources>

@@ -1,0 +1,2 @@
+S2_GATE phase=ram-data result=failed
+S2_ROOT_RC 1

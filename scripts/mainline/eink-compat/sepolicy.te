@@ -1,0 +1,24 @@
+# GSI-specific COMBINED-policy snippet, not a generic vendor-only Treble policy.
+# Uses the existing v7 phhsu_daemon domain: system_prop and framework Binder
+# operations already depend on it. Do NOT declare another permissive domain.
+# If the vendor build cannot reference this private platform type, merge this
+# at combined-policy assembly; see docs/mainline-eink-compat.md for the broker
+# alternative. Policy compilation and on-device enforcement remain untested.
+type a9_eink_compat_exec, exec_type, vendor_file_type, file_type;
+type vendor_sysfs_a9_eink, fs_type, sysfs_type;
+type vendor_sysfs_a9_frontlight, fs_type, sysfs_type;
+
+allow init a9_eink_compat_exec:file { getattr open read execute map };
+allow init phhsu_daemon:process transition;
+allow phhsu_daemon a9_eink_compat_exec:file { entrypoint getattr open read execute map };
+allow phhsu_daemon vendor_sysfs_a9_eink:dir search;
+allow phhsu_daemon vendor_sysfs_a9_eink:file { getattr open read write };
+allow phhsu_daemon vendor_sysfs_a9_frontlight:dir search;
+allow phhsu_daemon vendor_sysfs_a9_frontlight:file { getattr open read write };
+allow phhsu_daemon sysfs:dir search;
+allow phhsu_daemon sysfs:lnk_file read;
+
+# v7 a9service is platform-signed. Do not give untrusted_app socket access.
+allow platform_app phhsu_daemon:unix_stream_socket connectto;
+# Normal create/listen/accept and system_prop/Binder access are inherited from
+# the GSI domain, NOT asserted by a new vendor property_contexts entry.

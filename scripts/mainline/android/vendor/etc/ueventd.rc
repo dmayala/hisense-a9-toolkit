@@ -1,0 +1,42 @@
+# /vendor/etc/ueventd.rc -- Hisense A9 mainline (DRAFT 2026-10-15).
+# A16 ueventd reads /system/etc/ueventd.rc then /vendor/etc/ueventd.rc
+# (init/ueventd.cpp android-16.0.0_r1 line 301; /vendor/ueventd.rc is legacy).
+# The GSI's system ueventd.rc already covers binder, /dev/dri/*, input, uhid,
+# uinput, tun, dma_heap/system*, /dev/bus/usb. This adds the mainline nodes.
+#
+# Block devices keep ueventd's default 0600 root:root (nothing here widens
+# them): only root can open UFS partitions, and none of the shipped root
+# services has a reason to.
+
+firmware_directories /vendor/firmware/
+
+# DRM (msm, only with a9.eink=1 kernels) and render nodes
+/dev/dri/card*            0666   system     graphics
+/dev/dri/renderD*         0666   system     graphics
+
+# dma-buf heaps (gralloc / codec2 software)
+/dev/dma_heap/*           0444   system     system
+
+# serial: UART console root only; USB ACM gadget shell (a9ml-usb.sh) root only
+/dev/ttyMSM*              0600   root       root
+/dev/ttyGS*               0600   root       root
+
+# RTC (system_server time), hw watchdog (watchdogd-gsi runs as root)
+/dev/rtc0                 0640   system     system
+/dev/watchdog*            0600   root       root
+
+# input (gpio-keys, touch), default 0660 root input from the system file
+/dev/input/event*         0660   root       input
+
+# misc
+/dev/uhid                 0660   uhid       uhid
+/dev/uinput               0660   uhid       uhid
+/dev/hw_random            0440   root       system
+/dev/iio:device*          0660   system     system
+
+# sysfs rules match the uevent DEVPATH (/sys/devices/...), not /sys/class
+# symlinks; frontlight/haptics rules are added once the mainline sysfs paths
+# are MEASURED on a capture (a9-ctl capture). Not needed for the first boots.
+
+# E Ink manual refresh: root-only event; recovery keeps its force_clear ABI.
+/sys/devices/platform/eink-display/drm/card*/card*-*/eink manual_clear 0200 root root

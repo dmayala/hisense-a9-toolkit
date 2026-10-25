@@ -1,0 +1,758 @@
+--- a/src/android/camera_device.cpp
++++ b/src/android/camera_device.cpp
+@@ -32,6 +32,7 @@
+ #include "libcamera/internal/formats.h"
+ 
+ #include "camera_buffer.h"
++#include "camera_stream_config.h"
+ #include "camera_hal_config.h"
+ #include "camera_ops.h"
+ #include "camera_request.h"
+@@ -42,23 +43,6 @@
+ LOG_DECLARE_CATEGORY(HAL)
+ 
+ namespace {
+-
+-/*
+- * \struct Camera3StreamConfig
+- * \brief Data to store StreamConfiguration associated with camera3_stream(s)
+- * \var streams List of the pairs of a stream requested by Android HAL client
+- * and CameraStream::Type associated with the stream
+- * \var config StreamConfiguration for streams
+- */
+-struct Camera3StreamConfig {
+-	struct Camera3Stream {
+-		camera3_stream_t *stream;
+-		CameraStream::Type type;
+-	};
+-
+-	std::vector<Camera3Stream> streams;
+-	StreamConfiguration config;
+-};
+ 
+ /*
+  * Reorder the configurations so that libcamera::Camera can accept them as much
+@@ -574,17 +558,9 @@
+ 	streams_.clear();
+ 	streams_.reserve(stream_list->num_streams);
+ 
+-	std::vector<Camera3StreamConfig> streamConfigs;
+-	streamConfigs.reserve(stream_list->num_streams);
+-
+-	/* First handle all non-MJPEG streams. */
+-	camera3_stream_t *jpegStream = nullptr;
+ 	for (unsigned int i = 0; i < stream_list->num_streams; ++i) {
+ 		camera3_stream_t *stream = stream_list->streams[i];
+-		Size size(stream->width, stream->height);
+-
+ 		PixelFormat format = capabilities_.toPixelFormat(stream->format);
+-
+ 		LOG(HAL, Info) << "Stream #" << i
+ 			       << ", direction: " << directionToString(stream->stream_type)
+ 			       << ", width: " << stream->width
+@@ -597,218 +573,15 @@
+ #endif
+ 			       << " (" << format << ")";
+ 
+-		if (!format.isValid())
+-			return -EINVAL;
+-
+-		/* \todo Support rotation. */
+-		if (stream->rotation != CAMERA3_STREAM_ROTATION_0) {
+-			LOG(HAL, Error) << "Rotation is not supported";
+-			return -EINVAL;
+-		}
+-#if defined(OS_CHROMEOS)
+-		if (stream->crop_rotate_scale_degrees != CAMERA3_STREAM_ROTATION_0) {
+-			LOG(HAL, Error) << "Rotation is not supported";
+-			return -EINVAL;
+-		}
+-#endif
+-
+-		/* Defer handling of MJPEG streams until all others are known. */
+-		if (stream->format == HAL_PIXEL_FORMAT_BLOB) {
+-			if (jpegStream) {
+-				LOG(HAL, Error)
+-					<< "Multiple JPEG streams are not supported";
+-				return -EINVAL;
+-			}
+-
+-			jpegStream = stream;
+-			continue;
+-		}
+-
+-		/*
+-		 * While gralloc usage flags are supposed to report usage
+-		 * patterns to select a suitable buffer allocation strategy, in
+-		 * practice they're also used to make other decisions, such as
+-		 * selecting the actual format for the IMPLEMENTATION_DEFINED
+-		 * HAL pixel format. To avoid issues, we thus have to set the
+-		 * GRALLOC_USAGE_HW_CAMERA_WRITE flag unconditionally, even for
+-		 * streams that will be produced in software.
+-		 */
+-		stream->usage |= GRALLOC_USAGE_HW_CAMERA_WRITE;
+-
+-		/*
+-		 * If a CameraStream with the same size and format as the
+-		 * current stream has already been requested, associate the two.
+-		 */
+-		auto iter = std::find_if(
+-			streamConfigs.begin(), streamConfigs.end(),
+-			[&size, &format](const Camera3StreamConfig &streamConfig) {
+-				return streamConfig.config.size == size &&
+-				       streamConfig.config.pixelFormat == format;
+-			});
+-		if (iter != streamConfigs.end()) {
+-			/* Add usage to copy the buffer in streams[0] to stream. */
+-			iter->streams[0].stream->usage |= GRALLOC_USAGE_SW_READ_OFTEN;
+-			stream->usage |= GRALLOC_USAGE_SW_WRITE_OFTEN;
+-			iter->streams.push_back({ stream, CameraStream::Type::Mapped });
+-			continue;
+-		}
+-
+-		Camera3StreamConfig streamConfig;
+-		streamConfig.streams = { { stream, CameraStream::Type::Direct } };
+-		streamConfig.config.size = size;
+-		streamConfig.config.pixelFormat = format;
+-		streamConfigs.push_back(std::move(streamConfig));
+-	}
+-
+-	/* Now handle the MJPEG streams, adding a new stream if required. */
+-	if (jpegStream) {
+-		CameraStream::Type type;
+-		int index = -1;
+-
+-		/* Search for a compatible stream in the non-JPEG ones. */
+-		for (size_t i = 0; i < streamConfigs.size(); ++i) {
+-			Camera3StreamConfig &streamConfig = streamConfigs[i];
+-			const auto &cfg = streamConfig.config;
+-
+-			/*
+-			 * \todo The PixelFormat must also be compatible with
+-			 * the encoder.
+-			 */
+-			if (cfg.size.width != jpegStream->width ||
+-			    cfg.size.height != jpegStream->height)
+-				continue;
+-
+-			LOG(HAL, Info)
+-				<< "Android JPEG stream mapped to libcamera stream " << i;
+-
+-			type = CameraStream::Type::Mapped;
+-			index = i;
+-
+-			/*
+-			 * The source stream will be read by software to
+-			 * produce the JPEG stream.
+-			 */
+-			camera3_stream_t *stream = streamConfig.streams[0].stream;
+-			stream->usage |= GRALLOC_USAGE_SW_READ_OFTEN;
+-			break;
+-		}
+-
+-		/*
+-		 * Without a compatible match for JPEG encoding we must
+-		 * introduce a new stream to satisfy the request requirements.
+-		 */
+-		if (index < 0) {
+-			/*
+-			 * \todo The pixelFormat should be a 'best-fit' choice
+-			 * and may require a validation cycle. This is not yet
+-			 * handled, and should be considered as part of any
+-			 * stream configuration reworks.
+-			 */
+-			Camera3StreamConfig streamConfig;
+-			streamConfig.config.size.width = jpegStream->width;
+-			streamConfig.config.size.height = jpegStream->height;
+-			streamConfig.config.pixelFormat = formats::NV12;
+-			streamConfigs.push_back(std::move(streamConfig));
+-
+-			LOG(HAL, Info) << "Adding " << streamConfig.config.toString()
+-				       << " for MJPEG support";
+-
+-			type = CameraStream::Type::Internal;
+-			index = streamConfigs.size() - 1;
+-		}
+-
+-		/* The JPEG stream will be produced by software. */
+-		jpegStream->usage |= GRALLOC_USAGE_SW_WRITE_OFTEN;
+-
+-		streamConfigs[index].streams.push_back({ jpegStream, type });
+-	}
+-
+-	/*
+-	 * A6L: pipelines with a single processed output (simple pipeline +
+-	 * software ISP) cannot produce several processed streams. Merge all
+-	 * the processed streams onto one libcamera stream: the JPEG size if a
+-	 * JPEG stream is requested (the encoder needs identical input and
+-	 * output sizes), the largest requested size otherwise. The other
+-	 * streams become Mapped streams scaled by the YUV post-processor.
+-	 */
+-	if (!utils::secure_getenv("LIBCAMERA_HAL_MULTI_STREAM")) {
+-		std::vector<size_t> processed;
+-		for (size_t i = 0; i < streamConfigs.size(); ++i) {
+-			const PixelFormatInfo &info =
+-				PixelFormatInfo::info(streamConfigs[i].config.pixelFormat);
+-			if (info.colourEncoding != PixelFormatInfo::ColourEncodingRAW)
+-				processed.push_back(i);
+-		}
+-
+-		if (processed.size() > 1) {
+-			size_t source = processed[0];
+-			bool hasJpeg = false;
+-			for (size_t i : processed) {
+-				for (const auto &s : streamConfigs[i].streams) {
+-					if (s.stream == jpegStream) {
+-						source = i;
+-						hasJpeg = true;
+-					}
+-				}
+-			}
+-			if (!hasJpeg) {
+-				for (size_t i : processed) {
+-					if (streamConfigs[i].config.size.width * streamConfigs[i].config.size.height >
+-					    streamConfigs[source].config.size.width * streamConfigs[source].config.size.height)
+-						source = i;
+-				}
+-			}
+-
+-			Camera3StreamConfig &src = streamConfigs[source];
+-			camera3_stream_t *srcStream = src.streams[0].stream;
+-			for (size_t i : processed) {
+-				if (i == source)
+-					continue;
+-				for (const auto &s : streamConfigs[i].streams) {
+-					if (s.stream->width > src.config.size.width ||
+-					    s.stream->height > src.config.size.height) {
+-						LOG(HAL, Error)
+-							<< "Single-stream mode: " << s.stream->width
+-							<< "x" << s.stream->height
+-							<< " larger than the source stream "
+-							<< src.config.size;
+-						return -EINVAL;
+-					}
+-					srcStream->usage |= GRALLOC_USAGE_SW_READ_OFTEN;
+-					s.stream->usage |= GRALLOC_USAGE_SW_WRITE_OFTEN;
+-					src.streams.push_back({ s.stream, CameraStream::Type::Mapped });
+-				}
+-			}
+-
+-			LOG(HAL, Info) << "Single-stream mode: " << src.streams.size()
+-				       << " Android streams on one " << src.config.toString()
+-				       << " libcamera stream";
+-
+-			std::vector<Camera3StreamConfig> merged;
+-			for (size_t i = 0; i < streamConfigs.size(); ++i) {
+-				if (i == source ||
+-				    std::find(processed.begin(), processed.end(), i) == processed.end())
+-					merged.push_back(std::move(streamConfigs[i]));
+-			}
+-			streamConfigs = std::move(merged);
+-		}
+-	}
+-
+-	/*
+-	 * A6L's software ISP writes its configured packed stride. minigbm NV12
+-	 * uses Venus row/scanline alignment, so produce into internal buffers
+-	 * and let the YUV processor copy to each Android buffer's actual layout.
+-	 */
+-	for (auto &streamConfig : streamConfigs) {
+-		if (streamConfig.config.pixelFormat != formats::NV12)
+-			continue;
+-		for (auto &stream : streamConfig.streams) {
+-			if (stream.type == CameraStream::Type::Direct) {
+-				stream.type = CameraStream::Type::Internal;
+-				stream.stream->usage |= GRALLOC_USAGE_SW_WRITE_OFTEN;
+-			}
+-		}
+-	}
++	}
++
++	std::vector<Camera3StreamConfig> streamConfigs;
++	camera3_stream_t *jpegStream = nullptr;
++	int planRet = a9PlanCamera3Streams(stream_list,
++		[this](int format) { return capabilities_.toPixelFormat(format); },
++		streamConfigs, jpegStream);
++	if (planRet)
++		return planRet;
+ 
+ 	sortCamera3StreamConfigs(streamConfigs, jpegStream);
+ 	for (const auto &streamConfig : streamConfigs) {
+--- a/src/android/camera_stream.cpp
++++ b/src/android/camera_stream.cpp
+@@ -19,6 +19,7 @@
+ #include "yuv/post_processor_yuv.h"
+ 
+ #include "camera_buffer.h"
++#include "camera_preview.h"
+ #include "camera_capabilities.h"
+ #include "camera_device.h"
+ #include "camera_metadata.h"
+@@ -85,14 +86,17 @@
+ int CameraStream::configure()
+ {
+ 	if (type_ == Type::Internal || type_ == Type::Mapped) {
+-		const PixelFormat outFormat =
+-			cameraDevice_->capabilities()->toPixelFormat(camera3Stream_->format);
++		outputFormat_ =
++			a9CameraOutputFormat(camera3Stream_->format, camera3Stream_->usage,
++			cameraDevice_->capabilities()->toPixelFormat(camera3Stream_->format));
++		const PixelFormat outFormat = outputFormat_;
+ 		StreamConfiguration output = configuration();
+ 		output.pixelFormat = outFormat;
+ 		output.size.width = camera3Stream_->width;
+ 		output.size.height = camera3Stream_->height;
+ 
+ 		switch (outFormat) {
++		case formats::ABGR8888:
+ 		case formats::NV12:
+ 			postProcessor_ = std::make_unique<PostProcessorYuv>();
+ 			break;
+@@ -132,6 +136,7 @@
+ 	mutex_ = std::make_unique<Mutex>();
+ 
+ 	camera3Stream_->max_buffers = configuration().bufferCount;
++	a9OverrideCameraPreviewFormat(*camera3Stream_, outputFormat_);
+ 
+ 	return 0;
+ }
+@@ -182,8 +187,7 @@
+ 		streamBuffer->fence.reset();
+ 	}
+ 
+-	const PixelFormat outFormat =
+-		cameraDevice_->capabilities()->toPixelFormat(camera3Stream_->format);
++	const PixelFormat outFormat = outputFormat_;
+ 	const Size outSize(camera3Stream_->width, camera3Stream_->height);
+ 	streamBuffer->dstBuffer = std::make_unique<CameraBuffer>(
+ 		*streamBuffer->camera3Buffer, outFormat, outSize,
+--- a/src/android/yuv/post_processor_yuv.cpp
++++ b/src/android/yuv/post_processor_yuv.cpp
+@@ -8,6 +8,7 @@
+ #include "post_processor_yuv.h"
+ 
+ #include <libyuv/scale.h>
++#include <libyuv/convert_argb.h>
+ 
+ #include <libcamera/base/log.h>
+ 
+@@ -25,12 +26,9 @@
+ int PostProcessorYuv::configure(const StreamConfiguration &inCfg,
+ 				const StreamConfiguration &outCfg)
+ {
+-	if (inCfg.pixelFormat != outCfg.pixelFormat) {
+-		LOG(YUV, Error) << "Pixel format conversion is not supported"
+-				<< " (from " << inCfg.pixelFormat
+-				<< " to " << outCfg.pixelFormat << ")";
++	rgbOutput_ = outCfg.pixelFormat == formats::ABGR8888;
++	if (outCfg.pixelFormat != formats::NV12 && !rgbOutput_)
+ 		return -EINVAL;
+-	}
+ 
+ 	if (inCfg.size < outCfg.size) {
+ 		LOG(YUV, Error) << "Up-scaling is not supported"
+@@ -46,6 +44,9 @@
+ 	}
+ 
+ 	calculateLengths(inCfg, outCfg);
++	/* One reusable scratch frame per output worker; never per request. */
++	scaledNV12_.resize(rgbOutput_ ?
++		static_cast<size_t>(outCfg.size.width) * outCfg.size.height * 3 / 2 : 0);
+ 	return 0;
+ }
+ 
+@@ -71,20 +72,23 @@
+ 			      crop_.y * sourceStride_[0] + crop_.x;
+ 	const uint8_t *srcUV = sourceMapped.planes()[1].data() +
+ 			       crop_.y / 2 * sourceStride_[1] + crop_.x;
+-	int ret = libyuv::NV12Scale(srcY,
+-				    sourceStride_[0],
+-				    srcUV,
+-				    sourceStride_[1],
+-				    crop_.width, crop_.height,
+-				    destination->plane(0).data(),
+-				    destination->stride(0),
+-				    destination->plane(1).data(),
+-				    destination->stride(1),
+-				    destinationSize_.width,
+-				    destinationSize_.height,
+-				    libyuv::FilterMode::kFilterBilinear);
++	uint8_t *dstY = rgbOutput_ ? scaledNV12_.data() : destination->plane(0).data();
++	uint8_t *dstUV = rgbOutput_ ? dstY + destinationSize_.width * destinationSize_.height
++				  : destination->plane(1).data();
++	const int dstYStride = rgbOutput_ ? destinationSize_.width : destination->stride(0);
++	const int dstUVStride = rgbOutput_ ? destinationSize_.width : destination->stride(1);
++	int ret = libyuv::NV12Scale(srcY, sourceStride_[0], srcUV, sourceStride_[1],
++		crop_.width, crop_.height, dstY, dstYStride, dstUV, dstUVStride,
++		destinationSize_.width, destinationSize_.height, libyuv::kFilterBilinear);
++	if (!ret && rgbOutput_) {
++		/* DebayerCpu::pairToNV12 is full-range BT.601 (JFIF). libyuv's
++		 * ABGR output is R,G,B,A in memory, matching DRM ABGR8888. */
++		ret = libyuv::NV12ToABGRMatrix(dstY, dstYStride, dstUV, dstUVStride,
++			destination->plane(0).data(), destination->stride(0),
++			&libyuv::kYuvJPEGConstants, destinationSize_.width, destinationSize_.height);
++	}
+ 	if (ret) {
+-		LOG(YUV, Error) << "Failed NV12 scaling: " << ret;
++		LOG(YUV, Error) << "Failed NV12 scaling/RGBA conversion: " << ret;
+ 		processComplete.emit(streamBuffer, PostProcessor::Status::Error);
+ 		return;
+ 	}
+@@ -100,7 +104,7 @@
+ 				<< source.planes().size();
+ 		return false;
+ 	}
+-	if (destination.numPlanes() != 2) {
++	if (destination.numPlanes() != (rgbOutput_ ? 1u : 2u)) {
+ 		LOG(YUV, Error) << "Invalid number of destination planes: "
+ 				<< destination.numPlanes();
+ 		return false;
+@@ -117,8 +121,9 @@
+ 			<< sourceLength_[1] << "}";
+ 		return false;
+ 	}
+-	const PixelFormatInfo &nv12Info = PixelFormatInfo::info(formats::NV12);
+-	for (unsigned int i = 0; i < 2; ++i) {
++	const PixelFormatInfo &nv12Info = PixelFormatInfo::info(
++		rgbOutput_ ? formats::ABGR8888 : formats::NV12);
++	for (unsigned int i = 0; i < destination.numPlanes(); ++i) {
+ 		const unsigned int stride = destination.stride(i);
+ 		if (stride < nv12Info.stride(destinationSize_.width, i, 1) ||
+ 		    destination.plane(i).size() < nv12Info.planeSize(destinationSize_.height, i, stride)) {
+--- a/src/android/yuv/post_processor_yuv.h
++++ b/src/android/yuv/post_processor_yuv.h
+@@ -10,6 +10,7 @@
+ #include "../post_processor.h"
+ 
+ #include <libcamera/geometry.h>
++#include <vector>
+ 
+ class PostProcessorYuv : public PostProcessor
+ {
+@@ -26,6 +27,8 @@
+ 	void calculateLengths(const libcamera::StreamConfiguration &inCfg,
+ 			      const libcamera::StreamConfiguration &outCfg);
+ 
++	bool rgbOutput_ = false;
++	std::vector<uint8_t> scaledNV12_;
+ 	libcamera::Size sourceSize_;
+ 	libcamera::Size destinationSize_;
+ 	libcamera::Rectangle crop_; /* A6L: source area with the destination aspect ratio */
+--- a/src/android/camera_stream.h
++++ b/src/android/camera_stream.h
+@@ -182,6 +182,7 @@
+ 	 */
+ 	std::unique_ptr<libcamera::Mutex> mutex_;
+ 	std::unique_ptr<PostProcessor> postProcessor_;
++	libcamera::PixelFormat outputFormat_;
+ 
+ 	std::unique_ptr<PostProcessorWorker> worker_;
+ };
+--- /dev/null
++++ b/src/android/camera_preview.h
+@@ -0,0 +1,33 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++#pragma once
++#include <hardware/gralloc.h>
++#include <hardware/camera3.h>
++#include <system/graphics.h>
++#include <libcamera/formats.h>
++
++/* Keep in sync with the vkms minigbm IMPL_DEF camera-display resolver.
++ * CPU-only / encoder / explicit YUV streams keep their normal format.
++ * The pipeline still supplies internal NV12; this is the Android destination.
++ */
++inline libcamera::PixelFormat a9CameraOutputFormat(int format, uint32_t usage,
++                                                libcamera::PixelFormat fallback)
++{
++	if (format == HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED &&
++	    (usage & GRALLOC_USAGE_HW_CAMERA_WRITE) &&
++	    (usage & (GRALLOC_USAGE_HW_TEXTURE | GRALLOC_USAGE_HW_COMPOSER |
++	              GRALLOC_USAGE_HW_RENDER)) &&
++	    !(usage & GRALLOC_USAGE_HW_VIDEO_ENCODER))
++		return libcamera::formats::ABGR8888;
++	return fallback;
++}
++
++/* Publish the concrete format to camera3/HIDL: Mesa's fallback importer
++ * cannot inspect even RGB-backed AHBs still labelled IMPLEMENTATION_DEFINED.
++ * The HAL must retain the destination format after this permitted override. */
++inline void a9OverrideCameraPreviewFormat(camera3_stream_t &stream,
++                                         libcamera::PixelFormat destination)
++{
++	if (stream.format == HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED &&
++	    destination == libcamera::formats::ABGR8888)
++		stream.format = HAL_PIXEL_FORMAT_RGBA_8888;
++}
+--- /dev/null
++++ b/src/android/camera_stream_config.h
+@@ -0,0 +1,269 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++#pragma once
++#include <algorithm>
++#include <vector>
++#include <libcamera/base/log.h>
++#include <libcamera/base/utils.h>
++#include "libcamera/internal/formats.h"
++#include "camera_stream.h"
++
++using libcamera::StreamConfiguration;
++using libcamera::LogCategory;
++#include <libcamera/formats.h>
++LOG_DECLARE_CATEGORY(HAL)
++
++/*
++ * \struct Camera3StreamConfig
++ * \brief Data to store StreamConfiguration associated with camera3_stream(s)
++ * \var streams List of the pairs of a stream requested by Android HAL client
++ * and CameraStream::Type associated with the stream
++ * \var config StreamConfiguration for streams
++ */
++struct Camera3StreamConfig {
++	struct Camera3Stream {
++		camera3_stream_t *stream;
++		CameraStream::Type type;
++	};
++
++	std::vector<Camera3Stream> streams;
++	StreamConfiguration config;
++};
++
++/* Android-to-pipeline planning, shared by configureStreams and host replay.
++ * Pipeline validation/allocation still runs in CameraDevice on the device. */
++template<typename FormatResolver>
++int a9PlanCamera3Streams(camera3_stream_configuration_t *stream_list,
++                         FormatResolver toPixelFormat,
++                         std::vector<Camera3StreamConfig> &streamConfigs,
++                         camera3_stream_t *&jpegStream)
++{
++	using namespace libcamera;
++	if (!stream_list || !stream_list->num_streams)
++		return -EINVAL;
++	streamConfigs.clear();
++	streamConfigs.reserve(stream_list->num_streams);
++
++	/* First handle all non-MJPEG streams. */
++	jpegStream = nullptr;
++	for (unsigned int i = 0; i < stream_list->num_streams; ++i) {
++		camera3_stream_t *stream = stream_list->streams[i];
++		Size size(stream->width, stream->height);
++
++		PixelFormat format = toPixelFormat(stream->format);
++
++
++		if (!format.isValid())
++			return -EINVAL;
++
++		/* \todo Support rotation. */
++		if (stream->rotation != CAMERA3_STREAM_ROTATION_0) {
++			LOG(HAL, Error) << "Rotation is not supported";
++			return -EINVAL;
++		}
++#if defined(OS_CHROMEOS)
++		if (stream->crop_rotate_scale_degrees != CAMERA3_STREAM_ROTATION_0) {
++			LOG(HAL, Error) << "Rotation is not supported";
++			return -EINVAL;
++		}
++#endif
++
++		/* Defer handling of MJPEG streams until all others are known. */
++		if (stream->format == HAL_PIXEL_FORMAT_BLOB) {
++			if (jpegStream) {
++				LOG(HAL, Error)
++					<< "Multiple JPEG streams are not supported";
++				return -EINVAL;
++			}
++
++			jpegStream = stream;
++			continue;
++		}
++
++		/*
++		 * While gralloc usage flags are supposed to report usage
++		 * patterns to select a suitable buffer allocation strategy, in
++		 * practice they're also used to make other decisions, such as
++		 * selecting the actual format for the IMPLEMENTATION_DEFINED
++		 * HAL pixel format. To avoid issues, we thus have to set the
++		 * GRALLOC_USAGE_HW_CAMERA_WRITE flag unconditionally, even for
++		 * streams that will be produced in software.
++		 */
++		stream->usage |= GRALLOC_USAGE_HW_CAMERA_WRITE;
++
++		/*
++		 * If a CameraStream with the same size and format as the
++		 * current stream has already been requested, associate the two.
++		 */
++		auto iter = std::find_if(
++			streamConfigs.begin(), streamConfigs.end(),
++			[&size, &format](const Camera3StreamConfig &streamConfig) {
++				return streamConfig.config.size == size &&
++				       streamConfig.config.pixelFormat == format;
++			});
++		if (iter != streamConfigs.end()) {
++			/* Add usage to copy the buffer in streams[0] to stream. */
++			iter->streams[0].stream->usage |= GRALLOC_USAGE_SW_READ_OFTEN;
++			stream->usage |= GRALLOC_USAGE_SW_WRITE_OFTEN;
++			iter->streams.push_back({ stream, CameraStream::Type::Mapped });
++			continue;
++		}
++
++		Camera3StreamConfig streamConfig;
++		streamConfig.streams = { { stream, CameraStream::Type::Direct } };
++		streamConfig.config.size = size;
++		streamConfig.config.pixelFormat = format;
++		streamConfigs.push_back(std::move(streamConfig));
++	}
++
++	/* Now handle the MJPEG streams, adding a new stream if required. */
++	if (jpegStream) {
++		CameraStream::Type type;
++		int index = -1;
++
++		/* Search for a compatible stream in the non-JPEG ones. */
++		for (size_t i = 0; i < streamConfigs.size(); ++i) {
++			Camera3StreamConfig &streamConfig = streamConfigs[i];
++			const auto &cfg = streamConfig.config;
++
++			/*
++			 * \todo The PixelFormat must also be compatible with
++			 * the encoder.
++			 */
++			if (cfg.size.width != jpegStream->width ||
++			    cfg.size.height != jpegStream->height)
++				continue;
++
++			LOG(HAL, Info)
++				<< "Android JPEG stream mapped to libcamera stream " << i;
++
++			type = CameraStream::Type::Mapped;
++			index = i;
++
++			/*
++			 * The source stream will be read by software to
++			 * produce the JPEG stream.
++			 */
++			camera3_stream_t *stream = streamConfig.streams[0].stream;
++			stream->usage |= GRALLOC_USAGE_SW_READ_OFTEN;
++			break;
++		}
++
++		/*
++		 * Without a compatible match for JPEG encoding we must
++		 * introduce a new stream to satisfy the request requirements.
++		 */
++		if (index < 0) {
++			/*
++			 * \todo The pixelFormat should be a 'best-fit' choice
++			 * and may require a validation cycle. This is not yet
++			 * handled, and should be considered as part of any
++			 * stream configuration reworks.
++			 */
++			Camera3StreamConfig streamConfig;
++			streamConfig.config.size.width = jpegStream->width;
++			streamConfig.config.size.height = jpegStream->height;
++			streamConfig.config.pixelFormat = formats::NV12;
++			streamConfigs.push_back(std::move(streamConfig));
++
++			LOG(HAL, Info) << "Adding " << streamConfig.config.toString()
++				       << " for MJPEG support";
++
++			type = CameraStream::Type::Internal;
++			index = streamConfigs.size() - 1;
++		}
++
++		/* The JPEG stream will be produced by software. */
++		jpegStream->usage |= GRALLOC_USAGE_SW_WRITE_OFTEN;
++
++		streamConfigs[index].streams.push_back({ jpegStream, type });
++	}
++
++	/*
++	 * A6L: pipelines with a single processed output (simple pipeline +
++	 * software ISP) cannot produce several processed streams. Merge all
++	 * the processed streams onto one libcamera stream: the JPEG size if a
++	 * JPEG stream is requested (the encoder needs identical input and
++	 * output sizes), the largest requested size otherwise. The other
++	 * streams become Mapped streams scaled by the YUV post-processor.
++	 */
++	if (!utils::secure_getenv("LIBCAMERA_HAL_MULTI_STREAM")) {
++		std::vector<size_t> processed;
++		for (size_t i = 0; i < streamConfigs.size(); ++i) {
++			const PixelFormatInfo &info =
++				PixelFormatInfo::info(streamConfigs[i].config.pixelFormat);
++			if (info.colourEncoding != PixelFormatInfo::ColourEncodingRAW)
++				processed.push_back(i);
++		}
++
++		if (processed.size() > 1) {
++			size_t source = processed[0];
++			bool hasJpeg = false;
++			for (size_t i : processed) {
++				for (const auto &s : streamConfigs[i].streams) {
++					if (s.stream == jpegStream) {
++						source = i;
++						hasJpeg = true;
++					}
++				}
++			}
++			if (!hasJpeg) {
++				for (size_t i : processed) {
++					if (streamConfigs[i].config.size.width * streamConfigs[i].config.size.height >
++					    streamConfigs[source].config.size.width * streamConfigs[source].config.size.height)
++						source = i;
++				}
++			}
++
++			Camera3StreamConfig &src = streamConfigs[source];
++			camera3_stream_t *srcStream = src.streams[0].stream;
++			for (size_t i : processed) {
++				if (i == source)
++					continue;
++				for (const auto &s : streamConfigs[i].streams) {
++					if (s.stream->width > src.config.size.width ||
++					    s.stream->height > src.config.size.height) {
++						LOG(HAL, Error)
++							<< "Single-stream mode: " << s.stream->width
++							<< "x" << s.stream->height
++							<< " larger than the source stream "
++							<< src.config.size;
++						return -EINVAL;
++					}
++					srcStream->usage |= GRALLOC_USAGE_SW_READ_OFTEN;
++					s.stream->usage |= GRALLOC_USAGE_SW_WRITE_OFTEN;
++					src.streams.push_back({ s.stream, CameraStream::Type::Mapped });
++				}
++			}
++
++			LOG(HAL, Info) << "Single-stream mode: " << src.streams.size()
++				       << " Android streams on one " << src.config.toString()
++				       << " libcamera stream";
++
++			std::vector<Camera3StreamConfig> merged;
++			for (size_t i = 0; i < streamConfigs.size(); ++i) {
++				if (i == source ||
++				    std::find(processed.begin(), processed.end(), i) == processed.end())
++					merged.push_back(std::move(streamConfigs[i]));
++			}
++			streamConfigs = std::move(merged);
++		}
++	}
++
++	/*
++	 * A6L's software ISP writes its configured packed stride. minigbm NV12
++	 * uses Venus row/scanline alignment, so produce into internal buffers
++	 * and let the YUV processor copy to each Android buffer's actual layout.
++	 */
++	for (auto &streamConfig : streamConfigs) {
++		if (streamConfig.config.pixelFormat != formats::NV12)
++			continue;
++		for (auto &stream : streamConfig.streams) {
++			if (stream.type == CameraStream::Type::Direct) {
++				stream.type = CameraStream::Type::Internal;
++				stream.stream->usage |= GRALLOC_USAGE_SW_WRITE_OFTEN;
++			}
++		}
++	}
++
++	return 0;
++}

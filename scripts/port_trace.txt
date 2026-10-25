@@ -1,0 +1,200 @@
+
+16:35:52: INFO: FH_LOADER WAS CALLED EXACTLY LIKE THIS
+************************************************
+fh_loader.exe --port=\\.\COM3 --sendxml=C:\Users\dmayala\Desktop\A9\_reset.xml --search_path=C:\Users\dmayala\Desktop\A9 --memoryname=ufs --noprompt 
+************************************************
+
+16:35:52: DEBUG: Binary build date: Jun 25 2019 @ 03:16:10
+
+16:35:52: DEBUG: Build Version: 19.06.25.03.16.10
+
+16:35:52: INFO: Current working dir (cwd): \\wsl.localhost\NixOS\home\nixos\A9\scripts\
+16:35:52: INFO: Showing network mappings to allow debugging
+16:35:52: DEBUG: New connections will be remembered.
+
+16:35:52: DEBUG: 
+
+16:35:52: DEBUG: 
+
+16:35:52: DEBUG: Status       Local     Remote                    Network
+
+16:35:52: DEBUG: 
+
+16:35:52: DEBUG: -------------------------------------------------------------------------------
+
+16:35:52: DEBUG: Disconnected Z:        \\Ceramic\Media           Microsoft Windows Network
+
+16:35:52: DEBUG: The command completed successfully.
+
+16:35:52: DEBUG: 
+
+16:35:52: INFO: 
+
+
+
+16:35:52: INFO: Trying to store 'C:\Users\dmayala\Desktop\A9\_reset.xml' in string table
+16:35:52: DEBUG: ==================================================================================
+16:35:52: DEBUG: ==================================================================================
+16:35:52: INFO: Looking for file 'C:\Users\dmayala\Desktop\A9\_reset.xml'
+16:35:52: DEBUG: 2. Calling fopen('C:\Users\dmayala\Desktop\A9\_reset.xml') with AccessMode='rb'
+16:35:52: DEBUG: Trying get filesize, calling fseek()
+16:35:52: DEBUG: Found 'C:\Users\dmayala\Desktop\A9\_reset.xml' (78 bytes)
+16:35:52: DEBUG: 2. Calling fopen('C:\Users\dmayala\Desktop\A9\_reset.xml') with AccessMode='r'
+16:35:52: DEBUG: Trying get filesize, calling fseek()
+16:35:52: INFO: User wants to talk to port '\\.\COM3'
+16:35:52: DEBUG: port_fd=0x128
+
+16:35:52: INFO: Took       0.00000000 seconds to open port
+16:35:52: INFO: Sorting TAGS to ensure order is <configure>,<erase>, others, <patch>,<power>
+16:35:52: INFO: Sending <configure>
+16:35:52: DEBUG: CHANNEL DATA (P0000) (H00202) (    227 bytes) - HOST TO TARGET -->
+===========================================================================================================
+<?xml version="1.0" encoding="UTF-8" ?>
+<data>
+<configure MemoryName="ufs" Verbose="0" AlwaysValidate="0" MaxDigestTableSizeInBytes="8192" MaxPayloadSizeToTargetInBytes="1048576" ZlpAwareHost="1" SkipStorageInit="0" />
+</data>
+
+============================================================================================================
+
+16:35:52: DEBUG: CharsInBuffer=0 Trying to read from USB 8192 bytes
+16:35:52: DEBUG: CHANNEL DATA (489 bytes) <-- TARGET to HOST
+16:35:52: DEBUG: CharsInBuffer = 489
+16:35:52: DEBUG: printBuffer:6017 PRETTYPRINT Buffer is 489 bytes
+
+16:35:52: DEBUG: printBuffer:6094 3C 3F 78 6D 6C 20 76 65 72 73 69 6F 6E 3D 22 31 <?xml version="1
+16:35:52: DEBUG: printBuffer:6094 2E 30 22 20 65 6E 63 6F 64 69 6E 67 3D 22 55 54 .0" encoding="UT
+16:35:52: DEBUG: printBuffer:6094 46 2D 38 22 20 3F 3E 0A 3C 64 61 74 61 3E 0A 3C F-8" ?>.<data>.<
+16:35:52: DEBUG: printBuffer:6094 6C 6F 67 20 76 61 6C 75 65 3D 22 49 4E 46 4F 3A log value="INFO:
+16:35:52: DEBUG: printBuffer:6094 20 43 61 6C 6C 69 6E 67 20 68 61 6E 64 6C 65 72  Calling handler
+16:35:52: DEBUG: printBuffer:6094 20 66 6F 72 20 63 6F 6E 66 69 67 75 72 65 22 20  for configure" 
+16:35:52: DEBUG: printBuffer:6094 2F 3E 3C 2F 64 61 74 61 3E 3C 3F 78 6D 6C 20 76 /></data><?xml v
+16:35:52: DEBUG: printBuffer:6094 65 72 73 69 6F 6E 3D 22 31 2E 30 22 20 65 6E 63 ersion="1.0" enc
+16:35:52: DEBUG: printBuffer:6094 6F 64 69 6E 67 3D 22 55 54 46 2D 38 22 20 3F 3E oding="UTF-8" ?>
+16:35:52: DEBUG: printBuffer:6094 0A 3C 64 61 74 61 3E 0A 3C 6C 6F 67 20 76 61 6C .<data>.<log val
+16:35:52: DEBUG: printBuffer:6094 75 65 3D 22 49 4E 46 4F 3A 20 53 74 6F 72 61 67 ue="INFO: Storag
+16:35:52: DEBUG: printBuffer:6094 65 20 74 79 70 65 20 73 65 74 20 74 6F 20 76 61 e type set to va
+16:35:52: DEBUG: printBuffer:6094 6C 75 65 20 55 46 53 22 20 2F 3E 3C 2F 64 61 74 lue UFS" /></dat
+16:35:52: DEBUG: printBuffer:6094 61 3E 3C 3F 78 6D 6C 20 76 65 72 73 69 6F 6E 3D a><?xml version=
+16:35:52: DEBUG: printBuffer:6094 22 31 2E 30 22 20 65 6E 63 6F 64 69 6E 67 3D 22 "1.0" encoding="
+16:35:52: DEBUG: printBuffer:6094 55 54 46 2D 38 22 20 3F 3E 0A 3C 64 61 74 61 3E UTF-8" ?>.<data>
+16:35:52: DEBUG: printBuffer:6094 0A 3C 72 65 73 70 6F 6E 73 65 20 76 61 6C 75 65 .<response value
+16:35:52: DEBUG: printBuffer:6094 3D 22 41 43 4B 22 20 4D 65 6D 6F 72 79 4E 61 6D ="ACK" MemoryNam
+16:35:52: DEBUG: printBuffer:6094 65 3D 22 55 46 53 22 20 4D 69 6E 56 65 72 73 69 e="UFS" MinVersi
+16:35:52: DEBUG: printBuffer:6094 6F 6E 53 75 70 70 6F 72 74 65 64 3D 22 31 22 20 onSupported="1" 
+16:35:52: DEBUG: printBuffer:6094 56 65 72 73 69 6F 6E 3D 22 31 22 20 4D 61 78 50 Version="1" MaxP
+16:35:52: DEBUG: printBuffer:6094 61 79 6C 6F 61 64 53 69 7A 65 54 6F 54 61 72 67 ayloadSizeToTarg
+16:35:52: DEBUG: printBuffer:6094 65 74 49 6E 42 79 74 65 73 3D 22 31 30 34 38 35 etInBytes="10485
+16:35:52: DEBUG: printBuffer:6094 37 36 22 20 4D 61 78 50 61 79 6C 6F 61 64 53 69 76" MaxPayloadSi
+16:35:52: DEBUG: printBuffer:6094 7A 65 54 6F 54 61 72 67 65 74 49 6E 42 79 74 65 zeToTargetInByte
+16:35:52: DEBUG: printBuffer:6094 73 53 75 70 70 6F 72 74 65 64 3D 22 31 30 34 38 sSupported="1048
+16:35:52: DEBUG: printBuffer:6094 35 37 36 22 20 4D 61 78 58 4D 4C 53 69 7A 65 49 576" MaxXMLSizeI
+16:35:52: DEBUG: printBuffer:6094 6E 42 79 74 65 73 3D 22 34 30 39 36 22 20 44 61 nBytes="4096" Da
+16:35:52: DEBUG: printBuffer:6094 74 65 54 69 6D 65 3D 22 4A 75 6C 20 31 32 20 32 teTime="Jul 12 2
+16:35:52: DEBUG: printBuffer:6094 30 32 32 20 2D 20 32 32 3A 33 36 3A 30 33 22 20 022 - 22:36:03" 
+16:35:52: DEBUG: printBuffer:6094 2F 3E 3C 2F 64 61 74 61 3E                      /></data>
+16:35:52: DEBUG: printBuffer:6107 
+
+
+16:35:52: DEBUG: XML FILE (105 bytes): CharsInBuffer=489-105=384
+-------------------------------------------------------------------------------------------
+<?xml version="1.0" encoding="UTF-8" ?>
+<data>
+<log value="INFO: Calling handler for configure" /></data>
+-------------------------------------------------------------------------------------------
+
+16:35:52: INFO: TARGET SAID: 'INFO: Calling handler for configure'
+16:35:52: DEBUG: XML FILE (105 bytes): CharsInBuffer=384-105=279
+-------------------------------------------------------------------------------------------
+<?xml version="1.0" encoding="UTF-8" ?>
+<data>
+<log value="INFO: Storage type set to value UFS" /></data>
+-------------------------------------------------------------------------------------------
+
+16:35:52: INFO: TARGET SAID: 'INFO: Storage type set to value UFS'
+16:35:52: DEBUG: XML FILE (279 bytes): CharsInBuffer=279-279=0
+-------------------------------------------------------------------------------------------
+<?xml version="1.0" encoding="UTF-8" ?>
+<data>
+<response value="ACK" MemoryName="UFS" MinVersionSupported="1" Version="1" MaxPayloadSizeToTargetInBytes="1048576" MaxPayloadSizeToTargetInBytesSupported="1048576" MaxXMLSizeInBytes="4096" DateTime="Jul 12 2022 - 22:36:03" /></data>
+-------------------------------------------------------------------------------------------
+
+16:35:52: DEBUG: Response was 'ACK'
+16:35:52: INFO: fh.attrs.MaxPayloadSizeToTargetInBytes = 1048576
+16:35:52: INFO: fh.attrs.MaxPayloadSizeToTargetInBytesSupported = 1048576
+16:35:52: DEBUG: Got the ACK for the <configure>
+16:35:52: INFO: Sending <power>
+16:35:52: DEBUG: CHANNEL DATA (P0001) (H00203) (     97 bytes) - HOST TO TARGET -->
+===========================================================================================================
+<?xml version="1.0" encoding="UTF-8" ?>
+<data>
+<power value="reset" DelayInSeconds="1" />
+</data>
+============================================================================================================
+
+16:35:52: DEBUG: CharsInBuffer=0 Trying to read from USB 8192 bytes
+16:35:52: DEBUG: CHANNEL DATA (454 bytes) <-- TARGET to HOST
+16:35:52: DEBUG: CharsInBuffer = 454
+16:35:52: DEBUG: printBuffer:6017 PRETTYPRINT Buffer is 454 bytes
+
+16:35:52: DEBUG: printBuffer:6094 3C 3F 78 6D 6C 20 76 65 72 73 69 6F 6E 3D 22 31 <?xml version="1
+16:35:52: DEBUG: printBuffer:6094 2E 30 22 20 65 6E 63 6F 64 69 6E 67 3D 22 55 54 .0" encoding="UT
+16:35:52: DEBUG: printBuffer:6094 46 2D 38 22 20 3F 3E 0A 3C 64 61 74 61 3E 0A 3C F-8" ?>.<data>.<
+16:35:52: DEBUG: printBuffer:6094 6C 6F 67 20 76 61 6C 75 65 3D 22 49 4E 46 4F 3A log value="INFO:
+16:35:52: DEBUG: printBuffer:6094 20 43 61 6C 6C 69 6E 67 20 68 61 6E 64 6C 65 72  Calling handler
+16:35:52: DEBUG: printBuffer:6094 20 66 6F 72 20 70 6F 77 65 72 22 20 2F 3E 3C 2F  for power" /></
+16:35:52: DEBUG: printBuffer:6094 64 61 74 61 3E 3C 3F 78 6D 6C 20 76 65 72 73 69 data><?xml versi
+16:35:52: DEBUG: printBuffer:6094 6F 6E 3D 22 31 2E 30 22 20 65 6E 63 6F 64 69 6E on="1.0" encodin
+16:35:52: DEBUG: printBuffer:6094 67 3D 22 55 54 46 2D 38 22 20 3F 3E 0A 3C 64 61 g="UTF-8" ?>.<da
+16:35:52: DEBUG: printBuffer:6094 74 61 3E 0A 3C 72 65 73 70 6F 6E 73 65 20 76 61 ta>.<response va
+16:35:52: DEBUG: printBuffer:6094 6C 75 65 3D 22 41 43 4B 22 20 72 61 77 6D 6F 64 lue="ACK" rawmod
+16:35:52: DEBUG: printBuffer:6094 65 3D 22 66 61 6C 73 65 22 20 2F 3E 3C 2F 64 61 e="false" /></da
+16:35:52: DEBUG: printBuffer:6094 74 61 3E 3C 3F 78 6D 6C 20 76 65 72 73 69 6F 6E ta><?xml version
+16:35:52: DEBUG: printBuffer:6094 3D 22 31 2E 30 22 20 65 6E 63 6F 64 69 6E 67 3D ="1.0" encoding=
+16:35:52: DEBUG: printBuffer:6094 22 55 54 46 2D 38 22 20 3F 3E 0A 3C 64 61 74 61 "UTF-8" ?>.<data
+16:35:52: DEBUG: printBuffer:6094 3E 0A 3C 6C 6F 67 20 76 61 6C 75 65 3D 22 49 4E >.<log value="IN
+16:35:52: DEBUG: printBuffer:6094 46 4F 3A 20 57 69 6C 6C 20 69 73 73 75 65 20 72 FO: Will issue r
+16:35:52: DEBUG: printBuffer:6094 65 73 65 74 2F 70 6F 77 65 72 20 6F 66 66 20 31 eset/power off 1
+16:35:52: DEBUG: printBuffer:6094 30 30 30 30 30 30 20 75 73 65 63 6F 6E 64 73 2C 000000 useconds,
+16:35:52: DEBUG: printBuffer:6094 20 69 66 20 74 68 69 73 20 68 61 6E 67 73 20 63  if this hangs c
+16:35:52: DEBUG: printBuffer:6094 68 65 63 6B 20 69 66 20 77 61 74 63 68 64 6F 67 heck if watchdog
+16:35:52: DEBUG: printBuffer:6094 20 69 73 20 65 6E 61 62 6C 65 64 22 20 2F 3E 3C  is enabled" /><
+16:35:52: DEBUG: printBuffer:6094 2F 64 61 74 61 3E 3C 3F 78 6D 6C 20 76 65 72 73 /data><?xml vers
+16:35:52: DEBUG: printBuffer:6094 69 6F 6E 3D 22 31 2E 30 22 20 65 6E 63 6F 64 69 ion="1.0" encodi
+16:35:52: DEBUG: printBuffer:6094 6E 67 3D 22 55 54 46 2D 38 22 20 3F 3E 0A 3C 64 ng="UTF-8" ?>.<d
+16:35:52: DEBUG: printBuffer:6094 61 74 61 3E 0A 3C 6C 6F 67 20 76 61 6C 75 65 3D ata>.<log value=
+16:35:52: DEBUG: printBuffer:6094 22 49 4E 46 4F 3A 20 62 73 70 5F 74 61 72 67 65 "INFO: bsp_targe
+16:35:52: DEBUG: printBuffer:6094 74 5F 72 65 73 65 74 28 29 20 30 22 20 2F 3E 3C t_reset() 0" /><
+16:35:52: DEBUG: printBuffer:6094 2F 64 61 74 61 3E                               /data>
+16:35:52: DEBUG: printBuffer:6107 
+
+
+16:35:52: DEBUG: XML FILE (101 bytes): CharsInBuffer=454-101=353
+-------------------------------------------------------------------------------------------
+<?xml version="1.0" encoding="UTF-8" ?>
+<data>
+<log value="INFO: Calling handler for power" /></data>
+-------------------------------------------------------------------------------------------
+
+16:35:52: INFO: TARGET SAID: 'INFO: Calling handler for power'
+16:35:52: DEBUG: XML FILE (94 bytes): CharsInBuffer=353-94=259
+-------------------------------------------------------------------------------------------
+<?xml version="1.0" encoding="UTF-8" ?>
+<data>
+<response value="ACK" rawmode="false" /></data>
+-------------------------------------------------------------------------------------------
+
+16:35:52: DEBUG: Response was 'ACK'
+16:35:52: DEBUG: Got the ACK
+16:35:52: INFO: ==============================================================
+16:35:52: INFO: Files used and their paths
+16:35:52: INFO:   1 '\\wsl.localhost\NixOS\home\nixos\A9\scripts\port_trace.txt'
+16:35:52: INFO:   2 'C:\Users\dmayala\Desktop\A9\_reset.xml'
+16:35:52: INFO:      _             (done)
+16:35:52: INFO:     | |                 
+16:35:52: INFO:   __| | ___  _ __   ___ 
+16:35:52: INFO:  / _` |/ _ \| '_ \ / _ \
+16:35:52: INFO: | (_| | (_) | | | |  __/
+16:35:52: INFO:  \__,_|\___/|_| |_|\___|
+16:35:52: INFO: {All Finished Successfully}
+
+16:35:52: INFO: Overall to target  0.078 seconds (0.00 Bps)

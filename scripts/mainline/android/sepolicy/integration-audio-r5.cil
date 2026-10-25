@@ -1,0 +1,7 @@
+; Integrated N: preserve R12 and retain the r5 AIDL wrapper environment.
+; The rc explicitly supplies a private LD_LIBRARY_PATH and LD_PRELOAD for the
+; tinyalsa adapter. A secure exec would discard both and lose the adapter.
+; Same targeted init-to-HAL permission already used for the wrapped allocator.
+; The loader uses existing a9ml_audio, already an enforcing script domain with
+; init transition, shell entrypoint, module/ALSA/property permissions in R12.
+(allow init_202504 hal_audio_default (process (noatsecure)))

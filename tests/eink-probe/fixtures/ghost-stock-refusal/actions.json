@@ -1,0 +1,42 @@
+[
+  {
+    "source": "launcher",
+    "actions": [
+      {
+        "name": "source_launcher",
+        "rc": 0,
+        "permission_denied": false
+      },
+      {
+        "name": "clear_source",
+        "rc": 1,
+        "permission_denied": true
+      },
+      {
+        "name": "clear_source2",
+        "rc": 1,
+        "permission_denied": true
+      }
+    ]
+  },
+  {
+    "source": "dark",
+    "actions": [
+      {
+        "name": "source_dark",
+        "rc": 1,
+        "permission_denied": false
+      },
+      {
+        "name": "clear_source",
+        "rc": 1,
+        "permission_denied": true
+      },
+      {
+        "name": "clear_source2",
+        "rc": 1,
+        "permission_denied": true
+      }
+    ]
+  }
+]

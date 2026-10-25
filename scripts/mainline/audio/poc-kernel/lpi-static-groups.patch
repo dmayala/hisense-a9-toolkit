@@ -1,0 +1,88 @@
+--- a/drivers/pinctrl/qcom/pinctrl-lpass-lpi.c
++++ b/drivers/pinctrl/qcom/pinctrl-lpass-lpi.c
+@@ -79,10 +79,29 @@
+ 	return pm_runtime_put_autosuspend(state->dev);
+ }
+ 
++static int a9_lpi_group_count(struct pinctrl_dev *ctrl)
++{
++ struct lpi_pinctrl *p = pinctrl_dev_get_drvdata(ctrl);
++ return p->data->npins;
++}
++static const char *a9_lpi_group_name(struct pinctrl_dev *ctrl, unsigned int n)
++{
++ struct lpi_pinctrl *p = pinctrl_dev_get_drvdata(ctrl);
++ return p->desc.pins[n].name;
++}
++static int a9_lpi_group_pins(struct pinctrl_dev *ctrl, unsigned int n,
++                           const unsigned int **pins, unsigned int *count)
++{
++ struct lpi_pinctrl *p = pinctrl_dev_get_drvdata(ctrl);
++ *pins = &p->desc.pins[n].number;
++ *count = 1;
++ return 0;
++}
++
+ static const struct pinctrl_ops lpi_gpio_pinctrl_ops = {
+-	.get_groups_count	= pinctrl_generic_get_group_count,
+-	.get_group_name		= pinctrl_generic_get_group_name,
+-	.get_group_pins		= pinctrl_generic_get_group_pins,
++	.get_groups_count	= a9_lpi_group_count,
++	.get_group_name		= a9_lpi_group_name,
++	.get_group_pins		= a9_lpi_group_pins,
+ 	.dt_node_to_map		= pinconf_generic_dt_node_to_map_group,
+ 	.dt_free_map		= pinctrl_utils_free_map,
+ };
+@@ -474,28 +493,6 @@
+ 	.dbg_show		= lpi_gpio_dbg_show,
+ };
+ 
+-static int lpi_build_pin_desc_groups(struct lpi_pinctrl *pctrl)
+-{
+-	int i, ret;
+-
+-	for (i = 0; i < pctrl->data->npins; i++) {
+-		const struct pinctrl_pin_desc *pin_info = pctrl->desc.pins + i;
+-
+-		ret = pinctrl_generic_add_group(pctrl->ctrl, pin_info->name,
+-						  (int *)&pin_info->number, 1, NULL);
+-		if (ret < 0)
+-			goto err_pinctrl;
+-	}
+-
+-	return 0;
+-
+-err_pinctrl:
+-	for (; i > 0; i--)
+-		pinctrl_generic_remove_group(pctrl->ctrl, i - 1);
+-
+-	return ret;
+-}
+-
+ int lpi_pinctrl_probe(struct platform_device *pdev)
+ {
+ 	const struct lpi_pinctrl_variant_data *data;
+@@ -568,10 +565,6 @@
+ 		goto err_pinctrl;
+ 	}
+ 
+-	ret = lpi_build_pin_desc_groups(pctrl);
+-	if (ret)
+-		goto err_pinctrl;
+-
+ 	ret = devm_gpiochip_add_data(dev, &pctrl->chip, pctrl);
+ 	if (ret) {
+ 		dev_err(pctrl->dev, "can't add gpio chip\n");
+@@ -590,12 +583,7 @@
+ void lpi_pinctrl_remove(struct platform_device *pdev)
+ {
+ 	struct lpi_pinctrl *pctrl = platform_get_drvdata(pdev);
+-	int i;
+-
+ 	mutex_destroy(&pctrl->lock);
+-
+-	for (i = 0; i < pctrl->data->npins; i++)
+-		pinctrl_generic_remove_group(pctrl->ctrl, i);
+ }
+ EXPORT_SYMBOL_GPL(lpi_pinctrl_remove);
+ 

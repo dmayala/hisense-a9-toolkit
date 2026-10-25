@@ -1,0 +1,164 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: dmayala <dmayala@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 06:00:00 +0000
+Subject: [PATCH 0050] drm/a9_eink: optional Clear UI shadow curve
+
+Clear (mode low byte 3) can map near-black UI text luma (<= 43 after the
+G16 stage) to level 0 while bytes >= 200 keep their exact levels. Mainline
+policy, not the stock calcG16Table: default module parameter clear_shadow=1
+for the test image; eink/clear_shadow (0/1) switches it at run time with a
+full conditioned redraw; 0 reproduces the stock-compatible bytes exactly.
+Every other mode is byte-identical. No power-path, waveform or timing change.
+
+---
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index 2e2060b..798824c 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -206,7 +206,7 @@ struct a9_eink {
+ 	bool clear_req, manual_clear_req, kick, busy, suspending, parked;
+ 	bool kms_teardown;		/* remove: a disable really disables (unlinks) */
+ 	u32 mode;			/* stock mode word, sysfs "mode" */
+-	int controls[3];		/* black, white, contrast */
++	int controls[4];		/* black, white, contrast, clear_shadow (0/1) */
+ 	bool controls_dirty;
+ 	bool test_pattern;		/* root diagnostic input override, shadow_lock */
+ 	wait_queue_head_t wq;
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index 34808c2..1ec2d09 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -94,6 +94,10 @@ static bool enable;
+ module_param(enable, bool, 0644);
+ MODULE_PARM_DESC(enable, "Send drive frames to the E Ink panel (default: no = dry run)");
+ 
++static bool clear_shadow = true;
++module_param(clear_shadow, bool, 0444);
++MODULE_PARM_DESC(clear_shadow, "Initial Clear UI shadow curve (near-black text -> level 0); 0 = stock-compatible Clear bytes. Runtime: eink/clear_shadow");
++
+ static bool input_diagnostics;
+ module_param(input_diagnostics, bool, 0600);
+ MODULE_PARM_DESC(input_diagnostics, "Opt-in numeric input stats; first 4096 samples per device, no reset");
+@@ -703,7 +707,7 @@ static ssize_t a9_ctl_store(struct device *kdev, int i, const char *buf, size_t
+ 	struct a9_eink *a9 = kdev_to_a9(kdev);
+ 	int v;
+ 
+-	if (kstrtoint(buf, 10, &v) || v < 0 || v > 100)
++	if (kstrtoint(buf, 10, &v) || v < 0 || v > (i == 3 ? 1 : 100))
+ 		return -EINVAL;
+ 	mutex_lock(&a9->shadow_lock);
+ 	if (a9->controls[i] != v) {
+@@ -731,6 +735,7 @@ static DEVICE_ATTR_RW(name)
+ A9_CTL_ATTR(black_threshold, 0);
+ A9_CTL_ATTR(white_threshold, 1);
+ A9_CTL_ATTR(contrast, 2);
++A9_CTL_ATTR(clear_shadow, 3);
+ 
+ static ssize_t force_clear_store(struct device *kdev, struct device_attribute *attr,
+ 				 const char *buf, size_t len)
+@@ -939,6 +944,7 @@ static struct attribute *a9_eink_attrs[] = {
+ 	&dev_attr_black_threshold.attr,
+ 	&dev_attr_white_threshold.attr,
+ 	&dev_attr_contrast.attr,
++	&dev_attr_clear_shadow.attr,
+ 	&dev_attr_force_clear.attr,
+ 	&dev_attr_manual_clear.attr,
+ 	&dev_attr_test_pattern.attr,
+@@ -1853,6 +1859,7 @@ static bool a9_take_job(struct a9_eink *a9, struct a9_job *job)
+ 		if (a9->controls_dirty) {
+ 			mutex_lock(&a9->eng_lock);
+ 			a9t_set_controls(&a9->e.st, a9->controls[0], a9->controls[1], a9->controls[2]);
++			a9t_set_clear_shadow(&a9->e.st, a9->controls[3]);
+ 			mutex_unlock(&a9->eng_lock);
+ 			a9->controls_dirty = false;
+ 		}
+@@ -2181,6 +2188,8 @@ static int a9_probe(struct platform_device *pdev)
+ 	a9->controls[0] = 30;
+ 	a9->controls[1] = 30;
+ 	a9->controls[2] = 0;
++	a9->controls[3] = READ_ONCE(clear_shadow) ? 1 : 0;
++	a9->controls_dirty = true;
+ 
+ 	a9->pmic_np = of_parse_phandle(dev->of_node, "hisense,epd-pmic", 0);
+ 	a9->tx.panel_np = of_parse_phandle(dev->of_node, "hisense,transport-panel", 0);
+diff --git a/drivers/gpu/drm/a9_eink/a9tcon.c b/drivers/gpu/drm/a9_eink/a9tcon.c
+index dda0b54..a8c81e6 100644
+--- a/drivers/gpu/drm/a9_eink/a9tcon.c
++++ b/drivers/gpu/drm/a9_eink/a9tcon.c
+@@ -50,6 +50,24 @@ void a9t_init(struct a9t_state *s, const struct a9t_tables *t, uint8_t *cache)
+     s->cache = cache;
+     memset(cache, 0, A9T_FRAME_BYTES);
+     a9t_set_controls(s, 30, 30, 0);
++    /* shadow stays 0: the stock-compatible Clear curve unless a caller opts in */
++}
++
++/* Clear UI shadow curve (mainline policy, NOT the stock calcG16Table): near-black
++ * text levels go to 0 while light greys (>= 200) keep their exact bytes.
++ * docs/mainline-eink-quality.md, runs/eink-stock-policy.md "Weak black in Clear". */
++uint8_t a9t_clear_ui_grey(uint8_t x)
++{
++    if (x <= 30)
++        return 0;
++    if (x < 200)
++        return (uint8_t)((x - 30) * 200 / 170);
++    return x;
++}
++
++void a9t_set_clear_shadow(struct a9t_state *s, int on)
++{
++    s->clear_shadow = on ? 1 : 0;
+ }
+ 
+ /* grey lookup builders 0x1a48c8 (g2) / 0x1a49a4 (g16), EpdSetContrast knobs */
+@@ -75,6 +93,9 @@ void a9t_set_controls(struct a9t_state *s, int32_t black, int32_t white, int32_t
+         else
+             s->g16[x] = (uint8_t)((x - 200) * (c + 55) / 55 + 200 - c);
+     }
++    /* shadow-then-G16, Clear (mode low byte 3) only */
++    for (int32_t x = 0; x < 256; x++)
++        s->g16s[x] = s->g16[a9t_clear_ui_grey((uint8_t)x)];
+ }
+ 
+ /* EinkSwTconThreadHandler 0x1a7a94..0x1a7b28 */
+@@ -228,14 +249,16 @@ void a9t_condition(const struct a9t_state *s, const uint8_t *grey, uint32_t mode
+     case 2:
+         dither16(grey, s->g16, lv, w);
+         return;
+-    case 3:
++    case 3: {
++        const uint8_t *lut = s->clear_shadow ? s->g16s : s->g16;
+         if (hi & 1) {
+-            dither16(grey, s->g16, lv, w);
++            dither16(grey, lut, lv, w);
+             return;
+         }
+         for (size_t i = 0; i < A9T_N; i++)
+-            lv[i] = s->g16[grey[i]] >> 4;
++            lv[i] = lut[grey[i]] >> 4;
+         return;
++    }
+     default: /* 0, 4, 5, 7, 8: no conditioning */
+         for (size_t i = 0; i < A9T_N; i++)
+             lv[i] = grey[i] >> 4;
+diff --git a/drivers/gpu/drm/a9_eink/a9tcon.h b/drivers/gpu/drm/a9_eink/a9tcon.h
+index 69c934c..dd98148 100644
+--- a/drivers/gpu/drm/a9_eink/a9tcon.h
++++ b/drivers/gpu/drm/a9_eink/a9tcon.h
+@@ -85,6 +85,8 @@ struct a9t_request {
+ struct a9t_state {
+     const struct a9t_tables *t;
+     uint8_t g2[256], g16[256];
++    uint8_t g16s[256];          /* Clear UI shadow curve then g16 (mainline policy) */
++    int clear_shadow;           /* 1 = Clear (low byte 3) uses g16s; default 0 */
+     uint8_t scratch[A9T_SLOTS]; /* 0x4c86d9; slot 256 survives 256-slot loads */
+     uint32_t counter;           /* 0x4c7fbc, frame index inside one table pass */
+     uint32_t step;              /* 0x4c86d4, step index of a mode switch */
+@@ -122,6 +124,8 @@ void a9t_sha256_final(struct a9t_sha256_ctx *c, uint8_t out[32]);
+ /* --- core ------------------------------------------------------------------ */
+ void a9t_init(struct a9t_state *s, const struct a9t_tables *t, uint8_t *cache);
+ void a9t_set_controls(struct a9t_state *s, int32_t black, int32_t white, int32_t contrast);
++uint8_t a9t_clear_ui_grey(uint8_t x);
++void a9t_set_clear_shadow(struct a9t_state *s, int on);
+ int a9t_temp_bin(const struct a9t_state *s, int32_t t1, int32_t t2);
+ 
+ /* RGBA (A9T_SRC_BYTES, portrait) -> landscape grey (A9T_N). */

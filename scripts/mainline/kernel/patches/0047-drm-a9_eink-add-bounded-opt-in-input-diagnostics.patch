@@ -1,0 +1,431 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: dmayala <dmayala@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 02:00:00 +0000
+Subject: [PATCH 0047] drm/a9_eink: add bounded opt-in input diagnostics
+
+Observe numeric mode/manual requests and input CPU stages in fixed-size
+aggregates, default off and capped at 4096 samples. Profile virtual-input
+fence waits with per-commit lifetime storage, including nonblocking commits.
+Keep conversion, waveform, worker and all power-path code unchanged.
+
+Add arm64 KUnit coverage for default-off, accounting, async lifetime and
+exhausted budgets. Offline fixture and compat diagnostics live in the
+project repository. No pixels or client/device identities are collected.
+
+---
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index 385ff5b..2e2060b 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -174,6 +174,16 @@ struct a9_session_stats {
+ 	u64 clears, clears_done, transitions, transitions_done;
+ };
+ 
++/* Numeric input diagnostics only; no framebuffer, process or client identity. */
++#define A9_INPUT_SAMPLES 4096
++struct a9_input_stats {
++	u64 count, pixels, full, partial, unchanged, failures;
++	u64 total_ns[4], max_ns[4]; /* CPU begin, shadow wait, conversion, CPU end */
++	u64 fences, fence_total_ns, fence_max_ns;
++	u64 mode_requests, manual_requests, mode_ms, manual_ms;
++	u32 requested_mode, manual_mode;
++};
++
+ struct a9_eink {
+ 	struct drm_device drm;
+ 	struct drm_plane plane;
+@@ -189,6 +199,8 @@ struct a9_eink {
+ 
+ 	/* front side: written by the plane's atomic_update */
+ 	struct mutex shadow_lock;
++	struct a9_input_stats input; /* shadow_lock, never used by power/drive */
++	atomic_t input_reserved, fence_reserved;
+ 	u8 *shadow;			/* landscape grey of the latest commit */
+ 	struct a9e_rect dirty;
+ 	bool clear_req, manual_clear_req, kick, busy, suspending, parked;
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index b3fbd8e..34808c2 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -94,6 +94,35 @@ static bool enable;
+ module_param(enable, bool, 0644);
+ MODULE_PARM_DESC(enable, "Send drive frames to the E Ink panel (default: no = dry run)");
+ 
++static bool input_diagnostics;
++module_param(input_diagnostics, bool, 0600);
++MODULE_PARM_DESC(input_diagnostics, "Opt-in numeric input stats; first 4096 samples per device, no reset");
++
++/* Called under shadow_lock, only on accepted userspace requests. */
++static void a9_input_request(struct a9_eink *a9, bool manual)
++{
++	struct a9_input_stats *d = &a9->input;
++
++	if (!READ_ONCE(input_diagnostics))
++		return;
++	if (manual && d->manual_requests < A9_INPUT_SAMPLES) {
++		d->manual_requests++;
++		d->manual_ms = ktime_to_ms(ktime_get());
++		d->manual_mode = a9->mode;
++	} else if (!manual && d->mode_requests < A9_INPUT_SAMPLES) {
++		d->mode_requests++;
++		d->mode_ms = ktime_to_ms(ktime_get());
++		d->requested_mode = a9->mode;
++	}
++}
++
++/* Reservation prevents concurrent commits from exceeding the fixed budget. */
++static bool a9_input_sample(atomic_t *reserved)
++{
++	return READ_ONCE(input_diagnostics) &&
++		atomic_add_unless(reserved, 1, A9_INPUT_SAMPLES);
++}
++
+ static unsigned int hv_hold_ms = 3000;
+ module_param(hv_hold_ms, uint, 0644);
+ MODULE_PARM_DESC(hv_hold_ms, "Power the pipeline (HV) down this long after the last update; stock: 2-3 s (default 3000, 0 = right after each update)");
+@@ -248,6 +277,9 @@ static void a9_plane_atomic_update(struct drm_plane *plane, struct drm_atomic_co
+ 	enum a9e_fmt fmt;
+ 	const u8 *src;
+ 	int sx, sy, idx;
++	bool measure, full = false;
++	u64 mark = 0, ns[4] = { 0 }, pixels = 0;
++	int access;
+ 
+ 	if (!fb || !a9->crtc.state->active || !ps->visible)
+ 		return;
+@@ -264,14 +296,42 @@ static void a9_plane_atomic_update(struct drm_plane *plane, struct drm_atomic_co
+ 	src = (const u8 *)sps->data[0].vaddr +
+ 	      (size_t)sy * fb->pitches[0] + (size_t)sx * fb->format->cpp[0];
+ 
+-	if (drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE))
++	measure = a9_input_sample(&a9->input_reserved);
++	if (measure)
++		mark = ktime_get_ns();
++	access = drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE);
++	if (measure) {
++		ns[0] = ktime_get_ns() - mark;
++		mark = ktime_get_ns();
++	}
++	if (access) {
++		if (measure) {
++			mutex_lock(&a9->shadow_lock);
++			a9->input.failures++;
++			mutex_unlock(&a9->shadow_lock);
++		}
+ 		goto out;
++	}
+ 	mutex_lock(&a9->shadow_lock);
++	if (measure) {
++		ns[1] = ktime_get_ns() - mark;
++		mark = ktime_get_ns();
++	}
+ 	drm_atomic_helper_damage_iter_init(&iter, old, ps);
+ 	drm_atomic_for_each_plane_damage(&iter, &clip) {
++		if (measure) {
++			pixels += (u64)(clamp(clip.x2 - sx, 0, A9E_FB_W) -
++				clamp(clip.x1 - sx, 0, A9E_FB_W)) *
++				(clamp(clip.y2 - sy, 0, A9E_FB_H) -
++				 clamp(clip.y1 - sy, 0, A9E_FB_H));
++			full |= clip.x1 <= sx && clip.y1 <= sy &&
++				clip.x2 >= sx + A9E_FB_W && clip.y2 >= sy + A9E_FB_H;
++		}
+ 		a9e_fb_to_grey(a9->shadow, src, fb->pitches[0], fmt,
+ 			       clip.x1 - sx, clip.y1 - sy, clip.x2 - sx, clip.y2 - sy, &changed);
+ 	}
++	if (measure)
++		ns[2] = ktime_get_ns() - mark;
+ 	if (!a9e_rect_empty(&changed)) {
+ 		a9e_rect_union(&a9->dirty, &changed);
+ 		/* Keep the newest UI for restore without overwriting the test. */
+@@ -281,7 +341,28 @@ static void a9_plane_atomic_update(struct drm_plane *plane, struct drm_atomic_co
+ 		}
+ 	}
+ 	mutex_unlock(&a9->shadow_lock);
++	if (measure)
++		mark = ktime_get_ns();
+ 	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
++	if (measure) {
++		int i;
++		struct a9_input_stats *d = &a9->input;
++
++		ns[3] = ktime_get_ns() - mark;
++		mutex_lock(&a9->shadow_lock);
++		d->count++;
++		d->pixels += pixels; /* includes overlaps, actual converted work */
++		if (full)
++			d->full++;
++		else
++			d->partial++;
++		d->unchanged += a9e_rect_empty(&changed);
++		for (i = 0; i < 4; i++) {
++			d->total_ns[i] += ns[i];
++			d->max_ns[i] = max(d->max_ns[i], ns[i]);
++		}
++		mutex_unlock(&a9->shadow_lock);
++	}
+ out:
+ 	drm_dev_exit(idx);
+ }
+@@ -487,10 +568,79 @@ static void a9_fixed_route(struct a9_eink *a9)
+ 	cs->encoder_mask = drm_encoder_mask(&a9->encoder);
+ }
+ 
++/* Per-commit storage lives through asynchronous fences and cleanup. Reuse the
++ * existing DRM profiler; no extra waits and no changes to the commit sequence. */
++struct a9_input_commit {
++	struct drm_atomic_commit base;
++	struct drm_atomic_commit_profile profile;
++};
++
++static struct drm_atomic_commit *a9_input_alloc(struct drm_device *dev)
++{
++	struct a9_input_commit *s = kzalloc(sizeof(*s), GFP_KERNEL);
++
++	if (!s)
++		return NULL;
++	if (drm_atomic_commit_init(dev, &s->base) < 0) {
++		kfree(s);
++		return NULL;
++	}
++	return &s->base;
++}
++
++static void a9_input_clear(struct drm_atomic_commit *state)
++{
++	drm_atomic_commit_default_clear(state);
++	state->profile = NULL;
++}
++
++static void a9_input_free(struct drm_atomic_commit *state)
++{
++	drm_atomic_commit_default_release(state);
++	kfree(container_of(state, struct a9_input_commit, base));
++}
++
++static int a9_input_commit(struct drm_device *dev, struct drm_atomic_commit *state,
++			   bool nonblock)
++{
++	struct a9_input_commit *s = container_of(state, struct a9_input_commit, base);
++
++	state->profile = NULL;
++	if (a9_input_sample(&to_a9(dev)->fence_reserved)) {
++		drm_atomic_profile_init(&s->profile);
++		state->profile = &s->profile;
++	}
++	return drm_atomic_helper_commit(dev, state, nonblock);
++}
++
++static void a9_input_tail(struct drm_atomic_commit *state)
++{
++	struct a9_eink *a9 = to_a9(state->dev);
++
++	/* FENCES has completed before the helper enters this callback. */
++	if (state->profile) {
++		u64 ns = state->profile->ns[DRM_ATOMIC_PROFILE_FENCES];
++
++		mutex_lock(&a9->shadow_lock);
++		a9->input.fences++;
++		a9->input.fence_total_ns += ns;
++		a9->input.fence_max_ns = max(a9->input.fence_max_ns, ns);
++		mutex_unlock(&a9->shadow_lock);
++	}
++	drm_atomic_helper_commit_tail(state);
++}
++
++static const struct drm_mode_config_helper_funcs a9_input_helpers = {
++	.atomic_commit_tail = a9_input_tail,
++};
++
+ static const struct drm_mode_config_funcs a9_mode_config_funcs = {
+ 	.fb_create = drm_gem_fb_create_with_dirty,
+ 	.atomic_check = a9_mode_config_check,
+-	.atomic_commit = drm_atomic_helper_commit,
++	.atomic_commit = a9_input_commit,
++	.atomic_state_alloc = a9_input_alloc,
++	.atomic_state_clear = a9_input_clear,
++	.atomic_state_free = a9_input_free,
+ };
+ 
+ DEFINE_DRM_GEM_FOPS(a9_fops);
+@@ -537,6 +687,7 @@ static ssize_t mode_store(struct device *kdev, struct device_attribute *attr,
+ 		return -EINVAL;
+ 	mutex_lock(&a9->shadow_lock);
+ 	a9->mode = m;	/* used by the next update's transition builder */
++	a9_input_request(a9, false);
+ 	mutex_unlock(&a9->shadow_lock);
+ 	return len;
+ }
+@@ -614,6 +765,7 @@ static ssize_t manual_clear_store(struct device *kdev, struct device_attribute *
+ 		return -ENODEV;
+ 	mutex_lock(&a9->shadow_lock);
+ 	a9->manual_clear_req = true;
++	a9_input_request(a9, true);
+ 	a9->kick = true;
+ 	mutex_unlock(&a9->shadow_lock);
+ 	wake_up(&a9->wq);
+@@ -755,7 +907,34 @@ static ssize_t status_show(struct device *kdev, struct device_attribute *attr, c
+ }
+ static DEVICE_ATTR_RO(status);
+ 
++/* Separate from the safety/status snapshot. No per-frame logging or data dump. */
++static ssize_t input_stats_show(struct device *kdev, struct device_attribute *attr, char *buf)
++{
++	struct a9_eink *a9 = kdev_to_a9(kdev);
++	struct a9_input_stats d;
++	ssize_t n;
++	int i;
++
++	mutex_lock(&a9->shadow_lock);
++	d = a9->input;
++	mutex_unlock(&a9->shadow_lock);
++	n = sysfs_emit(buf, "enabled %d limit %u samples %llu failures %llu pixels %llu full %llu partial %llu unchanged %llu\n",
++		READ_ONCE(input_diagnostics), A9_INPUT_SAMPLES, d.count, d.failures,
++		d.pixels, d.full, d.partial, d.unchanged);
++	for (i = 0; i < 4; i++)
++		n += sysfs_emit_at(buf, n, "%s_total_ns %llu %s_max_ns %llu\n",
++			(const char *[]) { "cpu_begin", "shadow_wait", "convert", "cpu_end" }[i], d.total_ns[i],
++			(const char *[]) { "cpu_begin", "shadow_wait", "convert", "cpu_end" }[i], d.max_ns[i]);
++	n += sysfs_emit_at(buf, n, "fences %llu fence_total_ns %llu fence_max_ns %llu\n"
++		"mode_requests %llu mode_ms %llu requested_mode %u manual_requests %llu manual_ms %llu manual_mode %u\n",
++		d.fences, d.fence_total_ns, d.fence_max_ns, d.mode_requests, d.mode_ms,
++		d.requested_mode, d.manual_requests, d.manual_ms, d.manual_mode);
++	return n;
++}
++static DEVICE_ATTR_RO(input_stats);
++
+ static struct attribute *a9_eink_attrs[] = {
++	&dev_attr_input_stats.attr,
+ 	&dev_attr_mode.attr,
+ 	&dev_attr_black_threshold.attr,
+ 	&dev_attr_white_threshold.attr,
+@@ -1955,6 +2134,7 @@ static int a9_kms_init(struct a9_eink *a9)
+ 	int ret;
+ 
+ 	drm->mode_config.funcs = &a9_mode_config_funcs;
++	drm->mode_config.helper_private = &a9_input_helpers;
+ 	/*
+ 	 * Any framebuffer size may be created (the composer imports small layer
+ 	 * buffers, run 6: "bad framebuffer height 49"); the primary plane's
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_kms_test.c b/drivers/gpu/drm/a9_eink/a9_eink_kms_test.c
+index dbccb4f..d594cbc 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_kms_test.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_kms_test.c
+@@ -77,6 +77,7 @@ static struct a9_eink *a9t_dev(struct kunit *test)
+ 
+ enum a9t_op {
+ 	A9T_ACTIVE_FB,		/* drm_hwcomposer: ACTIVE=1 + plane FB/CRTC, no MODE_ID, no connector */
++	A9T_ACTIVE_FB_ASYNC,
+ 	A9T_ACTIVE_OFF,		/* ACTIVE=0 only */
+ 	A9T_MODE_OFF,		/* MODE_ID=0 + ACTIVE=0 + connector CRTC_ID=0 + plane off */
+ 	A9T_CONN_OFF,		/* connector CRTC_ID=0 only */
+@@ -98,6 +99,7 @@ static int a9t_do(struct kunit *test, struct a9_eink *a9, enum a9t_op op,
+ 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, st);
+ 	switch (op) {
+ 	case A9T_ACTIVE_FB:
++	case A9T_ACTIVE_FB_ASYNC:
+ 		cs = drm_atomic_get_crtc_state(st, &a9->crtc);
+ 		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cs);
+ 		cs->active = true;
+@@ -138,7 +140,8 @@ static int a9t_do(struct kunit *test, struct a9_eink *a9, enum a9t_op op,
+ 		KUNIT_ASSERT_EQ(test, drm_atomic_set_crtc_for_connector(conn, NULL), 0);
+ 		break;
+ 	}
+-	ret = commit ? drm_atomic_commit(st) : drm_atomic_check_only(st);
++	ret = !commit ? drm_atomic_check_only(st) :
++		op == A9T_ACTIVE_FB_ASYNC ? drm_atomic_nonblocking_commit(st) : drm_atomic_commit(st);
+ 	drm_modeset_drop_locks(&ctx);
+ 	drm_modeset_acquire_fini(&ctx);
+ 	return ret;
+@@ -165,12 +168,17 @@ static void a9t_expect_fixed(struct kunit *test, struct a9_eink *a9, bool active
+ static void a9t_expect_vblank(struct kunit *test, struct a9_eink *a9, s64 commit_ms)
+ {
+ 	struct drm_vblank_crtc *vb = drm_crtc_vblank_crtc(&a9->crtc);
++	struct drm_crtc_state *cs = a9->crtc.state;
+ 
+ 	KUNIT_EXPECT_EQ(test, a9->crtc.mode.crtc_clock, a9_mode.clock);
+ 	KUNIT_EXPECT_GE(test, vb->framedur_ns, 16000000);
+ 	KUNIT_EXPECT_LE(test, vb->framedur_ns, 17500000);
+-	/* the commit waited for flip_done, sent by the vblank timer: not the 10 s timeout */
+-	KUNIT_EXPECT_LT(test, commit_ms, 1000);
++	/* Check the actual flip completion. Total commit wall time also includes
++	 * full-frame CPU conversion and varies wildly under loaded-host TCG. */
++	KUNIT_ASSERT_NOT_NULL(test, cs->commit);
++	KUNIT_EXPECT_TRUE(test, completion_done(&cs->commit->flip_done));
++	KUNIT_EXPECT_GT(test, drm_crtc_vblank_count(&a9->crtc), 0u);
++	kunit_info(test, "commit completed in %lld ms including input conversion", (long long)commit_ms);
+ }
+ 
+ static s64 a9t_commit_ms(struct kunit *test, struct a9_eink *a9, enum a9t_op op,
+@@ -257,11 +265,71 @@ static void a9t_small_fb(struct kunit *test)
+ 	KUNIT_EXPECT_NE(test, a9t_do(test, a9, A9T_ACTIVE_FB, a9t_fb(test, a9, A9E_FB_W, 49), false), 0);
+ }
+ 
++static void a9t_input_diagnostics(struct kunit *test)
++{
++	struct a9_eink *a9 = a9t_dev(test);
++	struct drm_framebuffer *fb = a9t_fb(test, a9, A9E_FB_W, A9E_FB_H);
++	char *buf = kunit_kzalloc(test, PAGE_SIZE, GFP_KERNEL);
++	/* These stores use only drvdata. A second DRM mock device in the same
++	 * test would collide with the helper's already-registered mock driver. */
++	struct device control = { };
++
++	dev_set_drvdata(&control, &a9->connector);
++
++	KUNIT_ASSERT_NOT_NULL(test, buf);
++	WRITE_ONCE(input_diagnostics, false);
++	KUNIT_ASSERT_EQ(test, a9t_do(test, a9, A9T_ACTIVE_FB, fb, true), 0);
++	KUNIT_EXPECT_EQ(test, a9->input.count, 0);
++	KUNIT_EXPECT_EQ(test, a9->input.fences, 0);
++	WRITE_ONCE(input_diagnostics, true);
++	KUNIT_ASSERT_EQ(test, a9t_do(test, a9, A9T_ACTIVE_FB, fb, true), 0);
++	KUNIT_EXPECT_EQ(test, a9->input.count, 1);
++	KUNIT_EXPECT_EQ(test, a9->input.fences, 1);
++	KUNIT_EXPECT_EQ(test, a9->input.pixels, (u64)A9T_N);
++	KUNIT_EXPECT_EQ(test, a9->input.full, 1);
++	KUNIT_EXPECT_EQ(test, a9->input.unchanged, 1);
++	KUNIT_EXPECT_GT(test, a9->input.total_ns[2], 0);
++	KUNIT_EXPECT_EQ(test, a9->input.total_ns[2], a9->input.max_ns[2]);
++	KUNIT_EXPECT_EQ(test, mode_store(&control, NULL, "515", 3), 3);
++	KUNIT_EXPECT_EQ(test, a9->input.mode_requests, 1);
++	KUNIT_EXPECT_EQ(test, a9->input.requested_mode, 515);
++	KUNIT_EXPECT_GT(test, a9->input.mode_ms, 0);
++	KUNIT_EXPECT_EQ(test, mode_store(&control, NULL, "520", 3), -EINVAL);
++	KUNIT_EXPECT_EQ(test, a9->input.mode_requests, 1);
++	/* Request-only diagnostics: a dummy non-NULL thread, no worker/power. */
++	a9->thread = (struct task_struct *)a9;
++	KUNIT_EXPECT_EQ(test, manual_clear_store(&control, NULL, "1", 1), 1);
++	a9->thread = NULL;
++	KUNIT_EXPECT_EQ(test, a9->input.manual_requests, 1);
++	KUNIT_EXPECT_EQ(test, a9->input.manual_mode, 515);
++	KUNIT_EXPECT_GT(test, input_stats_show(&control, NULL, buf), 0);
++	KUNIT_EXPECT_NOT_NULL(test, strstr(buf, "samples 1 failures 0"));
++	/* Flush via the following synchronous transaction. Both commits own their
++	 * profiler until cleanup, including when fence waits run on a workqueue. */
++	KUNIT_ASSERT_EQ(test, a9t_do(test, a9, A9T_ACTIVE_FB_ASYNC, fb, true), 0);
++	KUNIT_ASSERT_EQ(test, a9t_do(test, a9, A9T_ACTIVE_FB, fb, true), 0);
++	KUNIT_EXPECT_EQ(test, a9->input.count, 3);
++	KUNIT_EXPECT_EQ(test, a9->input.fences, 3);
++	/* Exhaustion and off/on never reset the budgets or affect plane work. */
++	atomic_set(&a9->input_reserved, A9_INPUT_SAMPLES);
++	atomic_set(&a9->fence_reserved, A9_INPUT_SAMPLES);
++	WRITE_ONCE(input_diagnostics, false);
++	WRITE_ONCE(input_diagnostics, true);
++	memset(a9->shadow, 255, A9T_N);
++	KUNIT_ASSERT_EQ(test, a9t_do(test, a9, A9T_ACTIVE_FB, fb, true), 0);
++	KUNIT_EXPECT_EQ(test, a9->shadow[0], 0);
++	KUNIT_EXPECT_EQ(test, a9->input.count, 3);
++	KUNIT_EXPECT_EQ(test, a9->input.fences, 3);
++	KUNIT_EXPECT_FALSE(test, a9->tx.on);
++	WRITE_ONCE(input_diagnostics, false);
++}
++
+ static struct kunit_case a9t_cases[] = {
+ 	KUNIT_CASE(a9t_initial_state),
+ 	KUNIT_CASE(a9t_active_only_check),
+-	KUNIT_CASE(a9t_sequence),
++	KUNIT_CASE_SLOW(a9t_sequence),
+ 	KUNIT_CASE(a9t_small_fb),
++	KUNIT_CASE_SLOW(a9t_input_diagnostics),
+ 	{}
+ };
+ 

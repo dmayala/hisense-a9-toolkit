@@ -1,0 +1,48 @@
+; Enforcing h: source-checked fixes from sanitized evidence-henf vectors.
+; UsbService's asynchronous initialization blocks PHASE_BOOT_COMPLETED while
+; the declared gadget HAL waits for the existing configfs=2 handoff. The USB
+; helper must read both readiness properties and publish the legacy state.
+(allow a9ml_usb ffs_control_prop_202504 (file (read open getattr map)))
+(allow a9ml_usb usb_control_prop_202504 (file (read open getattr map)))
+(allow a9ml_usb sysfs_android_usb_202504 (dir (search read open getattr)))
+(allow a9ml_usb sysfs_android_usb_202504 (lnk_file (read getattr)))
+(allow a9ml_usb sysfs_android_usb_202504 (file (read write open getattr)))
+; The existing console tests the node type before opening ttyGS0. Only stat
+; access to generic device nodes is added, not arbitrary device I/O.
+(allow a9ml_usb device_202504 (chr_file (getattr)))
+
+; Framework reads seen during boot. Binder transaction logs are diagnostics,
+; not the cause of the USB wait; retain that diagnostic path for this POC.
+(allow system_server_202504 binderfs_logs_transactions_202504 (file (read open getattr)))
+(allow system_server_202504 sysfs_202504 (file (read open getattr)))
+(allow system_server_202504 system_user_mode_emulation_prop_202504 (file (read open getattr map)))
+(allow zygote_202504 vendor_default_prop_202504 (file (read open getattr map)))
+(allow hal_thermal_default sysfs_batteryinfo_202504 (dir (search read open getattr)))
+(allow hal_thermal_default sysfs_batteryinfo_202504 (file (read open getattr)))
+(allow vendor_init_202504 cache_file_202504 (dir (read open search getattr)))
+(allow vendor_init_202504 vendor_shell_exec_202504 (file (entrypoint)))
+(allow a9ml_compat self (capability (dac_override)))
+(allow a9ml_gpu self (capability (dac_override)))
+(allow a9ml_sensors self (capability (net_admin)))
+(allow a9ml_sensors usermodehelper_202504 (file (read open getattr)))
+(allow a9ml_video self (capability (fsetid)))
+
+; These two root-owned init service definitions supply LD_LIBRARY_PATH for
+; their packaged private dependencies. SELinux's SID transition otherwise
+; sets AT_SECURE, and bionic strips it before the linker resolves DT_NEEDED.
+; The baseline dontaudit masks these noatsecure denials. Keep this exception
+; to the two native HAL domains, not helper/script or application domains.
+(allow init_202504 hal_camera_default (process (noatsecure)))
+(allow init_202504 mediacodec (process (noatsecure)))
+(type a9ml_camera_lib_file) (roletype object_r a9ml_camera_lib_file)
+(type a9ml_video_lib_file) (roletype object_r a9ml_video_lib_file)
+(typeattributeset file_type (a9ml_camera_lib_file a9ml_video_lib_file))
+(typeattributeset vendor_file_type (a9ml_camera_lib_file a9ml_video_lib_file))
+(allow hal_camera_default a9ml_camera_lib_file (dir (search read open getattr)))
+(allow hal_camera_default a9ml_camera_lib_file (file (read open getattr map execute)))
+(allow hal_camera_default a9ml_camera_lib_file (lnk_file (read getattr)))
+(allow mediacodec a9ml_video_lib_file (dir (search read open getattr)))
+(allow mediacodec a9ml_video_lib_file (file (read open getattr map execute)))
+(allow mediacodec a9ml_video_lib_file (lnk_file (read getattr)))
+; Deliberately do not grant captured crash_dump->keystore/vold ptrace or
+; default_android_hwservice lookup: neither establishes a boot requirement.

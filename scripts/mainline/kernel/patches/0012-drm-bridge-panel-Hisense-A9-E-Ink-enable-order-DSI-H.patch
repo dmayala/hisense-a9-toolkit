@@ -1,0 +1,96 @@
+From b126dc15a89aa445937a4abe83a76005c0abc1bc Mon Sep 17 00:00:00 2001
+From: A9-project <dmayala@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 21:25:52 -0700
+Subject: [PATCH 12/13] drm/bridge+panel: Hisense A9 E Ink enable order, DSI
+ HSE, stock DSI clock
+
+- panel: prepare_prev_first; tc358767 (with a board init sequence):
+  pre_enable_prev_first. Order becomes DSI host, panel lines + FP9929A,
+  DPU video (zero buffer), bridge init, as in the vendor kernel
+  (dsi_display_prepare/enable).
+- tc358767: toshiba,dsi-hse sets MIPI_DSI_MODE_VIDEO_HSE (vendor
+  qcom,mdss-dsi-h-sync-pulse = <1>).
+- panel: mode clock 40079 kHz (vendor DSI bit rate 85*24*562*839 gives
+  pclk 40,079,030 Hz; the bridge pixel PLL runs from the DSI clock).
+- panel header: the pipeline is powered down on an idle timer (stock
+  composer: 2-3 s), not after every update.
+---
+ drivers/gpu/drm/bridge/tc358767.c             | 11 ++++++++++
+ .../drm/panel/panel-hisense-hlte556n-eink.c   | 21 ++++++++++++++-----
+ 2 files changed, 27 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/gpu/drm/bridge/tc358767.c b/drivers/gpu/drm/bridge/tc358767.c
+index 2cae239ec..6c92e05a2 100644
+--- a/drivers/gpu/drm/bridge/tc358767.c
++++ b/drivers/gpu/drm/bridge/tc358767.c
+@@ -2388,6 +2388,9 @@ static int tc_mipi_dsi_host_attach(struct tc_data *tc)
+ 	}
+ 	if (of_property_read_bool(dev->of_node, "toshiba,dsi-continuous-clock"))
+ 		dsi->mode_flags &= ~MIPI_DSI_CLOCK_NON_CONTINUOUS;
++	/* stock Hisense A9: qcom,mdss-dsi-h-sync-pulse = <1> (HSA end packets) */
++	if (of_property_read_bool(dev->of_node, "toshiba,dsi-hse"))
++		dsi->mode_flags |= MIPI_DSI_MODE_VIDEO_HSE;
+ 
+ 	ret = devm_mipi_dsi_attach(dev, dsi);
+ 	if (ret < 0) {
+@@ -2707,6 +2710,14 @@ static int tc_probe(struct i2c_client *client)
+ 	}
+ 
+ 	tc->bridge.of_node = dev->of_node;
++	/*
++	 * With a board init sequence (Hisense A9), pre-enable the DSI host
++	 * first, as the vendor kernel does (DSI on, panel lines, E Ink PMIC,
++	 * then the bridge init). Together with the panel's prepare_prev_first
++	 * the order becomes DSI host -> bridge -> panel prepare.
++	 */
++	if (tc->init_seq)
++		tc->bridge.pre_enable_prev_first = true;
+ 	drm_bridge_add(&tc->bridge);
+ 
+ 	i2c_set_clientdata(client, tc);
+diff --git a/drivers/gpu/drm/panel/panel-hisense-hlte556n-eink.c b/drivers/gpu/drm/panel/panel-hisense-hlte556n-eink.c
+index f70022a5b..df1111540 100644
+--- a/drivers/gpu/drm/panel/panel-hisense-hlte556n-eink.c
++++ b/drivers/gpu/drm/panel/panel-hisense-hlte556n-eink.c
+@@ -18,10 +18,12 @@
+  *    rows 5..828 words 0..411 = 4 E Ink pixels as 2-bit codes
+  *    (p0<<6 | p1<<4 | p2<<2 | p3), words 412..447 zero, bytes 1..3 zero
+  *    (scripts/mainline/a9tcon.py, docs/mainline-plan.md section 4);
+- *  - the E Ink high voltage is up exactly while the CRTC is active: the TCON
+- *    enables the CRTC for an update, sends the frames, ENDS WITH AN ALL-ZERO
+- *    FRAME (no drive), then disables the CRTC (DPMS off), which powers the
+- *    FP9929A down. Never leave a non-zero frame on screen with the CRTC active.
++ *  - the E Ink high voltage is up exactly while the CRTC is active. Like the
++ *    stock composer (2-3 s idle timer, MEASURED), the TCON keeps the CRTC on
++ *    across a burst of updates, ENDS EVERY UPDATE WITH AN ALL-ZERO FRAME (no
++ *    drive) and disables the CRTC (DPMS off, FP9929A down) once idle. Never
++ *    leave a non-zero frame on screen with the CRTC active. In-kernel user:
++ *    the a9_eink driver (scripts/mainline/eink in the A9 repo).
+  *
+  * Panel control lines (vendor qcom,mdss_dsi_epd_eink_fhdhs_video): xon,
+  * epd-power-on, xoe, mode and the unexplained i2c-mux-sel. The vendor kernel
+@@ -65,7 +67,10 @@ static inline struct a9_eink *to_a9(struct drm_panel *p)
+ }
+ 
+ static const struct drm_display_mode a9_eink_mode = {
+-	.clock = 40078,
++	/* stock DSI: 85 * 24 * 562 * 839 = 961,896,720 b/s -> pclk 40,079,030 Hz;
++	 * 40079 kHz keeps the DSI byte clock within 1 ppm of stock (the
++	 * TC358767 pixel PLL runs from the DSI clock, IN_SEL=2) */
++	.clock = 40079,
+ 	.hdisplay = 448,
+ 	.hsync_start = 448 + 80,
+ 	.hsync_end = 448 + 80 + 4,
+@@ -165,6 +170,12 @@ static int a9_eink_probe(struct platform_device *pdev)
+ 	if (IS_ERR(a9))
+ 		return PTR_ERR(a9);
+ 	a9->dev = dev;
++	/*
++	 * Stock order (dsi_display_prepare/enable): DSI host on, panel lines,
++	 * FP9929A, bridge init. Prepare after the DSI host and the bridge
++	 * pre-enable; the bridge replays its init table in atomic_enable.
++	 */
++	a9->panel.prepare_prev_first = true;
+ 
+ 	a9->vpanel = devm_regulator_get(dev, "vpanel");
+ 	if (IS_ERR(a9->vpanel))

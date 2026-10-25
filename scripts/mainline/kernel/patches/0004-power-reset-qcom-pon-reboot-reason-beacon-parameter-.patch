@@ -1,0 +1,142 @@
+From 04b69fde1e1082a2ebbfdf79c403334e1876225e Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 20:25:25 -0700
+Subject: [PATCH 4/9] power: reset: qcom-pon: reboot-reason beacon parameter
+ (Hisense A9 bring-up)
+
+qcom_pon.beacon=<n> writes the reboot reason into PON SOFT_RB_SPARE when
+the PON device probes; /sys/module/qcom_pon/parameters/beacon sets it at
+runtime and reads it back from the PMIC. The reason survives a PS_HOLD
+reset, so a bring-up kernel can decide where any later reset (panic,
+watchdog bite, reboot without a mode) lands, e.g. reason 2 = fastboot on
+the Hisense A9. The value found before the write is logged.
+---
+ drivers/power/reset/qcom-pon.c | 101 ++++++++++++++++++++++++++++++++-
+ 1 file changed, 100 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/power/reset/qcom-pon.c b/drivers/power/reset/qcom-pon.c
+index 7e108982a..29b5aa657 100644
+--- a/drivers/power/reset/qcom-pon.c
++++ b/drivers/power/reset/qcom-pon.c
+@@ -3,6 +3,7 @@
+ 
+ #include <linux/delay.h>
+ #include <linux/errno.h>
++#include <linux/moduleparam.h>
+ #include <linux/kernel.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
+@@ -44,6 +45,79 @@ static int qcom_pon_reboot_mode_write(struct reboot_mode_driver *reboot,
+ 	return ret;
+ }
+ 
++/*
++ * Bring-up beacon (Hisense A9). The reason field of PON SOFT_RB_SPARE
++ * survives a PS_HOLD reset, and the bootloader acts on it at the next boot
++ * (on the A9: 1 = recovery, 2 = fastboot; measured in its ABL). Writing it
++ * early lets the kernel decide where ANY later reset lands - a panic, a
++ * watchdog bite, or a reboot(2) without a mode, none of which write a reason
++ * themselves:
++ *   qcom_pon.beacon=<n>    written at probe (-1, the default: off)
++ *   /sys/module/qcom_pon/parameters/beacon
++ *                          write: set the reason now; read: the reason field
++ *                          as the PMIC holds it (read back over SPMI)
++ * The value the register held before the probe write is logged, which shows
++ * whether the boot chain cleared the previous reason.
++ */
++static struct qcom_pon *beacon_pon;
++static int beacon = -1;
++
++static int qcom_pon_beacon_write(struct qcom_pon *pon, int val)
++{
++	if (val < 0 || val > (int)(GENMASK(7, pon->reason_shift) >> pon->reason_shift))
++		return -ERANGE;
++	return qcom_pon_reboot_mode_write(&pon->reboot_mode, val);
++}
++
++static int qcom_pon_beacon_read(struct qcom_pon *pon, unsigned int *val)
++{
++	unsigned int reg;
++	int ret;
++
++	ret = regmap_read(pon->regmap, pon->baseaddr + PON_SOFT_RB_SPARE, &reg);
++	if (ret)
++		return ret;
++	*val = (reg & GENMASK(7, pon->reason_shift)) >> pon->reason_shift;
++	return 0;
++}
++
++static int beacon_set(const char *val, const struct kernel_param *kp)
++{
++	int v, ret;
++
++	ret = kstrtoint(val, 0, &v);
++	if (ret)
++		return ret;
++	if (v < -1)
++		return -EINVAL;
++	if (beacon_pon && v >= 0) {
++		ret = qcom_pon_beacon_write(beacon_pon, v);
++		if (ret)
++			return ret;
++		dev_info(beacon_pon->dev, "beacon: reboot reason %d set\n", v);
++	}
++	beacon = v;
++	return 0;
++}
++
++static int beacon_get(char *buf, const struct kernel_param *kp)
++{
++	unsigned int cur;
++
++	if (!beacon_pon)
++		return scnprintf(buf, PAGE_SIZE, "%d (pon not probed)\n", beacon);
++	if (qcom_pon_beacon_read(beacon_pon, &cur))
++		return -EIO;
++	return scnprintf(buf, PAGE_SIZE, "%u\n", cur);
++}
++
++static const struct kernel_param_ops beacon_ops = {
++	.set = beacon_set,
++	.get = beacon_get,
++};
++module_param_cb(beacon, &beacon_ops, NULL, 0644);
++MODULE_PARM_DESC(beacon, "PON reboot reason to arm at probe and on write (-1 = off)");
++
+ static int qcom_pon_probe(struct platform_device *pdev)
+ {
+ 	struct qcom_pon *pon;
+@@ -82,7 +156,32 @@ static int qcom_pon_probe(struct platform_device *pdev)
+ 
+ 	platform_set_drvdata(pdev, pon);
+ 
+-	return devm_of_platform_populate(&pdev->dev);
++	/* first, so that a reset anywhere after this point is covered */
++	if (pon->reason_shift != NO_REASON_SHIFT) {
++		unsigned int old = 0, now = 0;
++		int ret = qcom_pon_beacon_read(pon, &old);
++
++		if (beacon >= 0 && !ret) {
++			ret = qcom_pon_beacon_write(pon, beacon);
++			if (!ret)
++				ret = qcom_pon_beacon_read(pon, &now);
++			if (ret)
++				dev_err(&pdev->dev, "beacon: arming reason %d failed: %d\n", beacon, ret);
++			else
++				dev_info(&pdev->dev, "beacon: reboot reason was %u, now %u\n", old, now);
++		} else if (!ret) {
++			dev_info(&pdev->dev, "beacon: reboot reason is %u (not armed)\n", old);
++		}
++	}
++
++	error = devm_of_platform_populate(&pdev->dev);
++	if (error)
++		return error;
++
++	if (pon->reason_shift != NO_REASON_SHIFT)
++		beacon_pon = pon;
++
++	return 0;
+ }
+ 
+ static const struct of_device_id qcom_pon_id_table[] = {

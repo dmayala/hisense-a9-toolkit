@@ -1,0 +1,265 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: dmayala <dmayala@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 00:11:50 -0700
+Subject: [PATCH 0054z] drm/a9_eink: 0053 settle and latch outside eng_lock,
+ settle clock from the first low reading, per-boot cap
+
+Review 89 (M4). The waveform-end PG sample of patch 0053 is taken under
+eng_lock (read and count only); the settle, the latch and the ordered
+power-off run after the update's mutex_unlock, as every other rail check
+does (fix-0040 / review 22). A latch there counts as an abort and leaves
+the full Clear owed. The settle window and the reported duration count from
+the first low reading (the 0052 read), not from the settle entry. A 0052 low
+already high on the re-read is counted (reread_high). New parameter
+pg_settle_total_max (default 30, 0 = never settle) caps recovered dips per
+boot. rail_diag's diag_settle line gains total_max, cap_skip, reread_high
+and the clock origin.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/a9_eink/a9_eink.h     |   9 ++-
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c | 102 ++++++++++++++++++++------
+ 2 files changed, 89 insertions(+), 22 deletions(-)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index 480088380..655373058 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -284,8 +284,11 @@ struct a9_eink {
+ 		s64 end_last_low_ms;
+ 		/* 0053: bounded PG settle after a waveform end (pg_settle_ms); all zero while it is off */
+ 		u64 settle_n, settle_ok, settle_timeout, settle_skip;
+-		u64 settle_hist[A9_SETTLE_BUCKETS];	/* recovered dips by duration */
++		u64 settle_hist[A9_SETTLE_BUCKETS];	/* recovered dips by duration (from the first low reading) */
+ 		u32 settle_max_us;			/* longest recovered dip */
++		/* M4 (review 89): per-boot cap and the lows that never reached the settle */
++		u64 settle_cap_skip;	/* lows latched because pg_settle_total_max was used up */
++		u64 settle_reread_high;	/* wf-end low (0052 read) already high on 0053's re-read: no settle, no budget */
+ 		/* ring of the last A9_DIAG_PD shutdown traces (healthy baseline) */
+ 		u64 pd_seen_seq, pd_total, pd_missed, pd_skipped_fault;
+ 		unsigned int pd_head;		/* next slot */
+@@ -298,6 +301,10 @@ struct a9_eink {
+ 	/* 0053: recovered-dip budget of the current HV session (worker thread only) */
+ 	ktime_t settle_on_since;
+ 	unsigned int settle_used;
++	/* M4: recovered dips since boot (pg_settle_total_max), and the settle clock
++	 * origin handed over by the wf-end path (0 = use the sample's own read time) */
++	unsigned int settle_total;
++	s64 settle_first_us;
+ 	struct notifier_block pm_nb;
+ 	struct task_struct *thread;
+ 
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index 32a78a259..20f702641 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -156,6 +156,17 @@ static unsigned int pg_settle_budget = 3;
+ module_param(pg_settle_budget, uint, 0644);
+ MODULE_PARM_DESC(pg_settle_budget, "Recovered PG dips allowed per HV session before the next low latches at once (default 3; 0 = never settle)");
+ 
++/*
++ * M4 (review 89 D1): cumulative cap on recovered dips per boot. Once used up,
++ * every later low latches at once, as with pg_settle_ms 0 (counted in
++ * diag_settle cap_skip). Default 30: above the next-R0 session stop at 25
++ * recovered dips per boot (S4), so the script stops first and this is the
++ * backstop; about 1.5x the 20-dip evidence goal. Not a daily-use tuning.
++ */
++static unsigned int pg_settle_total_max = 30;
++module_param(pg_settle_total_max, uint, 0644);
++MODULE_PARM_DESC(pg_settle_total_max, "Recovered PG dips allowed per boot (all HV sessions) before every later low latches at once (default 30; 0 = never settle)");
++
+ static unsigned int hv_max_ms = 60000;
+ module_param(hv_max_ms, uint, 0644);
+ MODULE_PARM_DESC(hv_max_ms, "Power down between updates after this much continuous HV-on time; stock has no cap, 33 s seen (default 60000)");
+@@ -987,11 +998,13 @@ static ssize_t rail_diag_show(struct device *kdev, struct device_attribute *attr
+ 		d->end_first_low_total_us, d->end_last_low_ms,
+ 		d->pd_total, d->pd_missed, d->pd_skipped_fault);
+ 	n += sysfs_emit_at(buf, n, "diag_settle win_ms %u budget %u n %llu ok %llu timeout %llu skip %llu"
+-		" ok_hist(<2<5<10<25>=25ms) %llu %llu %llu %llu %llu max_us %u\n",
++		" ok_hist(<2<5<10<25>=25ms) %llu %llu %llu %llu %llu max_us %u"
++		" total_max %u cap_skip %llu reread_high %llu clock first_low\n",
+ 		min(READ_ONCE(pg_settle_ms), A9_PG_SETTLE_MAX_MS), READ_ONCE(pg_settle_budget),
+ 		d->settle_n, d->settle_ok, d->settle_timeout, d->settle_skip,
+ 		d->settle_hist[0], d->settle_hist[1], d->settle_hist[2], d->settle_hist[3],
+-		d->settle_hist[4], d->settle_max_us);
++		d->settle_hist[4], d->settle_max_us,
++		READ_ONCE(pg_settle_total_max), d->settle_cap_skip, d->settle_reread_high);
+ 	n += sysfs_emit_at(buf, n, "pd_total %llu pd_missed %llu pd_skipped_fault %llu pd_seen_seq %llu"
+ 		" (newest first)\n",
+ 		d->pd_total, d->pd_missed, d->pd_skipped_fault, d->pd_seen_seq);
+@@ -1340,7 +1353,7 @@ static void a9_diag_pd_push(struct a9_eink *a9, const struct fp9929a_pd_trace *t
+  * pipeline is still on (an aborted or faulted waveform has already powered
+  * down: nothing to read).
+  */
+-static void a9_diag_wf_end(struct a9_eink *a9)
++static s64 a9_diag_wf_end(struct a9_eink *a9)
+ {
+ 	struct fp9929a_status st;
+ 	unsigned long flags;
+@@ -1353,7 +1366,7 @@ static void a9_diag_wf_end(struct a9_eink *a9)
+ 		spin_lock_irqsave(&a9->diag.lock, flags);
+ 		a9->diag.end_skipped++;
+ 		spin_unlock_irqrestore(&a9->diag.lock, flags);
+-		return;
++		return 0;
+ 	}
+ 	ret = a9_hv_sample(a9, &st);
+ 	up_ms = ktime_to_ms(ktime_get());
+@@ -1390,6 +1403,8 @@ static void a9_diag_wf_end(struct a9_eink *a9)
+ 			a9->session.id, up_ms, first);
+ 	if (!ret)
+ 		a9_diag_pd_push(a9, &st.pdtrace);
++	/* M4: the time of a plain low reading, the settle clock origin (0 = none) */
++	return low && st.pg_at_us > 0 ? st.pg_at_us : 0;
+ }
+ 
+ /*
+@@ -1414,13 +1429,21 @@ static void a9_diag_wf_end(struct a9_eink *a9)
+ static enum a9_settle a9_pg_settle(struct a9_eink *a9, int ret, const struct fp9929a_status *st)
+ {
+ 	unsigned int win = min(READ_ONCE(pg_settle_ms), A9_PG_SETTLE_MAX_MS);
+-	ktime_t t0 = ktime_get(), tg = 0;
++	ktime_t now = ktime_get(), t0, tg = 0;
++	s64 first_us = a9->settle_first_us;
+ 	struct fp9929a_status s2;
+ 	unsigned long flags;
+ 	unsigned int good = 0, b;
+ 	enum a9_settle res = A9_SETTLE_TIMEOUT;
+ 	u64 us;
+ 
++	/* M4 (review 89 F2): the window and the reported duration count from the
++	 * FIRST low reading (the wf-end path hands over the 0052 read's time; any
++	 * other caller's first low reading is this sample), not from entry here. */
++	a9->settle_first_us = 0;
++	if (!first_us)
++		first_us = st->pg_at_us;
++	t0 = first_us > 0 && first_us <= ktime_to_us(now) ? us_to_ktime(first_us) : now;
+ 	if (!win || ret || !st->on || !st->pg_valid || st->pg_good || st->forced_off || st->emergency)
+ 		return A9_SETTLE_NO;
+ 	if (!a9->wf_end || ktime_ms_delta(t0, a9->wf_end) > win)
+@@ -1435,6 +1458,12 @@ static enum a9_settle a9_pg_settle(struct a9_eink *a9, int ret, const struct fp9
+ 		spin_unlock_irqrestore(&a9->diag.lock, flags);
+ 		return A9_SETTLE_NO;
+ 	}
++	if (a9->settle_total >= READ_ONCE(pg_settle_total_max)) {	/* M4 D1: per-boot cap */
++		spin_lock_irqsave(&a9->diag.lock, flags);
++		a9->diag.settle_cap_skip++;
++		spin_unlock_irqrestore(&a9->diag.lock, flags);
++		return A9_SETTLE_NO;
++	}
+ 	for (;;) {
+ 		int r2;
+ 
+@@ -1472,9 +1501,12 @@ static enum a9_settle a9_pg_settle(struct a9_eink *a9, int ret, const struct fp9
+ 	spin_unlock_irqrestore(&a9->diag.lock, flags);
+ 	if (res == A9_SETTLE_OK) {
+ 		a9->settle_used++;
++		a9->settle_total++;
+ 		dev_warn_ratelimited(a9->dev, "pg-settle: PG low after a waveform came back in %llu us"
+-			" (recovered dip %u of %u this session; not a fault)\n",
+-			us, a9->settle_used, READ_ONCE(pg_settle_budget));
++			" from the first low reading (recovered dip %u of %u this session, %u of %u this boot;"
++			" not a fault)\n",
++			us, a9->settle_used, READ_ONCE(pg_settle_budget), a9->settle_total,
++			READ_ONCE(pg_settle_total_max));
+ 	} else {
+ 		dev_err(a9->dev, "pg-settle: PG still low %llu us after the first low reading: latching\n", us);
+ 	}
+@@ -1588,22 +1620,43 @@ static int a9_check_rail_sample(struct a9_eink *a9, bool was_on, int ret,
+ }
+ 
+ /*
+- * Patch 0053: the waveform-end read. Only when pg_settle_ms is set and only for
+- * a plain PG low (read errors, forced/emergency and everything else keep the
+- * 0052 behaviour: recorded by the diag read, decided by the next sample).
+- * Returns true when the pipeline was latched and powered down.
++ * Patch 0053: the waveform-end read, split by M4 (review 89 section 2) so that
++ * no settle, latch or power-off runs under eng_lock (fix-0040 / review 22).
++ *
++ * a9_pg_wf_end_low(), under eng_lock: only when pg_settle_ms is set, one read;
++ * true for a plain PG low (read errors, forced/emergency and everything else
++ * keep the 0052 behaviour: recorded, decided by the next sample). first_us is
++ * the 0052 read's low time (0 if that read was not low): a low there that is
++ * high again here is counted (reread_high) and not settled.
+  */
+-static bool a9_pg_wf_end(struct a9_eink *a9)
++static bool a9_pg_wf_end_low(struct a9_eink *a9, s64 first_us, struct fp9929a_status *st)
+ {
+-	struct fp9929a_status st;
++	unsigned long flags;
+ 	int ret;
+ 
+ 	if (!READ_ONCE(pg_settle_ms) || !READ_ONCE(a9->tx.on))
+ 		return false;
+-	ret = a9_hv_sample(a9, &st);
+-	if (ret || !st.on || !st.pg_valid || st.pg_good)
++	ret = a9_hv_sample(a9, st);
++	if (ret || !st->on || !st->pg_valid || st->pg_good) {
++		if (first_us && a9_hv_good(ret, st)) {
++			spin_lock_irqsave(&a9->diag.lock, flags);
++			a9->diag.settle_reread_high++;
++			spin_unlock_irqrestore(&a9->diag.lock, flags);
++		}
+ 		return false;
+-	return a9_check_rail_sample(a9, true, ret, &st) != 0;
++	}
++	a9->settle_first_us = first_us;	/* consumed by a9_pg_settle */
++	return true;
++}
++
++/*
++ * After the update's mutex_unlock(&a9->eng_lock): settle the low sampled
++ * above, or latch from it exactly as any other rail sample (ordered
++ * power-off, report). Returns true when latched.
++ */
++static bool a9_pg_wf_end(struct a9_eink *a9, const struct fp9929a_status *st)
++{
++	return a9_check_rail_sample(a9, true, 0, st) != 0;
+ }
+ 
+ /* No-op validation never energizes an off pipeline. */
+@@ -1889,8 +1942,8 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 	bool *init_pending = dry ? &a9->dry_init_pending : &a9->init_pending;
+ 	bool *force_clear = dry ? &a9->dry_force_clear : &a9->force_clear;
+ 	struct sha256_ctx sc;
+-	struct fp9929a_status st;
+-	bool was_on;
++	struct fp9929a_status st, pg_st;
++	bool was_on, pg_low = false;
+ 	ktime_t t0 = ktime_get();
+ 	unsigned int zt = READ_ONCE(zero_test);
+ 	bool prepared = false, init_white = false;
+@@ -2092,6 +2145,7 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 	if (!dry) {
+ 		/* render-ahead: init flash (if pending) + update, in one sequence */
+ 		bool init_shown = false;
++		s64 pg_first;
+ 
+ 		if (hash)
+ 			sha256_init(&sc);
+@@ -2099,9 +2153,9 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 		ret = a9_run_ring(a9, init_white, bin, hash ? &sc : NULL, &init_shown);
+ 		a9->wf_end = ktime_get();	/* rail-fault diagnosis (0039) */
+ 		a9->wf_ret = ret;
+-		a9_diag_wf_end(a9);	/* 0052: one recorded, never-acted-on PG read */
+-		if (!ret && a9_pg_wf_end(a9))	/* 0053: opt-in settle; latched = abort */
+-			ret = -EIO;
++		pg_first = a9_diag_wf_end(a9);	/* 0052: one recorded, never-acted-on PG read */
++		/* 0053 (M4): sample only under eng_lock; settle/latch after the unlock */
++		pg_low = !ret && a9_pg_wf_end_low(a9, pg_first, &pg_st);
+ 		if (init_shown)
+ 			*init_pending = false;
+ 		if (ret)
+@@ -2158,6 +2212,12 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 		a9e_inc_invalidate(&a9->e);
+ 	}
+ 	mutex_unlock(&a9->eng_lock);
++	/* 0053 (M4): the waveform completed and its history is committed; a low
++	 * sampled at its end is settled or latched here, outside eng_lock. A latch
++	 * counts as an abort (session stops) and owes a full Clear (a9_rail_fault
++	 * sets force_clear after the success path cleared it above). */
++	if (pg_low && a9_pg_wf_end(a9, &pg_st))
++		a9->aborts++;
+ 	return;
+ 
+ abort:

@@ -1,0 +1,2 @@
+snd-soc-es9218-a9-objs := es9218-a9.o
+obj-$(CONFIG_SND_SOC_ES9218_A9) += snd-soc-es9218-a9.o

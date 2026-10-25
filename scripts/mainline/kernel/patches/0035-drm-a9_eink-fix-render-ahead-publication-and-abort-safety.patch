@@ -1,0 +1,292 @@
+From a62fa3b8a27e3c68e8e81f1a323efa1ae0422c85 Mon Sep 17 00:00:00 2001
+From: dmayala <dmayala@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 23:41:45 +0000
+Subject: [PATCH 0035] drm/a9_eink: fix render-ahead publication and
+ abort safety
+
+Pair job release/acquire before payload reads; stop and power down before
+joining a producer, with immediate emergency-off on failed neutral. Reject
+late/cancelled prefill and latch unexpected failures instead of
+automatically retrying partial waveforms. Keep existing progress and
+FP9929A limits.
+
+Android scheduling and permanent host regressions accompany these kernel
+changes in the project checkout. Producer policy is SCHED_OTHER/nice -10,
+consumer FIFO50. The vendor companion must ship with kernel patch 0035.
+
+Co-Authored-By: GPT-6.1 Sol (Codex)
+---
+ drivers/gpu/drm/a9_eink/a9_eink.h           |  8 +++--
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c       | 39 ++++++++++++++++------
+ drivers/gpu/drm/a9_eink/a9_eink_ring.c      | 68 +++++++++++++++++++++++++--------------
+ drivers/gpu/drm/a9_eink/a9_eink_transport.c | 11 ++++---
+ 4 files changed, 86 insertions(+), 40 deletions(-)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index 150ee7a..1ef87e6 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -105,8 +105,10 @@ void a9r_reset(struct a9_ring *r);
+ u8 *a9r_slot(struct a9_ring *r);
+ void a9r_publish(struct a9_ring *r, bool null);
+ void a9r_finish(struct a9_ring *r, int err);
+-int a9r_prefill(struct a9_ring *r, struct a9x_transport *t, unsigned int timeout_ms);
++int a9r_prefill(struct a9_ring *r, struct a9x_transport *t, unsigned int timeout_ms,
++		const bool *enable);
+ int a9r_drive(struct a9_ring *r, struct a9x_transport *t, const bool *enable);
++void a9r_request_stop(struct a9_ring *r);
+ void a9r_stop(struct a9_ring *r);
+ 
+ /*
+@@ -120,7 +122,8 @@ void a9r_stop(struct a9_ring *r);
+ #define A9X_PERIOD_DEFAULT_US 11764	/* 85 Hz, if the mode gave none */
+ 
+ /*
+- * Latched by the interlock or a failed power-down zero commit; cleared only
++ * Latched by the interlock, failed neutral, or unexpected render-ahead abort;
++ * cleared only
+  * by writing 1 to a9_eink.clear_fault (a9_eink_guard.c).
+  */
+ extern atomic_t a9x_stall_fault;
+@@ -137,6 +140,7 @@ int a9x_show(struct a9x_transport *t, const u8 *frame);	/* uses byte 0 of each w
+ int a9x_show_data(struct a9x_transport *t, const u8 *data);	/* a ring slot (A9R_DATA) */
+ int a9x_power_off(struct a9x_transport *t);
+ int a9x_blank(struct a9x_transport *t);
++void a9x_emergency_off(struct a9x_transport *t, const char *why);
+ int a9x_idle_refresh(struct a9x_transport *t);	/* one idle (template) frame, always */
+ bool a9x_attached(struct a9x_transport *t);
+ 
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index d78829e..370855f 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -918,10 +918,15 @@ static int a9_render_thread(void *data)
+ 	struct a9_eink *a9 = data;
+ 
+ 	set_user_nice(current, -10);
+-	while (!kthread_should_stop()) {
++	for (;;) {
+ 		wait_event_interruptible(a9->rwq, READ_ONCE(a9->rjob) || kthread_should_stop());
+-		if (!READ_ONCE(a9->rjob))
++		/* Pairs with run_ring's release, before ANY engine/job field read. */
++		if (!smp_load_acquire(&a9->rjob)) {
++			if (kthread_should_stop())
++				break;
+ 			continue;
++		}
++		/* Accept a posted borrower even on teardown; stop must join it. */
+ 		WRITE_ONCE(a9->rjob, false);
+ 		a9_produce(a9);
+ 	}
+@@ -931,8 +936,9 @@ static int a9_render_thread(void *data)
+ /*
+  * Real update with the pipeline up (idle frame on the glass): post the job,
+  * wait until the ring is full (or the update completely rendered), then send.
+- * Any error: idle frame now, producer stopped; the caller aborts (forced
+- * clear next, power-down). *init_shown: every init-flash frame was sent.
++ * Any error: request stop, establish neutral/power down BEFORE joining the
++ * producer. Unexpected failures latch the trial off; enable=0 cancellation
++ * remains distinct. *init_shown: every init-flash frame was sent.
+  */
+ #define A9_PREFILL_MS 2000
+ static int a9_run_ring(struct a9_eink *a9, bool init, int bin, struct sha256_ctx *sc,
+@@ -942,15 +948,17 @@ static int a9_run_ring(struct a9_eink *a9, bool init, int bin, struct sha256_ctx
+ 	ktime_t p0 = ktime_get();
+ 	int ret;
+ 
++	if (atomic_read(&a9x_stall_fault))
++		return -EIO;	/* writing enable alone cannot retry a failed trial */
+ 	a9r_reset(&a9->ring);
+ 	a9->ring_init_n = 0;
+ 	a9->rjob_init = init;
+ 	a9->rjob_bin = bin;
+ 	a9->rjob_sc = sc;
+-	smp_wmb();	/* job fields before the flag */
+-	WRITE_ONCE(a9->rjob, true);
++	/* Publish prepared engine, init/bin and optional stack hash as one job. */
++	smp_store_release(&a9->rjob, true);
+ 	wake_up(&a9->rwq);
+-	ret = a9r_prefill(&a9->ring, &a9->tx, A9_PREFILL_MS);
++	ret = a9r_prefill(&a9->ring, &a9->tx, A9_PREFILL_MS, &enable);
+ 	a9->prefill_us = (u32)ktime_us_delta(ktime_get(), p0);
+ 	if (ret)
+ 		dev_err(a9->dev, "render-ahead prefill failed (%d): update not started\n", ret);
+@@ -959,8 +967,21 @@ static int a9_run_ring(struct a9_eink *a9, bool init, int bin, struct sha256_ctx
+ 	if (ret == -EAGAIN)
+ 		dev_err(a9->dev, "render-ahead underrun after %llu frames: update aborted\n",
+ 			a9->tx.frames - f0);
+-	if (ret && a9x_blank(&a9->tx))
+-		dev_err(a9->dev, "blank after a render-ahead error failed\n");
++	if (ret) {
++		bool cancelled = ret == -ECANCELED && !READ_ONCE(enable);
++
++		a9r_request_stop(&a9->ring);
++		if (!cancelled) {
++			/* A partial prefix is not stock waveform/DC balance. No retry. */
++			atomic_set(&a9x_stall_fault, 1);
++			WRITE_ONCE(enable, false);
++			dev_err(a9->dev, "render-ahead trial failed (%d): fault latched\n", ret);
++		}
++		if (a9x_blank(&a9->tx))
++			a9x_emergency_off(&a9->tx, "a9_eink: render-ahead abort neutral failed");
++		/* Transport/PMIC state only: engine and stack hash remain borrowed. */
++		a9_power_off(a9);
++	}
+ 	a9r_stop(&a9->ring);	/* the producer has left the engine */
+ 	*init_shown = init && a9->ring_init_n && a9->tx.frames - f0 >= a9->ring_init_n;
+ 	return ret;
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_ring.c b/drivers/gpu/drm/a9_eink/a9_eink_ring.c
+index 58b21aa..cfac70b 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_ring.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_ring.c
+@@ -20,9 +20,9 @@
+  *    rendered): a9r_prefill; until then the panel scans the idle frame;
+  *  - the consumer never waits for a frame with a drive frame on the glass:
+  *    an empty ring before the producer is done is an UNDERRUN (-EAGAIN); the
+- *    caller blanks (idle frame) and aborts the update (forced clear next).
+- *    No fault is latched for it: the frame-progress interlock independently
+- *    covers any drive frame held too long;
++ *    caller stops the trial, establishes idle and powers down BEFORE joining
++ *    the producer. Unexpected errors latch a fault; a partial waveform is
++ *    not a complete/DC-balanced waveform and must not be retried silently;
+  *  - stop (abort, enable=0, transport lost) wakes the producer, which ends
+  *    after at most the frame it is rendering.
+  * Locking: r->lock (spinlock) protects head/tail/flags; the producer writes
+@@ -128,37 +128,38 @@ void a9r_finish(struct a9_ring *r, int err)
+ 	wake_up_all(&r->wq);
+ }
+ 
+-static bool a9r_filled(struct a9_ring *r)
+-{
+-	bool ok;
+-
+-	spin_lock(&r->lock);
+-	ok = r->done || r->head - r->tail >= A9R_SLOTS;
+-	spin_unlock(&r->lock);
+-	return ok;
+-}
+-
+ /*
+  * consumer: until the ring is full or the update completely rendered, keep
+  * the panel on idle refreshes at the frame rate (the stock idle frame, as
+- * between updates; no gap for the timing counters), bounded by timeout_ms.
++ * between updates; no gap for the timing counters). Reject admission at the
++ * deadline, including a late ready/done return from idle_refresh. This cannot
++ * bound a stuck DRM call's duration: FP9929A's independent cap still applies.
+  */
+-int a9r_prefill(struct a9_ring *r, struct a9x_transport *t, unsigned int timeout_ms)
++int a9r_prefill(struct a9_ring *r, struct a9x_transport *t, unsigned int timeout_ms,
++		const bool *enable)
+ {
+ 	unsigned long end = jiffies + msecs_to_jiffies(timeout_ms);
+ 	int err;
+ 
+-	while (!a9r_filled(r)) {
+-		if (time_after(jiffies, end))
+-			return -ETIMEDOUT;
++	for (;;) {
++		bool ready;
++
++		/* Also run on the ready/done fast path and after EVERY idle commit. */
++		spin_lock(&r->lock);
++		ready = r->done || r->head - r->tail >= A9R_SLOTS;
++		if (r->stop || !READ_ONCE(*enable))
++			err = -ECANCELED;
++		else if (time_after_eq(jiffies, end))
++			err = -ETIMEDOUT;
++		else
++			err = r->done ? r->err : 0;
++		spin_unlock(&r->lock);
++		if (err || ready)
++			return err;
+ 		err = a9x_idle_refresh(t);
+ 		if (err)
+ 			return err;
+ 	}
+-	spin_lock(&r->lock);
+-	err = r->done && r->err ? r->err : 0;
+-	spin_unlock(&r->lock);
+-	return err;
+ }
+ 
+ /*
+@@ -175,6 +176,17 @@ int a9r_drive(struct a9_ring *r, struct a9x_transport *t, const bool *enable)
+ 		int ret;
+ 
+ 		spin_lock(&r->lock);
++		/* Cancellation wins over an empty ring; don't mislabel it starvation. */
++		if (r->stop || !READ_ONCE(*enable)) {
++			spin_unlock(&r->lock);
++			return -ECANCELED;
++		}
++		/* A known producer failure must not send a queued valid prefix. */
++		if (r->done && r->err) {
++			ret = r->err;
++			spin_unlock(&r->lock);
++			return ret;
++		}
+ 		fill = r->head - r->tail;
+ 		if (fill < r->fill_min)
+ 			r->fill_min = fill;
+@@ -210,13 +222,19 @@ static bool a9r_idle(struct a9_ring *r)
+ 	return idle;
+ }
+ 
+-/* consumer: stop the producer and wait until it has left the engine */
+-void a9r_stop(struct a9_ring *r)
++/* consumer: prevent further work without waiting for an engine borrower */
++void a9r_request_stop(struct a9_ring *r)
+ {
+ 	spin_lock(&r->lock);
+ 	r->stop = true;
+ 	spin_unlock(&r->lock);
+ 	wake_up_all(&r->wq);
+-	/* bounded: the producer ends after at most one a9e_frame() */
++}
++
++/* consumer: join only AFTER neutral/power-down on errors; retain engine/hash */
++void a9r_stop(struct a9_ring *r)
++{
++	a9r_request_stop(r);
++	/* One frame of work can take unbounded wall time (including scheduling). */
+ 	wait_event(r->wq, a9r_idle(r));
+ }
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_transport.c b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+index c6a1cfa..557af46 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_transport.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+@@ -189,8 +189,11 @@ static void a9x_stall_disarm(struct a9x_transport *t)
+ 	t->stall_armed = false;
+ }
+ 
+-/* t->lock held: the transport cannot establish a zero frame */
+-static void a9x_zero_failed(struct a9x_transport *t, const char *why)
++/*
++ * Failed neutral: remove HV NOW, before any producer join or DRM shutdown.
++ * No transport lock required: only hardirq-safe timer/PMIC/fault operations.
++ */
++void a9x_emergency_off(struct a9x_transport *t, const char *why)
+ {
+ 	hrtimer_try_to_cancel(&t->stall);
+ 	fp9929a_emergency_off(why);
+@@ -212,7 +215,7 @@ void a9x_init(struct a9x_transport *t)
+ void a9x_fini(struct a9x_transport *t)
+ {
+ 	if (hrtimer_cancel(&t->stall) && READ_ONCE(t->stall_armed))
+-		a9x_zero_failed(t, "a9_eink: teardown with a drive frame armed");
++		a9x_emergency_off(t, "a9_eink: teardown with a drive frame armed");
+ }
+ 
+ static void a9x_free_locked(struct a9x_transport *t)
+@@ -644,7 +647,7 @@ static int a9x_power_off_locked(struct a9x_transport *t)
+ 	}
+ 	/* no zero frame established: remove HV directly, then still DPMS off */
+ 	if (!t->front_null || t->stall_armed)
+-		a9x_zero_failed(t, "a9_eink: zero frame before power-down failed");
++		a9x_emergency_off(t, "a9_eink: zero frame before power-down failed");
+ 	/* let the zero frame scan out for at least two refreshes */
+ 	if (t->period_us) {
+ 		s64 since = ktime_us_delta(ktime_get(), t->last_commit);
+-- 
+2.51.0
+

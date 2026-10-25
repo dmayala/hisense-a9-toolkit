@@ -1,0 +1,122 @@
+{
+  "sequence": [
+    {
+      "row": "10_hourly_drain",
+      "status": "FAIL",
+      "evidence": {
+        "attempted": 0,
+        "below_floor": 0,
+        "measured": 0,
+        "restored": 0,
+        "stage_failed": 1
+      }
+    },
+    {
+      "row": "cleanup",
+      "status": "PASS",
+      "evidence": {
+        "apps_stopped": 1,
+        "bt_disabled": 1,
+        "completed": 1,
+        "drain_cleanup_ok": 1,
+        "eink_closed": 1,
+        "pin_cleanup_ok": 1,
+        "wifi_disable_polls": 1,
+        "wifi_disable_rc": 0,
+        "wifi_disabled": 1,
+        "wifi_removed": 1,
+        "wifi_status_rc": 0
+      }
+    },
+    {
+      "row": "18_hardware_encoder",
+      "status": "FAIL",
+      "evidence": {
+        "attempted": 0,
+        "budget_ok": 0,
+        "bundle_verified": 0,
+        "cleanup": 0,
+        "host_mp4_ok": 0,
+        "native_pass": 0,
+        "qualification": 1,
+        "remaining_ms": 144999,
+        "skip_reason": 3,
+        "slot_b": 0,
+        "staged": 0
+      }
+    },
+    {
+      "row": "18_hardware_encoder",
+      "status": "FAIL",
+      "evidence": {
+        "attempted": 0,
+        "budget_ok": 0,
+        "bundle_verified": 0,
+        "cleanup": 0,
+        "host_mp4_ok": 0,
+        "native_pass": 0,
+        "qualification": 1,
+        "remaining_ms": 144999,
+        "skip_reason": 3,
+        "slot_b": 0,
+        "staged": 0
+      }
+    },
+    {
+      "row": "18_hardware_encoder",
+      "status": "FAIL",
+      "evidence": {
+        "attempted": 0,
+        "budget_ok": 0,
+        "bundle_verified": 0,
+        "cleanup": 0,
+        "host_mp4_ok": 0,
+        "native_pass": 0,
+        "qualification": 1,
+        "remaining_ms": 144999,
+        "skip_reason": 3,
+        "slot_b": 0,
+        "staged": 0
+      }
+    },
+    {
+      "row": "18_hardware_encoder",
+      "status": "FAIL",
+      "evidence": {
+        "attempted": 0,
+        "budget_ok": 0,
+        "bundle_verified": 0,
+        "cleanup": 0,
+        "host_mp4_ok": 0,
+        "native_pass": 0,
+        "qualification": 1,
+        "remaining_ms": 144999,
+        "skip_reason": 3,
+        "slot_b": 0,
+        "staged": 0
+      }
+    },
+    {
+      "row": "29_pin_lifecycle",
+      "status": "PASS",
+      "evidence": {
+        "attempted": 1,
+        "capabilities": 1,
+        "cleanup_attempted": 1,
+        "cleanup_ok": 1,
+        "disposable_data_attested": 1,
+        "finally_unsecured": 1,
+        "initially_unsecured": 1,
+        "interrupted_or_exception": 0,
+        "locked": 1,
+        "preconditions": 1,
+        "removed": 1,
+        "set": 1,
+        "set_completed": 1,
+        "unlocked": 1,
+        "verified": 1
+      }
+    }
+  ],
+  "failed_drain_command": "head -c 262145 /sys/kernel/debug/wakeup_sources"
+}

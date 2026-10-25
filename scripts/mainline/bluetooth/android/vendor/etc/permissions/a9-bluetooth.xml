@@ -1,0 +1,4 @@
+<permissions>
+    <feature name="android.hardware.bluetooth" />
+    <feature name="android.hardware.bluetooth_le" />
+</permissions>

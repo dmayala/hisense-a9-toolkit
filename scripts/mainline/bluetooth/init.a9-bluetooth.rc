@@ -1,0 +1,22 @@
+# Integrated builds select the Wi-Fi firmware bridge in the kernel cmdline.
+# Prepare it synchronously before BT setup; later post-fs-data actions (camera,
+# sensors, GPU) may block init while BT is already running in the background.
+on post-fs-data && property:ro.a9ml.wifi=1 && property:ro.vendor.a9.bluetooth=1
+    mkdir /mnt/a9-wifi 0700 root root
+    mkdir /mnt/a9-wifi/firmware 0755 root root
+    exec_start a9ml_wifi_firmware
+
+# Off by default: this file is installed only for an explicit Bluetooth build.
+on post-fs-data && property:ro.vendor.a9.bluetooth=1
+    mkdir /data/vendor/bluetooth 0770 bluetooth bluetooth
+    mkdir /data/vendor/bluedroid 0770 bluetooth bluetooth
+    start vendor.a9-bt-setup
+
+service vendor.a9-bt-setup /vendor/bin/a9ml-bluetooth.sh
+    class late_start
+    user root
+    group root bluetooth
+    disabled
+    oneshot
+    # Current bring-up policy is permissive. Do not invent an enforcing domain.
+    seclabel u:r:phhsu_daemon:s0

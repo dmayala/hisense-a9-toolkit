@@ -1,0 +1,85 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/*
+ * A9 Bluetooth, explicitly included only by the A9_BLUETOOTH=1 Android build.
+ * Stock golden DT: SE3 UART at 0x4a8c000; TLMM8/9/10/11 = CTS/RTS/TX/RX.
+ * Stock bt_wcn3990 maps IO=L9, XO=L16, RF/core=L17, CH0/PA=L23.
+ * L16/L23 fixed operating values are engineering selections inside measured
+ * stock consumer/regulator intersections, not measured live rail voltages.
+ * Wi-Fi must reuse these nodes and values, not create duplicate RPM resources.
+ *
+ * TLMM87 is stock qca,bt-sw-ctrl-gpio, NOT proven BT_EN. Keep it reserved.
+ * WCN3990 mainline enables via UART power pulses; do not invent enable-gpios,
+ * CH1 supplies, a 32 kHz clock, MPSS, or an rfkill GPIO.
+ */
+
+&rpm_requests {
+	regulators-0 {
+		pm6125_l16: l16 {
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+		};
+
+		pm6125_l17: l17 {
+			regulator-min-microvolt = <1304000>;
+			regulator-max-microvolt = <1304000>;
+		};
+
+		pm6125_l23: l23 {
+			regulator-min-microvolt = <3304000>;
+			regulator-max-microvolt = <3304000>;
+		};
+	};
+};
+
+&uart3 {
+	pinctrl-names = "default", "sleep";
+	pinctrl-0 = <&a9_bt_ctsrx>, <&a9_bt_rts>, <&a9_bt_tx>;
+	/* Stock uses its same active mux for sleep; preserve that arrangement. */
+	pinctrl-1 = <&a9_bt_ctsrx>, <&a9_bt_rts>, <&a9_bt_tx>;
+	/* Stock msm_geni_serial requests RX wake with IRQF_TRIGGER_FALLING.
+	 * RX idles high: a level-high wake IRQ causes immediate s2idle exits.
+	 */
+	interrupts-extended = <&intc GIC_SPI 330 IRQ_TYPE_LEVEL_HIGH>,
+			      <&tlmm 11 IRQ_TYPE_EDGE_FALLING>;
+	status = "okay";
+
+	a9_bluetooth: bluetooth {
+		/* Stock family declaration; exact controller ROM remains a runtime check. */
+		compatible = "qcom,wcn3990-bt";
+		max-speed = <3200000>;
+		vddio-supply = <&pm6125_l9>;
+		vddxo-supply = <&pm6125_l16>;
+		vddrf-supply = <&pm6125_l17>;
+		vddch0-supply = <&pm6125_l23>;
+		/* btqca selects crbtfw/crnv by the controller ROM version. The build
+		 * injects a private local-bd-address; no identifier belongs here. */
+	};
+};
+
+&tlmm {
+	/* Android base reserves 8..11. Reopen only the four stock BT UART pins;
+	 * preserve frontlight/touch/E Ink reservations and keep SW_CTRL87 shut. */
+	gpio-reserved-ranges = <3 1>, <14 7>, <22 3>, <27 4>, <32 1>,
+			       <35 1>, <37 34>, <72 8>, <87 21>, <109 5>;
+
+	a9_bt_ctsrx: a9-bt-ctsrx-state {
+		pins = "gpio8", "gpio11";
+		function = "qup3";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	a9_bt_rts: a9-bt-rts-state {
+		pins = "gpio9";
+		function = "qup3";
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+
+	a9_bt_tx: a9-bt-tx-state {
+		pins = "gpio10";
+		function = "qup3";
+		drive-strength = <2>;
+		bias-pull-up;
+	};
+};

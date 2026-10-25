@@ -1,0 +1,10 @@
+# Same service owner/arguments as row27: 9s pet request + 5s margin = 14s bite.
+# The A9 driver fixes bark=11s and defers early pets to stock's 9360ms.
+service watchdogd-gsi /system/bin/watchdogd 9 5
+    override
+    class core
+    oneshot
+    disabled
+    user root
+    group root
+    seclabel u:r:watchdogd:s0

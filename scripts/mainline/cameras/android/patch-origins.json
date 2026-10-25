@@ -1,0 +1,66 @@
+[
+  {
+    "patch": "0001-a6l-imx576-s5k3t1-sensor-support.patch",
+    "sha256": "0c03275540ca54d9cc66637ccf95a7f0070c56b2edbe4d47455cdaa1fc025fd3"
+  },
+  {
+    "patch": "0002-base-thread-android-bionic-affinity.patch",
+    "sha256": "6a44243e83a0bc347bd3384265b85b417130a8cc9ef1139b927ef0f3b2d4f8a0"
+  },
+  {
+    "patch": "0003-apps-common-use-libevent-include-path.patch",
+    "sha256": "e22462d83cace55293753c99f569f8ddd30ebb5094e3ad305d612a131f1ad3f1"
+  },
+  {
+    "patch": "0004-software_isp-debayer_cpu-nv12-output.patch",
+    "sha256": "46472df14c9eccb3b254ae97fc0e0201f851468cc60c2be80fd9f4e249281454"
+  },
+  {
+    "patch": "0005-android-a6l-single-stream-yuv-crop-dmabuf-allocator.patch",
+    "sha256": "aab2fa198f63a2d3f81565beefbcf704176f599a39634b5d9365f701994572b5"
+  },
+  {
+    "patch": "0006-a6l-hi846-sensor-helper-delays-tuning.patch",
+    "sha256": "c88511df1b0191e53b5bbac125c1341a4d5d84cf127f56655b463e92d4fd4db9"
+  },
+  {
+    "patch": "0007-dma_buf_allocator-a6l-system-heap-first.patch",
+    "sha256": "c5da66143eec23f4ae3831079197b3397e5e74f79f598d3b06b741b01551c39b"
+  },
+  {
+    "patch": "0008-android-a6l-hal-camera-order-aux.patch",
+    "sha256": "85423e34a03d01acdc40706671cd0ea05121643c4685e67985a0df8d56525ccc"
+  },
+  {
+    "patch": "0009-simple-android-frame-duration.patch",
+    "sha256": "0a19345a7208bc609ed18274bf8d0d3b7d087397457c7e824c4394c18162e6b0"
+  },
+  {
+    "patch": "0010-simple-configure-sensor-timing.patch",
+    "sha256": "9c2ac38aa9e613c590d918eb262aa78fd816a72d15e4066bc9ff7056d98df81c"
+  },
+  {
+    "patch": "0011-android-preserve-slow-preview-streams.patch",
+    "sha256": "3398d0a98ce9ce7003e4d212b06aaff1a11096a230cab1a390c13857006c5972"
+  },
+  {
+    "patch": "0012-android-accept-internal-stream-adjustments.patch",
+    "sha256": "0d4e5ffb07a795cf98efea916f6318b76ba9cf16c13dedbc8e6988dd4038d538"
+  },
+  {
+    "patch": "0013-android-request-native-sensor-orientation.patch",
+    "sha256": "bf3ca2385e5c63343309953c51df58ab07e9f9ce84cc005b54ac669f6a3f1a5c"
+  },
+  {
+    "patch": "0014-android-update-camera-metadata-schema.patch",
+    "sha256": "3793ae686e8f5a0f53d4a1a19b71210946a01fe3be12521e0b165061f1b64a96"
+  },
+  {
+    "patch": "0015-android-import-minigbm-plane-layout.patch",
+    "sha256": "3eec7d1ba5cffeac290dc4f473b122ca38cd690477c674608c5fdd8995e9f191"
+  },
+  {
+    "patch": "0016-a9-sensors-softisp.patch",
+    "sha256": "8180aebf20053b117fd9e28b46eed130b199d0e92d960877d3870b76568a4518"
+  }
+]

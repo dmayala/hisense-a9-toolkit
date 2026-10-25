@@ -1,0 +1,268 @@
+From: A9 project <dmayala@users.noreply.github.com>
+Subject: [PATCH 0063] drm/msm: trace A9 module registration and GPU/DPU probe phases
+
+A saved A9 boot stops after UBWC insertion, before msm.ko returns. Add
+board-only paired markers around synchronous registration, Adreno binding,
+and GPU IRQ/clock/regulator/VM acquisition and DPU probe. Kernel timestamps
+localize the last completed operation without enabling global initcall or
+per-IRQ tracing. Fixed phases and numeric return values contain no addresses
+or device identifiers. No provider order, power, IRQ or error semantics change.
+
+---
+diff --git a/drivers/gpu/drm/msm/msm_drv.c b/drivers/gpu/drm/msm/msm_drv.c
+--- a/drivers/gpu/drm/msm/msm_drv.c
++++ b/drivers/gpu/drm/msm/msm_drv.c
+@@ -17,6 +17,7 @@
+ #include <drm/drm_of.h>
+ 
+ #include "msm_drv.h"
++#include "msm_a9_boot_trace.h"
+ #include "msm_debugfs.h"
+ #include "msm_gem.h"
+ #include "msm_gpu.h"
+@@ -1127,14 +1128,30 @@
+ 		return -EINVAL;
+ 
+ 	DBG("init");
++	a9_msm_trace("register.msm_mdp.begin", 0);
+ 	msm_mdp_register();
++	a9_msm_trace("register.msm_mdp.end", 0);
++	a9_msm_trace("register.msm_dpu.begin", 0);
+ 	msm_dpu_register();
++	a9_msm_trace("register.msm_dpu.end", 0);
++	a9_msm_trace("register.msm_dsi.begin", 0);
+ 	msm_dsi_register();
++	a9_msm_trace("register.msm_dsi.end", 0);
++	a9_msm_trace("register.msm_hdmi.begin", 0);
+ 	msm_hdmi_register();
++	a9_msm_trace("register.msm_hdmi.end", 0);
++	a9_msm_trace("register.msm_dp.begin", 0);
+ 	msm_dp_register();
++	a9_msm_trace("register.msm_dp.end", 0);
++	a9_msm_trace("register.adreno.begin", 0);
+ 	adreno_register();
++	a9_msm_trace("register.adreno.end", 0);
++	a9_msm_trace("register.msm_mdp4.begin", 0);
+ 	msm_mdp4_register();
++	a9_msm_trace("register.msm_mdp4.end", 0);
++	a9_msm_trace("register.msm_mdss.begin", 0);
+ 	msm_mdss_register();
++	a9_msm_trace("register.msm_mdss.end", 0);
+ 
+ 	return 0;
+ }
+diff --git a/drivers/gpu/drm/msm/adreno/adreno_device.c b/drivers/gpu/drm/msm/adreno/adreno_device.c
+--- a/drivers/gpu/drm/msm/adreno/adreno_device.c
++++ b/drivers/gpu/drm/msm/adreno/adreno_device.c
+@@ -7,6 +7,7 @@
+  */
+ 
+ #include "adreno_gpu.h"
++#include "msm_a9_boot_trace.h"
+ 
+ bool hang_debug = false;
+ MODULE_PARM_DESC(hang_debug, "Dump registers when hang is detected (can be slow!)");
+@@ -216,7 +217,9 @@
+ 	struct msm_gpu *gpu;
+ 	int ret;
+ 
++	a9_msm_trace("adreno.bind.begin", 0);
+ 	ret = find_chipid(dev->of_node, &config.chip_id);
++	a9_msm_trace("adreno.chipid.end", ret);
+ 	/* We shouldn't have gotten this far if we can't parse the chip_id */
+ 	if (WARN_ON(ret))
+ 		return ret;
+@@ -237,13 +240,17 @@
+ 	priv->has_cached_coherent =
+ 		!!(info->quirks & ADRENO_QUIRK_HAS_CACHED_COHERENT);
+ 
++	a9_msm_trace("adreno.init.begin", 0);
+ 	gpu = info->funcs->init(drm);
++	a9_msm_trace("adreno.init.end", IS_ERR(gpu) ? PTR_ERR(gpu) : 0);
+ 	if (IS_ERR(gpu)) {
+ 		dev_warn(drm->dev, "failed to load adreno gpu\n");
+ 		return PTR_ERR(gpu);
+ 	}
+ 
++	a9_msm_trace("adreno.icc.begin", 0);
+ 	ret = dev_pm_opp_of_find_icc_paths(dev, NULL);
++	a9_msm_trace("adreno.icc.end", ret);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -271,11 +278,16 @@
+ 
+ static int adreno_probe(struct platform_device *pdev)
+ {
++	int ret;
++
++	a9_msm_trace("adreno.probe.begin", 0);
+ 	if (of_device_is_compatible(pdev->dev.of_node, "amd,imageon") ||
+ 	    msm_gpu_no_components())
+-		return msm_gpu_probe(pdev, &a3xx_ops);
+-
+-	return component_add(&pdev->dev, &a3xx_ops);
++		ret = msm_gpu_probe(pdev, &a3xx_ops);
++	else
++		ret = component_add(&pdev->dev, &a3xx_ops);
++	a9_msm_trace("adreno.probe.end", ret);
++	return ret;
+ }
+ 
+ static void adreno_remove(struct platform_device *pdev)
+diff --git a/drivers/gpu/drm/msm/msm_gpu.c b/drivers/gpu/drm/msm/msm_gpu.c
+--- a/drivers/gpu/drm/msm/msm_gpu.c
++++ b/drivers/gpu/drm/msm/msm_gpu.c
+@@ -7,6 +7,7 @@
+ #include "drm/drm_drv.h"
+ 
+ #include "msm_gpu.h"
++#include "msm_a9_boot_trace.h"
+ #include "msm_gem.h"
+ #include "msm_mmu.h"
+ #include "msm_fence.h"
+@@ -894,6 +895,7 @@
+ 	void *memptrs;
+ 	uint64_t memptrs_iova;
+ 
++	a9_msm_trace("gpu.init.begin", 0);
+ 	gpu->dev = drm;
+ 	gpu->funcs = funcs;
+ 	gpu->name = name;
+@@ -926,7 +928,9 @@
+ 	timer_setup(&gpu->hangcheck_timer, hangcheck_handler, 0);
+ 
+ 	/* Map registers: */
++	a9_msm_trace("gpu.ioremap.begin", 0);
+ 	gpu->mmio = msm_ioremap(pdev, config->ioname);
++	a9_msm_trace("gpu.ioremap.end", IS_ERR(gpu->mmio) ? PTR_ERR(gpu->mmio) : 0);
+ 	if (IS_ERR(gpu->mmio)) {
+ 		ret = PTR_ERR(gpu->mmio);
+ 		goto fail;
+@@ -939,14 +943,18 @@
+ 		goto fail;
+ 	}
+ 
++	a9_msm_trace("gpu.request_irq.begin", 0);
+ 	ret = devm_request_irq(&pdev->dev, gpu->irq, irq_handler,
+ 			IRQF_TRIGGER_HIGH, "gpu-irq", gpu);
++	a9_msm_trace("gpu.request_irq.end", ret);
+ 	if (ret) {
+ 		DRM_DEV_ERROR(drm->dev, "failed to request IRQ%u: %d\n", gpu->irq, ret);
+ 		goto fail;
+ 	}
+ 
++	a9_msm_trace("gpu.clocks.begin", 0);
+ 	ret = get_clocks(pdev, gpu);
++	a9_msm_trace("gpu.clocks.end", ret);
+ 	if (ret)
+ 		goto fail;
+ 
+@@ -956,12 +964,16 @@
+ 		gpu->ebi1_clk = NULL;
+ 
+ 	/* Acquire regulators: */
++	a9_msm_trace("gpu.vdd.begin", 0);
+ 	gpu->gpu_reg = devm_regulator_get(&pdev->dev, "vdd");
++	a9_msm_trace("gpu.vdd.end", IS_ERR(gpu->gpu_reg) ? PTR_ERR(gpu->gpu_reg) : 0);
+ 	DBG("gpu_reg: %p", gpu->gpu_reg);
+ 	if (IS_ERR(gpu->gpu_reg))
+ 		gpu->gpu_reg = NULL;
+ 
++	a9_msm_trace("gpu.vddcx.begin", 0);
+ 	gpu->gpu_cx = devm_regulator_get(&pdev->dev, "vddcx");
++	a9_msm_trace("gpu.vddcx.end", IS_ERR(gpu->gpu_cx) ? PTR_ERR(gpu->gpu_cx) : 0);
+ 	DBG("gpu_cx: %p", gpu->gpu_cx);
+ 	if (IS_ERR(gpu->gpu_cx))
+ 		gpu->gpu_cx = NULL;
+@@ -970,7 +982,9 @@
+ 
+ 	msm_devfreq_init(gpu);
+ 
++	a9_msm_trace("gpu.vm.begin", 0);
+ 	gpu->vm = gpu->funcs->create_vm(gpu, pdev);
++	a9_msm_trace("gpu.vm.end", IS_ERR(gpu->vm) ? PTR_ERR(gpu->vm) : 0);
+ 	if (IS_ERR(gpu->vm)) {
+ 		ret = PTR_ERR(gpu->vm);
+ 		goto fail;
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
+@@ -33,6 +33,7 @@
+ #include "dpu_formats.h"
+ #include "dpu_hw_vbif.h"
+ #include "dpu_kms.h"
++#include "msm_a9_boot_trace.h"
+ #include "dpu_plane.h"
+ #include "dpu_vbif.h"
+ #include "dpu_writeback.h"
+@@ -1383,6 +1384,7 @@
+ 	int irq;
+ 	int ret = 0;
+ 
++	a9_msm_trace("dpu.probe.begin", 0);
+ 	if (!msm_disp_drv_should_bind(&pdev->dev, true))
+ 		return -ENODEV;
+ 
+@@ -1392,15 +1394,21 @@
+ 
+ 	dpu_kms->pdev = pdev;
+ 
++	a9_msm_trace("dpu.opp_clk.begin", 0);
+ 	ret = devm_pm_opp_set_clkname(dev, "core");
++	a9_msm_trace("dpu.opp_clk.end", ret);
+ 	if (ret)
+ 		return ret;
+ 	/* OPP table is optional */
++	a9_msm_trace("dpu.opp_table.begin", 0);
+ 	ret = devm_pm_opp_of_add_table(dev);
++	a9_msm_trace("dpu.opp_table.end", ret);
+ 	if (ret && ret != -ENODEV)
+ 		return dev_err_probe(dev, ret, "invalid OPP table in device tree\n");
+ 
++	a9_msm_trace("dpu.clocks.begin", 0);
+ 	ret = devm_clk_bulk_get_all(&pdev->dev, &dpu_kms->clocks);
++	a9_msm_trace("dpu.clocks.end", ret);
+ 	if (ret < 0)
+ 		return dev_err_probe(dev, ret, "failed to parse clocks\n");
+ 
+@@ -1419,11 +1427,16 @@
+ 	if (ret)
+ 		return ret;
+ 
++	a9_msm_trace("dpu.icc.begin", 0);
+ 	ret = dpu_kms_parse_data_bus_icc_path(dpu_kms);
++	a9_msm_trace("dpu.icc.end", ret);
+ 	if (ret)
+ 		return ret;
+ 
+-	return msm_drv_probe(&pdev->dev, dpu_kms_init, &dpu_kms->base);
++	a9_msm_trace("dpu.component.begin", 0);
++	ret = msm_drv_probe(&pdev->dev, dpu_kms_init, &dpu_kms->base);
++	a9_msm_trace("dpu.probe.end", ret);
++	return ret;
+ }
+ 
+ static void dpu_dev_remove(struct platform_device *pdev)
+diff --git a/drivers/gpu/drm/msm/msm_a9_boot_trace.h b/drivers/gpu/drm/msm/msm_a9_boot_trace.h
+new file mode 100644
+--- /dev/null
++++ b/drivers/gpu/drm/msm/msm_a9_boot_trace.h
+@@ -0,0 +1,17 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef MSM_A9_BOOT_TRACE_H
++#define MSM_A9_BOOT_TRACE_H
++
++#include <linux/of.h>
++#include <linux/printk.h>
++
++/* Fixed boot/probe phases only: no per-frame/IRQ tracing or hardware access.
++ * printk timestamps delimit synchronous init/probe stalls on this board.
++ * Keep this independent of global initcall_debug and dynamic debug. */
++static inline void a9_msm_trace(const char *phase, long rc)
++{
++	if (of_machine_is_compatible("hisense,hlte556n"))
++		pr_notice("A9_MSM_TRACE phase=%s rc=%ld\n", phase, rc);
++}
++
++#endif

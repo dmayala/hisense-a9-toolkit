@@ -1,0 +1,16 @@
+  ok   boot 9e9dc37c1d15  vendor 2955a1afaa01  golden vendor 2a7d5d860518
+Wi-Fi provenance gate PASS (host only; no phone access).
+vendor_b: old 1154674688 B, new 71 B (aligned 1048576); device free for it 1233596416 B; group qti_dynamic_partitions_b used by others 4174049280 of 10733223936
+  ok   gates stay CLOSED (no --open-gates)
+== phone checks (read-only, Android slot a)
+  ok   Android, slot a, boot completed
+  ok   boot_b = golden
+  ok   dtbo_b = golden
+  ok   vendor_b = golden
+== --no-restore: prior slot-B state
+== stage vendor_b (lp-write from slot a)
+FAIL: image size 71 is not a multiple of 512
+lp-write check failed
+staging failed
+== switch to slot a (no writes; slot B keeps the test build)
+   already in Android on slot a

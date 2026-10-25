@@ -1,0 +1,37 @@
+# Kernel and Codec2 startup are opt-in through inclusion of this vendor overlay.
+# R4's GPU post-fs-data action prepares the firmware bridge before this action.
+on post-fs-data
+    setprop media.c2.hal.selection hidl
+    setprop debug.stagefright.ccodec 4
+    setprop ro.vendor.v4l2_codec2.decoder.supported.h264 true
+    setprop ro.vendor.v4l2_codec2.decoder.supported.hevc true
+    setprop ro.vendor.v4l2_codec2.encoder.supported.h264 true
+    setprop ro.vendor.v4l2_codec2.encoder.supported.hevc true
+    setprop ro.vendor.v4l2_codec2.encode_concurrent_instances 1
+    setprop ro.vendor.v4l2_codec2.device_name_filter venus
+    exec_start a9ml_video_load
+
+# The GSI's prefer-hardware action otherwise selects AIDL. This payload uses
+# Android16 HIDL1.2, including the GSI's matching software Codec2 fallback.
+on property:persist.sys.phh.prefer_hw_codecs=true
+    setprop media.c2.hal.selection hidl
+
+service a9ml_video_load /system/bin/sh /vendor/bin/a9-video-start
+    user root
+    group root
+    seclabel u:r:a9ml_video:s0
+    disabled
+    oneshot
+
+on property:vendor.a9.video.ready=1
+    start android-hardware-media-c2-v4l2-hal-1-2
+
+service android-hardware-media-c2-v4l2-hal-1-2 /vendor/bin/hw/android.hardware.media.c2@1.2-service-v4l2-64
+    class hal
+    user media
+    group mediadrm drmrpc graphics
+    seclabel u:r:mediacodec:s0
+    setenv LD_LIBRARY_PATH /vendor/lib64/a9-video:/vendor/lib64
+    task_profiles ProcessCapacityHigh
+    ioprio rt 4
+    disabled

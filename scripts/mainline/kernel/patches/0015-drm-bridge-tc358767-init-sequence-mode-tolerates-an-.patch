@@ -1,0 +1,49 @@
+From bd6d5b239ec98ee3d528011c28b4eb4e75197549 Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 23:03:03 -0700
+Subject: [PATCH] drm/bridge: tc358767: init-sequence mode tolerates an
+ unreadable ID at probe (Hisense A9)
+
+Measured on the A9 (2026-10-15): with VDDC, reset and the panel lines up
+but the DSI host stopped, the bridge NACKs its I2C address. Stock never
+reads it at probe and only talks to it after DSI is on. Assume 0x6601 and
+log the ID again right before the init sequence.
+---
+ drivers/gpu/drm/bridge/tc358767.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/drivers/gpu/drm/bridge/tc358767.c b/drivers/gpu/drm/bridge/tc358767.c
+index 6c92e05a2..fc3d2a499 100644
+--- a/drivers/gpu/drm/bridge/tc358767.c
++++ b/drivers/gpu/drm/bridge/tc358767.c
+@@ -1472,6 +1472,12 @@ static int tc_dpi_stream_enable_seq(struct tc_data *tc)
+ {
+ 	int i, ret, err = 0;
+ 
++	{
++		u32 id = 0;
++		int r = regmap_read(tc->regmap, TC_IDREG, &id);
++
++		dev_info(tc->dev, "before init sequence: ID read %d, ID 0x%04x\n", r, id);
++	}
+ 	dev_dbg(tc->dev, "replaying %d-entry init sequence\n", tc->init_seq_len);
+ 	for (i = 0; i < tc->init_seq_len; i++) {
+ 		u32 reg = tc->init_seq[3 * i];
+@@ -2659,6 +2665,17 @@ static int tc_probe(struct i2c_client *client)
+ 	}
+ 
+ 	ret = regmap_read(tc->regmap, TC_IDREG, &tc->rev);
++	if (ret && tc->init_seq) {
++		/*
++		 * Hisense A9: the bridge does not answer I2C until the DSI host
++		 * is up (stock never reads it at probe; UEFI and stock talk to
++		 * it only after DSI is on, with a continuous HS clock). Assume
++		 * the TC358767 and read the ID again before the init sequence.
++		 */
++		dev_warn(tc->dev, "device ID not readable at probe (%d); checked again after DSI is up\n", ret);
++		tc->rev = 0x6601;
++		ret = 0;
++	}
+ 	if (ret) {
+ 		dev_err(tc->dev, "can not read device ID: %d\n", ret);
+ 		return ret;

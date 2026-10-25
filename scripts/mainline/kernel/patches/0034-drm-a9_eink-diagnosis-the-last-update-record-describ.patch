@@ -1,0 +1,87 @@
+From 1e2227185edd916d78da10f5f3a08a4ad5388ddb Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 16:32:13 -0700
+Subject: [PATCH] drm/a9_eink: diagnosis: the last-update record describes
+ aborted updates; optional per-update log
+
+Android run 8 (inverted-looking glass): the status/debugfs "last" record of
+an aborted update kept the PREVIOUS update's mode, frames and rect (only
+"aborted 1" changed), so the update that left the glass in a partial state
+could not be identified. On abort the record now holds this update's mode,
+pre, clear, type, bin, temperatures, steps, rect and the frames actually
+SENT (transport count, including the init flash). New parameter
+a9_eink.log_updates (default N): one kmsg line per real update, done or
+aborted, with mode, pre, clear, steps, bin, init, rect, frames sent and
+late_drive, to match a photo of the glass to an update. Diagnostics only:
+no change to what is driven or to the power path.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c | 33 +++++++++++++++++++++++++++
+ 1 file changed, 33 insertions(+)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index f519391bb..d78829e7c 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -127,6 +127,15 @@ static char *transport_format = "XR24";
+ module_param(transport_format, charp, 0444);
+ MODULE_PARM_DESC(transport_format, "fourcc of the 448x829 transport buffers: XR24 only (MEASURED lane mapping)");
+ 
++/*
++ * Diagnosis (0034): one kmsg line per real update (start parameters, frames
++ * SENT, drive lateness, result), so a photo of the glass can be matched to
++ * the update that left it (Android run 8: inverted-looking glass).
++ */
++static bool log_updates;
++module_param(log_updates, bool, 0644);
++MODULE_PARM_DESC(log_updates, "Log one line per real update: mode, steps, bin, rect, frames sent, late_drive, result (default no)");
++
+ static int temp_fallback = 28;
+ module_param(temp_fallback, int, 0644);
+ MODULE_PARM_DESC(temp_fallback, "Temperature (deg C) used when a sensor gives nothing; the stock composer starts with 28 (default 28)");
+@@ -982,6 +991,7 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 	ktime_t t0 = ktime_get();
+ 	unsigned int zt = READ_ONCE(zero_test);
+ 	bool prepared = false, init_white = false;
++	u64 sent0 = a9->tx.frames, ld0 = a9->tx.late_drive;
+ 	u32 pre = 0;
+ 	int t1, t2, bin, ret, steps = 0, lo, hi;
+ 
+@@ -1200,6 +1210,11 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 	a9->last.total_us = (u32)ktime_us_delta(ktime_get(), t0);
+ 	a9->updates++;
+ 	*force_clear = false;
++	if (!dry && READ_ONCE(log_updates))
++		dev_info(a9->dev, "update done: mode %#x pre %#x clear %d steps %d bin %d init %d rect %d,%d-%d,%d sent %llu late_drive +%llu\n",
++			 a9->e.mode, pre, a9->e.clear, steps, bin, init_white, a9->e.rect.x1,
++			 a9->e.rect.y1, a9->e.rect.x2, a9->e.rect.y2, a9->tx.frames - sent0,
++			 a9->tx.late_drive - ld0);
+ 	if (dry) {
+ 		/* the debugfs "levels" of a dry run are the model's; restore the real one */
+ 		memcpy(a9->dry_levels, a9->e.old, A9T_N);
+@@ -1213,6 +1228,24 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ abort:
+ 	dev_err(a9->dev, "update aborted after %u frames (%d): forcing a clear next\n",
+ 		a9->e.nframes, ret);
++	/* the record describes THIS update (it used to keep the previous one's) */
++	a9->last.mode = a9->e.mode;
++	a9->last.pre = pre;
++	a9->last.clear = a9->e.clear;
++	a9->last.type = a9->e.type;
++	a9->last.bin = bin;
++	a9->last.t1 = t1;
++	a9->last.t2 = t2;
++	a9->last.frames = (u32)(a9->tx.frames - sent0);	/* sent (real) */
++	a9->last.steps = steps;
++	a9->last.rect = a9->e.rect;
++	a9->last.dry = dry;
++	a9->last.sha_valid = false;
++	if (!dry)
++		dev_info(a9->dev, "update aborted: mode %#x pre %#x clear %d steps %d bin %d init %d rect %d,%d-%d,%d sent %llu (incl. init) late_drive +%llu (%d): the glass holds a partial waveform until the forced clear\n",
++			 a9->e.mode, pre, a9->e.clear, steps, bin, init_white, a9->e.rect.x1,
++			 a9->e.rect.y1, a9->e.rect.x2, a9->e.rect.y2, a9->tx.frames - sent0,
++			 a9->tx.late_drive - ld0, ret);
+ 	a9e_abort(&a9->e);
+ 	a9->last.aborted = 1;
+ 	a9->aborts++;

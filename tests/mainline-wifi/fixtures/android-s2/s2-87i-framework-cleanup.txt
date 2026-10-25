@@ -1,0 +1,7 @@
+S2_BRIDGE phase=binder-api
+S2_BRIDGE phase=runtime-hashes
+S2_BRIDGE phase=binder-api
+S2_BRIDGE phase=disable
+S2_BRIDGE phase=forget
+S2_BRIDGE cleanup=forgotten
+S2_ROOT_RC 0

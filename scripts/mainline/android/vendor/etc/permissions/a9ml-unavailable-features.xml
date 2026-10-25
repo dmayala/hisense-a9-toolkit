@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hisense A9 mainline vendor: features handheld_core_hardware.xml declares
+     that this vendor has no HAL for yet. Bluetooth crash-looped in boot 4
+     (HidlHci assert hci_ != nullptr, 4 tombstones). -->
+<permissions>
+    <unavailable-feature name="android.hardware.bluetooth" />
+    <unavailable-feature name="android.hardware.bluetooth_le" />
+</permissions>

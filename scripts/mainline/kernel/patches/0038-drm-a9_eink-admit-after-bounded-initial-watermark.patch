@@ -1,0 +1,148 @@
+From 23dba5e4dceb0c928273c1b1f370159afa05ec85 Mon Sep 17 00:00:00 2001
+From: dmayala <dmayala@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 02:37:17 +0000
+Subject: [PATCH 0038] drm/a9_eink: admit jobs after a bounded initial
+ watermark
+
+Keep the 32-slot capacity while selecting twelve ready frames by default.
+Review 19 rejected K=4: the saved 84.652 ms render maximum exceeds its
+remaining queue reserve. K=12 is a supervised qualification choice, not
+a scheduling or unattended throughput guarantee. Bound prefill_frames to
+2..32 and snapshot it before posting each job. Producer completion still
+permits short sequences; errors, cancellation and deadlines retain precedence.
+
+Preserve immediate starvation failure, the latched trial fault, neutral or
+emergency HV removal, power-down-before-join and all transport/PMIC caps.
+Apply after 0001-0037. The Android companion explicitly writes and verifies
+K=12 before opening gates; a bounded property permits future qualification.
+
+Co-Authored-By: GPT-6.1 Sol (Codex)
+---
+ drivers/gpu/drm/a9_eink/a9_eink.h      |  2 +-
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c  | 32 ++++++++++++++++++++++++--
+ drivers/gpu/drm/a9_eink/a9_eink_ring.c | 11 +++++----
+ 3 files changed, 38 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index f3f46a6102c4684bca3a07e1be143b91ac7aa548..a4450e0eec67227bc1a642964c7891f8a4cdb904 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -113,7 +113,7 @@ u8 *a9r_slot(struct a9_ring *r);
+ void a9r_publish(struct a9_ring *r, bool null);
+ void a9r_finish(struct a9_ring *r, int err);
+ int a9r_prefill(struct a9_ring *r, struct a9x_transport *t, unsigned int timeout_ms,
+-		const bool *enable);
++		const bool *enable, unsigned int min_frames);
+ int a9r_drive(struct a9_ring *r, struct a9x_transport *t, const bool *enable);
+ void a9r_request_stop(struct a9_ring *r);
+ void a9r_stop(struct a9_ring *r);
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index 20147e07faf6d8d6b46d4f3117eb008b109688be..0a1e4c4e4ff9ac8583521f98cb8b7868608f2094 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -100,6 +100,33 @@ static unsigned int hv_max_ms = 60000;
+ module_param(hv_max_ms, uint, 0644);
+ MODULE_PARM_DESC(hv_max_ms, "Power down between updates after this much continuous HV-on time; stock has no cap, 33 s seen (default 60000)");
+ 
++/* Initial admission credit, independent of the fixed 32-slot capacity.
++ * Review 19 selects twelve slots for supervised qualification; this is not
++ * a throughput or scheduling guarantee. Empty-ring failure still immediately
++ * aborts the whole trial.
++ */
++static unsigned int prefill_frames = 12;
++
++static int a9_prefill_set(const char *val, const struct kernel_param *kp)
++{
++	unsigned int v;
++	int ret = kstrtouint(val, 0, &v);
++
++	if (ret)
++		return ret;
++	if (v < 2 || v > A9R_SLOTS)
++		return -EINVAL;
++	WRITE_ONCE(*(unsigned int *)kp->arg, v);
++	return 0;
++}
++
++static const struct kernel_param_ops a9_prefill_ops = {
++	.set = a9_prefill_set,
++	.get = param_get_uint,
++};
++module_param_cb(prefill_frames, &a9_prefill_ops, &prefill_frames, 0644);
++MODULE_PARM_DESC(prefill_frames, "Initial ready-slot watermark (2..32, default 12); snapshotted per posted job; capacity remains 32");
++
+ /*
+  * Stage E3 of docs/mainline-eink-steps.md: with zero_test = N > 0 and
+  * enable = 1, an update powers the pipeline up exactly as a real one (HV and
+@@ -1017,7 +1044,7 @@ static int a9_render_thread(void *data)
+ 
+ /*
+  * Real update with the pipeline up (idle frame on the glass): post the job,
+- * wait until the ring is full (or the update completely rendered), then send.
++ * wait for the initial watermark (or the update completely rendered), then send.
+  * Any error: request stop, establish neutral/power down BEFORE joining the
+  * producer. Unexpected failures latch the trial off; enable=0 cancellation
+  * remains distinct. *init_shown: every init-flash frame was sent.
+@@ -1028,6 +1055,7 @@ static int a9_run_ring(struct a9_eink *a9, bool init, int bin, struct sha256_ctx
+ {
+ 	u64 f0 = a9->tx.frames;
+ 	ktime_t p0 = ktime_get();
++	unsigned int watermark = READ_ONCE(prefill_frames);
+ 	int ret;
+ 
+ 	if (atomic_read(&a9x_stall_fault))
+@@ -1040,7 +1068,7 @@ static int a9_run_ring(struct a9_eink *a9, bool init, int bin, struct sha256_ctx
+ 	/* Publish prepared engine, init/bin and optional stack hash as one job. */
+ 	smp_store_release(&a9->rjob, true);
+ 	wake_up(&a9->rwq);
+-	ret = a9r_prefill(&a9->ring, &a9->tx, A9_PREFILL_MS, &enable);
++	ret = a9r_prefill(&a9->ring, &a9->tx, A9_PREFILL_MS, &enable, watermark);
+ 	a9->prefill_us = (u32)ktime_us_delta(ktime_get(), p0);
+ 	if (ret)
+ 		dev_err(a9->dev, "render-ahead prefill failed (%d): update not started\n", ret);
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_ring.c b/drivers/gpu/drm/a9_eink/a9_eink_ring.c
+index cfac70b5affbd75aab72bee18a95d7b2a723e5eb..3217a0f4ee1188d593606c9a9a9e5d2a10d047ad 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_ring.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_ring.c
+@@ -16,7 +16,7 @@
+  * composed buffer equals what a9x_compose made of the full frame.
+  *
+  * Rules, all enforced here:
+- *  - the waveform starts only once the ring is full (or the whole update is
++ *  - the waveform starts once the initial watermark is ready (or the update is
+  *    rendered): a9r_prefill; until then the panel scans the idle frame;
+  *  - the consumer never waits for a frame with a drive frame on the glass:
+  *    an empty ring before the producer is done is an UNDERRUN (-EAGAIN); the
+@@ -129,24 +129,27 @@ void a9r_finish(struct a9_ring *r, int err)
+ }
+ 
+ /*
+- * consumer: until the ring is full or the update completely rendered, keep
++ * consumer: until min_frames slots are ready or the update is rendered, keep
+  * the panel on idle refreshes at the frame rate (the stock idle frame, as
+  * between updates; no gap for the timing counters). Reject admission at the
+  * deadline, including a late ready/done return from idle_refresh. This cannot
+  * bound a stuck DRM call's duration: FP9929A's independent cap still applies.
+  */
+ int a9r_prefill(struct a9_ring *r, struct a9x_transport *t, unsigned int timeout_ms,
+-		const bool *enable)
++		const bool *enable, unsigned int min_frames)
+ {
+ 	unsigned long end = jiffies + msecs_to_jiffies(timeout_ms);
+ 	int err;
+ 
++	/* Bound direct callers too; parameter writes reject this range already. */
++	if (min_frames < 2 || min_frames > A9R_SLOTS)
++		return -EINVAL;
+ 	for (;;) {
+ 		bool ready;
+ 
+ 		/* Also run on the ready/done fast path and after EVERY idle commit. */
+ 		spin_lock(&r->lock);
+-		ready = r->done || r->head - r->tail >= A9R_SLOTS;
++		ready = r->done || r->head - r->tail >= min_frames;
+ 		if (r->stop || !READ_ONCE(*enable))
+ 			err = -ECANCELED;
+ 		else if (time_after_eq(jiffies, end))
+-- 
+2.51.0

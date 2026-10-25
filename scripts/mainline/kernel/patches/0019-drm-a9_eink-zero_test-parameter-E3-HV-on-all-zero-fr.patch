@@ -1,0 +1,75 @@
+From 97d548939d6e777b4daf0e8e955565707b1fe46c Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 23:48:44 -0700
+Subject: [PATCH 3/3] drm/a9_eink: zero_test parameter (E3: HV on, all-zero
+ frames only)
+
+With zero_test = N and enable = 1 an update powers the pipeline up as usual
+(HV and PG verified), commits N all-zero frames (max 850), keeps the engine
+state, logs 'zero test: i/N', then the normal power-down.
+---
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c | 44 +++++++++++++++++++++++++++
+ 1 file changed, 44 insertions(+)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index 32f7b9a08..5615d9338 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -83,6 +83,16 @@ static unsigned int hv_max_ms = 60000;
+ module_param(hv_max_ms, uint, 0644);
+ MODULE_PARM_DESC(hv_max_ms, "Power down between updates after this much continuous HV-on time; stock has no cap, 33 s seen (default 60000)");
+ 
++/*
++ * Stage E3 of docs/mainline-eink-steps.md: with zero_test = N > 0 and
++ * enable = 1, an update powers the pipeline up exactly as a real one (HV and
++ * PG verified first), commits N all-zero (no drive) frames, and changes no
++ * engine state: the glass must not change. Then the normal hold/power-down.
++ */
++static unsigned int zero_test;
++module_param(zero_test, uint, 0644);
++MODULE_PARM_DESC(zero_test, "E3 test: send this many all-zero frames per update instead of the waveform (default 0 = off)");
++
+ static bool init_flash = true;
+ module_param(init_flash, bool, 0644);
+ MODULE_PARM_DESC(init_flash, "Run the stock one-time init flash before the first update (default: yes)");
+@@ -642,6 +652,40 @@ static void a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 	}
+ 	a9_temps(a9, &t1, &t2);	/* t1 was sampled by the FP9929A at this power-up */
+ 
++	if (!dry && READ_ONCE(zero_test)) {
++		unsigned int i, n = min(READ_ONCE(zero_test), 850U);	/* <= 10 s at 85 Hz */
++
++		memset(a9->frame, 0, A9T_FRAME_BYTES);
++		for (i = 0; i < n; i++) {
++			ret = READ_ONCE(enable) ? a9x_show(&a9->tx, a9->frame) : -ECANCELED;
++			if (ret)
++				break;
++		}
++		mutex_lock(&a9->eng_lock);
++		a9->last.mode = 0;
++		a9->last.pre = 0;
++		a9->last.clear = 0;
++		a9->last.type = 0;
++		a9->last.bin = a9t_temp_bin(&a9->e.st, t1, t2);
++		a9->last.t1 = t1;
++		a9->last.t2 = t2;
++		a9->last.frames = i;
++		a9->last.steps = 0;
++		a9->last.dry = 0;
++		a9->last.aborted = ret ? 1 : 0;
++		a9->last.sha_valid = false;
++		a9->last.total_us = (u32)ktime_us_delta(ktime_get(), t0);
++		if (ret)
++			a9->aborts++;
++		else
++			a9->updates++;
++		mutex_unlock(&a9->eng_lock);
++		dev_info(a9->dev, "zero test: %u/%u all-zero frames with HV on (%d)\n", i, n, ret);
++		if (ret)
++			a9_power_off(a9);
++		return;
++	}
++
+ 	mutex_lock(&a9->eng_lock);
+ 	if (dry) {
+ 		/* a dry run must not change what the real pipeline believes */

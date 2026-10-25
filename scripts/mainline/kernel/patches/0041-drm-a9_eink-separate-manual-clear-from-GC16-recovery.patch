@@ -1,0 +1,137 @@
+From fbdeb3e094df778b44ead3378cc3caf5040a2263 Mon Sep 17 00:00:00 2001
+From: dmayala <dmayala@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 05:38:35 +0000
+Subject: [PATCH 0041] drm/a9_eink: separate mode-preserving manual clear from
+ GC16 recovery
+
+Expose manual_clear for user clearing in the entered steady mode. Preserve
+force_clear as full GC16 recovery. Recovery, init, unknown history, rail/stall
+faults and manual requests during mode entry take priority. Snapshot requests
+under shadow_lock; later arrivals remain queued.
+
+Reuse full stock clear requests without a damage mask. Inherit corrected
+0040 rail validation and physical idle deadline unchanged, alongside fixed-bin
+admission, hard drive budgets, interlocks and K=12. Apply after 0039 and 0040.
+---
+ drivers/gpu/drm/a9_eink/a9_eink.h     |  2 +-
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c | 53 ++++++++++++++++++++++++---
+ 2 files changed, 49 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index fbd0b2150dbb4ee4ea6e258201acab01d2992254..8d46446741fe418b7b53925cbeccbc7bdbb7150a 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -182,7 +182,7 @@ struct a9_eink {
+ 	struct mutex shadow_lock;
+ 	u8 *shadow;			/* landscape grey of the latest commit */
+ 	struct a9e_rect dirty;
+-	bool clear_req, kick, busy, suspending, parked;
++	bool clear_req, manual_clear_req, kick, busy, suspending, parked;
+ 	bool kms_teardown;		/* remove: a disable really disables (unlinks) */
+ 	u32 mode;			/* stock mode word, sysfs "mode" */
+ 	int controls[3];		/* black, white, contrast */
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index 92984a4f04d0765f5ea42354ed8dc9c77ddcd758..2daa4d0a97d8c6e2eac15dbe6b00a51b6309f4b6 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -49,7 +49,7 @@
+  *
+  * Userspace control ABI (docs/mainline-eink-compat.md): the connector's
+  * "eink" sysfs group: mode (513/515/518/521, default 518), black_threshold,
+- * white_threshold, contrast, force_clear. Debug: debugfs a9_eink/.
++ * white_threshold, contrast, manual_clear, force_clear. Debug: debugfs a9_eink/.
+  */
+ #include <linux/debugfs.h>
+ #include <linux/delay.h>
+@@ -600,6 +600,27 @@ static ssize_t force_clear_store(struct device *kdev, struct device_attribute *a
+ }
+ static DEVICE_ATTR_WO(force_clear);
+ 
++/* Stock-style user clear: retain the entered mode, never authorize recovery.
++ * Selection under shadow_lock gives recovery/entry requirements priority.
++ */
++static ssize_t manual_clear_store(struct device *kdev, struct device_attribute *attr,
++				  const char *buf, size_t len)
++{
++	struct a9_eink *a9 = kdev_to_a9(kdev);
++
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	if (!a9->thread)
++		return -ENODEV;
++	mutex_lock(&a9->shadow_lock);
++	a9->manual_clear_req = true;
++	a9->kick = true;
++	mutex_unlock(&a9->shadow_lock);
++	wake_up(&a9->wq);
++	return len;
++}
++static DEVICE_ATTR_WO(manual_clear);
++
+ /* Root-only diagnostic input; neither this nor "off" changes any drive gate.
+  * Full Clear jobs share normal temperature, bin, fault and timing admission.
+  */
+@@ -710,6 +731,7 @@ static struct attribute *a9_eink_attrs[] = {
+ 	&dev_attr_white_threshold.attr,
+ 	&dev_attr_contrast.attr,
+ 	&dev_attr_force_clear.attr,
++	&dev_attr_manual_clear.attr,
+ 	&dev_attr_test_pattern.attr,
+ 	&dev_attr_status.attr,
+ 	NULL
+@@ -1529,7 +1551,7 @@ static void a9_update(struct a9_eink *a9, const struct a9_job *job)
+ /* ---- worker ------------------------------------------------------------------------ */
+ static bool a9_take_job(struct a9_eink *a9, struct a9_job *job)
+ {
+-	bool have = false;
++	bool have = false, recovery;
+ 
+ 	mutex_lock(&a9->shadow_lock);
+ 	if (a9->kick) {
+@@ -1541,20 +1563,41 @@ static bool a9_take_job(struct a9_eink *a9, struct a9_job *job)
+ 			mutex_unlock(&a9->eng_lock);
+ 			a9->controls_dirty = false;
+ 		}
+-		if (a9->test_pattern || a9->clear_req ||
+-		    (job->dry ? a9->dry_force_clear : a9->force_clear)) {
++		/* Userspace can request a manual clear, never waive recovery. The
++		 * worker owns these recovery flags; engine history is read locked.
++		 * A manual request during pending mode entry uses the conservative
++		 * GC16 path. Ordinary entry still uses the existing request builder.
++		 */
++		recovery = a9->test_pattern || a9->clear_req || a9->hv_fault ||
++			a9x_fault_latched() ||
++			(job->dry ? a9->dry_force_clear || a9->dry_init_pending :
++			 a9->force_clear || a9->init_pending);
++		mutex_lock(&a9->eng_lock);
++		recovery |= !a9->e.have_pre || (a9->manual_clear_req &&
++			a9->e.pre_mode != (a9->mode & ~0x100u));
++		mutex_unlock(&a9->eng_lock);
++		if (recovery) {
+ 			/* full GC16 of the newest image; the steady mode stays as set */
+ 			job->mode = A9_MODE_CLEAR;
+ 			job->clear = 1;
+ 			job->mask = 0;
+ 			job->rect = a9e_rect_full();
+-			a9->clear_req = false;
++		} else if (a9->manual_clear_req) {
++			job->mode = a9->mode;
++			job->clear = 1;
++			job->mask = 0;
++			job->rect = a9e_rect_full();
+ 		} else {
+ 			job->mode = a9->mode;
+ 			job->clear = 0;
+ 			job->mask = READ_ONCE(mask_outside_damage);
+ 			job->rect = a9->dirty;
+ 		}
++		/* The selected full job satisfies both snapshotted requests. A
++		 * request written during this job remains queued for its successor.
++		 */
++		a9->clear_req = false;
++		a9->manual_clear_req = false;
+ 		a9->dirty = (struct a9e_rect){ 0, 0, 0, 0 };
+ 		if (a9->test_pattern)
+ 			a9e_pattern_contrast(a9->e.grey);
+-- 
+2.51.0

@@ -1,0 +1,42 @@
+[
+  {
+    "name": "rmtfs",
+    "url": "https://github.com/linux-msm/rmtfs.git",
+    "commit": "b30a3eb38f9af283f18dbd3c7755653efc52c094",
+    "tree": "9fc51a614a8a1441ac1148b9b524668987d964bf",
+    "archive_sha256": "1cf0cc3a74c0107ffc46d1ba351de21e2dc0d3e3584d936261a5e6ea6517ce66",
+    "archive": "rmtfs-b30a3eb38f9af283f18dbd3c7755653efc52c094.tar"
+  },
+  {
+    "name": "tqftpserv",
+    "url": "https://github.com/linux-msm/tqftpserv.git",
+    "commit": "b31de6db4f31d09119293203d39636b827f16321",
+    "tree": "4188f8141311e26de07032ed5ff77ee0d2d2007f",
+    "archive_sha256": "da448d6421fadcfd2cf451e76b3f03d1fcbfd7e2bc81859613a8b66a105878b4",
+    "archive": "tqftpserv-b31de6db4f31d09119293203d39636b827f16321.tar"
+  },
+  {
+    "name": "pd-mapper",
+    "url": "https://github.com/linux-msm/pd-mapper.git",
+    "commit": "5ecd2fe926aca7abfe40724177f63b942cff3947",
+    "tree": "6ffecdb5772354ebd83458355dc16c5f7a23650a",
+    "archive_sha256": "9708a2af089e79c886be2268441bfda9d732d7e587bf9ae7847e4ea80b113f02",
+    "archive": "pd-mapper-5ecd2fe926aca7abfe40724177f63b942cff3947.tar"
+  },
+  {
+    "name": "qrtr",
+    "url": "https://github.com/linux-msm/qrtr.git",
+    "commit": "29e36ae164389580a0f8ea7a7fdb728140ae978d",
+    "tree": "0ca99b45beb1ff1626d1908c5374eaa09c66f8ac",
+    "archive_sha256": "bcf9b0035e1683fb0ea0e2419fcdf3d8bb57c5a2dc980f80fd62464206ad4dc4",
+    "archive": "qrtr-29e36ae164389580a0f8ea7a7fdb728140ae978d.tar"
+  },
+  {
+    "name": "diag",
+    "url": "https://github.com/linux-msm/diag.git",
+    "commit": "23c12c167e93215853af4e59c021551767f6fec8",
+    "tree": "47348e5ffa706bc22668fa89052f84e17c09f9c2",
+    "archive_sha256": "ac783ea0d77737dc1e1ef32984046094dda39659375cfde14f830787b0c93bb8",
+    "archive": "diag-23c12c167e93215853af4e59c021551767f6fec8.tar"
+  }
+]

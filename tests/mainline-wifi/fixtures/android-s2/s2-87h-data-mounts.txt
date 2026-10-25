@@ -1,0 +1,2 @@
+/dev/block/ram0 on /data type ext4 (rw,seclabel,nosuid,nodev,noatime,discard)
+/dev/block/ram0 on /data/user/0 type ext4 (rw,seclabel,nosuid,nodev,noatime,discard)

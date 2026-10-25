@@ -1,0 +1,122 @@
+#!/bin/sh
+# a9-ctl -- control and log capture for the A9 mainline initramfs (2026-10-15).
+#
+# Served by init on TCP 2323 over the USB NCM link (tcpsvd: one connection =
+# one command, stdin/stdout = the socket), and callable from the ACM shell.
+# Reads ONE command line from stdin (or takes it as arguments):
+#   stay <s>     keep the dead-man away for <s> seconds (creates /tmp/stay and
+#                removes it again after <s> s; the dead-man then fires)
+#   release      remove /tmp/stay now (the dead-man fires at once if due)
+#   capture      tar.gz on stdout: the safe set (dmesg, progress, beacon,
+#                deferred, interrupts, drivers/devices, modules, cmdline ...)
+#   capture-dbg  tar.gz on stdout: regulator_summary and clk_summary (these
+#                read every clock/regulator; asked for separately so that a
+#                reset while reading them cannot cost the safe set)
+#   eink-load core|bridge   staged display module load (a9-eink; no power)
+#   eink-status             a9-eink status
+#   i2c-probe    E2a, READ-ONLY raw I2C on bus 0 (the E Ink bus): TC358767 chip
+#                ID (reg 0x0500 at 0x0f) and FP9929A reg 0x02 (VCOM) / 0x00
+#                (temperature register; a raw read never toggles PWRUP).
+#                No i2cdetect, no i2cset, no writes. NACKs are results.
+#   eink-seq <verb> [args]  the E3-E5 sequencer (/bin/a9-eink-seq: pre, e3,
+#                e5a, verdict, e5b, e5c, safe, status, fetch). The only path
+#                that opens the E Ink power gates; see that file's header.
+#   bootloader   reboot to bootloader fastboot now (after eink-seq safe)
+#   ping         prints "a9-ctl ok <uptime>"
+# Never writes storage. Opens the E Ink power gates only through eink-seq.
+PATH=/bin:/sbin
+if [ $# -gt 0 ]; then line="$*"; else read -r line; fi
+set -- $line
+log() { echo "a9-ctl: $*" >/dev/kmsg; echo "$(cut -d' ' -f1 /proc/uptime) a9-ctl: $*" >>/tmp/a9-progress; }
+
+mountpoint -q /sys/kernel/debug || mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null
+
+collect_safe() {
+	d=$1
+	dmesg > $d/dmesg.txt 2>&1
+	cp /tmp/a9-progress $d/progress.txt 2>/dev/null
+	cat /sys/module/qcom_pon/parameters/beacon > $d/beacon.txt 2>&1
+	cat /sys/kernel/debug/devices_deferred > $d/devices_deferred.txt 2>&1
+	cat /proc/interrupts > $d/interrupts.txt 2>&1
+	cat /proc/cmdline > $d/cmdline.txt 2>&1
+	cat /proc/modules > $d/modules.txt 2>&1
+	cat /proc/iomem > $d/iomem.txt 2>&1
+	uname -a > $d/uname.txt 2>&1
+	cat /proc/uptime >> $d/uname.txt 2>&1
+	for dr in /sys/bus/platform/drivers/*; do
+		echo "$dr:"; ls "$dr" 2>/dev/null | grep -v -e '^bind$' -e '^unbind$' -e '^uevent$' -e '^module$'
+	done > $d/drivers.txt 2>&1
+	for dv in /sys/bus/platform/devices/*; do
+		drv=$(readlink "$dv/driver" 2>/dev/null); echo "${dv##*/} ${drv##*/}"
+	done | sed 's/ $/ -/' > $d/devices.txt 2>&1
+	ls /sys/class/udc /sys/class/net /sys/class/regulator /sys/fs/pstore > $d/classes.txt 2>&1
+	for c in /sys/class/drm/card*-*; do
+		[ -d "$c" ] && echo "$c status=$(cat $c/status 2>&1) enabled=$(cat $c/enabled 2>&1) modes=$(cat $c/modes 2>&1 | tr '\n' ' ')"
+	done > $d/drm_connectors.txt 2>&1
+	ls -la /sys/fs/pstore > $d/pstore.txt 2>&1
+	ps > $d/ps.txt 2>&1
+	for ps in /sys/class/power_supply/*; do
+		[ -r "$ps/uevent" ] && { echo "== $ps"; cat "$ps/uevent"; }
+	done > $d/power_supply.txt 2>&1
+}
+
+case "$1" in
+stay)
+	s=${2:-300}
+	touch /tmp/stay
+	( sleep "$s"; rm -f /tmp/stay; log "stay ($s s) ended" ) >/dev/null 2>&1 &
+	log "stay for $s s"
+	echo "a9-ctl stay $s"
+	;;
+release)
+	rm -f /tmp/stay; log "released"; echo "a9-ctl released" ;;
+capture|capture-dbg)
+	d=/tmp/cap-$$; mkdir -p $d
+	if [ "$1" = capture ]; then
+		collect_safe $d
+	else
+		cat /sys/kernel/debug/regulator/regulator_summary > $d/regulator_summary.txt 2>&1
+		cat /sys/kernel/debug/clk/clk_summary > $d/clk_summary.txt 2>&1
+		# valid (non-reserved) TLMM lines only; reserved pins are skipped
+		cat /sys/kernel/debug/gpio > $d/gpio.txt 2>&1
+		cat /sys/kernel/debug/pm_genpd/pm_genpd_summary > $d/pm_genpd_summary.txt 2>&1
+		for f in $(find /sys/devices -name state_synced 2>/dev/null); do
+			echo "$f $(cat $f 2>/dev/null)"; done > $d/state_synced.txt
+		for f in /sys/bus/iio/devices/iio:device*/in_*_input /sys/bus/iio/devices/iio:device*/in_*_raw; do
+			[ -r "$f" ] && echo "$f $(cat $f 2>&1)"; done > $d/iio.txt 2>&1
+		ls -la /sys/class/drm /dev/dri > $d/drm.txt 2>&1
+		cat /sys/kernel/debug/devices_deferred > $d/devices_deferred_late.txt 2>&1
+	fi
+	log "$1: $(ls $d | wc -l) files"
+	tar -czf - -C $d . 2>/dev/null
+	rm -rf $d
+	;;
+eink-load)
+	log "eink-load ${2:-}"; /bin/a9-eink load "${2:-}" 2>&1 ;;
+eink-status)
+	/bin/a9-eink status 2>&1 ;;
+i2c-probe)
+	log "i2c-probe (E2a, read-only)"
+	b=$(ls -d /sys/bus/i2c/devices/0-0048 >/dev/null 2>&1 && echo 0)
+	[ "$b" = 0 ] || { echo "a9-ctl: bus 0 is not the FP9929A bus, refusing"; exit 1; }
+	for g in 2 25 26 31 33 34 36 81 82 86; do grep " gpio$g " /sys/kernel/debug/gpio; done
+	echo "tc358767 0x0f reg 0x0500 (ID, expect 0x01 0x66 0x00 0x00):"
+	timeout 5 i2ctransfer -y 0 w2@0x0f 0x05 0x00 r4 2>&1
+	echo "fp9929a 0x48 reg 0x02 (VCOM code, 0x7e = 2730 mV):"
+	timeout 5 i2cget -f -y 0 0x48 0x02 b 2>&1
+	echo "fp9929a 0x48 reg 0x00 (temperature):"
+	timeout 5 i2cget -f -y 0 0x48 0x00 b 2>&1
+	grep "4a80000.i2c" /proc/interrupts
+	dmesg | tail -n 5
+	;;
+eink-seq)
+	shift; log "eink-seq $*"; /bin/a9-eink-seq "$@" 2>&1 ;;
+bootloader)
+	log "reboot to bootloader requested"; echo "a9-ctl rebooting"
+	[ -d /tmp/eink-seq ] && timeout 40 /bin/a9-eink-seq safe "a9-ctl bootloader" >/dev/null 2>&1
+	sync; /bin/a9-reboot bootloader ;;
+ping|"")
+	echo "a9-ctl ok $(cut -d' ' -f1 /proc/uptime)" ;;
+*)
+	echo "a9-ctl: unknown command '$1'" ;;
+esac

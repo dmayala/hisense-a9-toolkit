@@ -1,0 +1,11 @@
+# A9 mainline health HAL (A9_HEALTH=real build-vendor.sh): the Cuttlefish
+# health binary with its fake-battery overrides patched out (patch-health.py),
+# installed outside its APEX under the name vendor_file_contexts already
+# labels hal_health_default_exec. Reads /sys/class/power_supply (PMI632
+# observe driver: battery, a9-usb). Same service options as the APEX rc.
+service vendor.health-a9 /vendor/bin/hw/android.hardware.health-service.cuttlefish
+    class hal
+    user system
+    group system
+    capabilities WAKE_ALARM BLOCK_SUSPEND
+    file /dev/kmsg w

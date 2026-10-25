@@ -1,0 +1,7 @@
+__pycache__/
+build/
+# Firmware, private identity includes and HAL binaries belong outside this repo.
+*.bin
+*.tlv
+*.so
+address.dtsi

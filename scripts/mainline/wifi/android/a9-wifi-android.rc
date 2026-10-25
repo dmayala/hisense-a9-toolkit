@@ -1,0 +1,57 @@
+# Installed ONLY when A9_WIFI=1 and A9_WIFI_ANDROID=1; pinned matched CF prebuilts.
+# A lazy interface start passes the fixed-role wrapper's same explicit gate.
+# The coordinator opens it after MPSS, wlan0, MAC and direct-scan checks.
+on post-fs-data && property:ro.a9ml.wifi.android=1
+    mkdir /data/vendor/wifi 0770 wifi wifi
+    mkdir /data/vendor/wifi/wpa 0770 wifi wifi
+    mkdir /data/vendor/wifi/wpa/sockets 0770 wifi wifi
+    mkdir /data/vendor/wifi/hostapd 0770 wifi wifi
+    mkdir /data/vendor/wifi/hostapd/sockets 0770 wifi wifi
+    restorecon_recursive /data/vendor/wifi
+
+on property:vendor.a9ml.wifi.android.ready=1 && property:ro.a9ml.wifi.android=1
+    start vendor.a9ml_wifi_hal
+    start wpa_supplicant
+
+on property:vendor.a9ml.wifi.android.ready=0 && property:ro.a9ml.wifi.android=1
+    stop hostapd
+    stop wpa_supplicant
+    stop vendor.a9ml_wifi_hal
+
+service vendor.a9ml_wifi_hal /system/bin/sh /vendor/bin/a9ml-wifi-android-start.sh hal
+    interface aidl android.hardware.wifi.IWifi/default
+    setenv LD_LIBRARY_PATH /vendor/lib64/a9-wifi/hal:/vendor/lib64
+    class hal
+    user wifi
+    group wifi inet
+    capabilities NET_ADMIN NET_RAW
+    seclabel u:r:hal_wifi_default:s0
+    disabled
+    oneshot
+
+service wpa_supplicant /system/bin/sh /vendor/bin/a9ml-wifi-android-start.sh supplicant
+    interface aidl android.hardware.wifi.supplicant.ISupplicant/default
+    setenv LD_LIBRARY_PATH /vendor/lib64/a9-wifi/supplicant:/vendor/lib64
+    class hal
+    user wifi
+    group wifi inet net_admin net_raw
+    capabilities NET_ADMIN NET_RAW
+    socket wpa_wlan0 dgram 660 wifi wifi
+    seclabel u:r:hal_wifi_supplicant_default:s0
+    disabled
+    oneshot
+
+# AP is a separate experiment; it is never started during the first STA scan.
+on property:vendor.a9ml.wifi.android.ap=1 && property:vendor.a9ml.wifi.android.ready=1
+    start hostapd
+
+service hostapd /system/bin/sh /vendor/bin/a9ml-wifi-android-start.sh hostapd
+    interface aidl android.hardware.wifi.hostapd.IHostapd/default
+    setenv LD_LIBRARY_PATH /vendor/lib64/a9-wifi/supplicant:/vendor/lib64
+    class hal
+    user wifi
+    group wifi inet net_admin net_raw
+    capabilities NET_ADMIN NET_RAW
+    seclabel u:r:hal_wifi_hostapd_default:s0
+    disabled
+    oneshot

@@ -1,0 +1,104 @@
+--- a/drivers/media/platform/qcom/venus/hfi_venus.c
++++ b/drivers/media/platform/qcom/venus/hfi_venus.c
+@@ -1092,14 +1092,32 @@
+ 	struct venus_hfi_device *hdev = to_hfi_priv(core);
+ 	const struct venus_resources *res;
+ 	void *pkt;
+-	u32 msg_ret;
++	u32 msg_ret, status, wd_mask;
+ 
+ 	if (!hdev)
+ 		return IRQ_NONE;
+ 
++	/* IRQF_ONESHOT serializes this snapshot with the top half. */
++	status = hdev->irq_status;
++	hdev->irq_status = 0;
++	if (IS_IRIS2(core) || IS_IRIS2_1(core))
++		wd_mask = WRAPPER_INTR_STATUS_A2HWD_MASK_V6;
++	else if (IS_AR50_LITE(core))
++		wd_mask = WRAPPER_INTR_STATUS_A2HWD_MASK_V4_LITE;
++	else
++		wd_mask = WRAPPER_INTR_STATUS_A2HWD_MASK;
++	if (status & wd_mask) {
++		/* Preserve the observation before taking locks or attempting SSR. */
++		dev_err(core->dev, "A9_VENUS_RECOVERY event=1 stage=0 rc=0 irq=%#x\n",
++			status);
++		venus_set_state(hdev, VENUS_STATE_DEINIT);
++		venus_sfr_print(hdev);
++		hfi_process_watchdog_timeout(core);
++		return IRQ_HANDLED;
++	}
++
+ 	res = hdev->core->res;
+ 	pkt = hdev->pkt_buf;
+-
+ 
+ 	while (!venus_iface_msgq_read(hdev, pkt)) {
+ 		msg_ret = hfi_process_msg_packet(core, pkt);
+--- a/drivers/media/platform/qcom/venus/venc.c
++++ b/drivers/media/platform/qcom/venus/venc.c
+@@ -32,6 +32,11 @@
+ module_param(a9_mapped_eos, bool, 0644);
+ MODULE_PARM_DESC(a9_mapped_eos, "Use mapped EOS on SM6115 FW 6.0.39 (new instances)");
+ 
++static bool a9_bidir_buffers;
++module_param(a9_bidir_buffers, bool, 0644);
++MODULE_PARM_DESC(a9_bidir_buffers,
++	"SM6115 encoder: map vb2 buffers bidirectionally like stock (default off)");
++
+ static bool a9_output_size;
+ module_param(a9_output_size, bool, 0644);
+ MODULE_PARM_DESC(a9_output_size, "Send stock output size on SM6115 FW 6.0.39 (new instances)");
+@@ -45,6 +50,7 @@
+ 	void *eos_cpu;
+ 	dma_addr_t eos_dma;
+ 	bool mapped_eos;
++	bool bidir_buffers;
+ 	bool output_size;
+ 	bool stock_work_mode;
+ };
+@@ -1567,6 +1573,13 @@
+ 			  struct vb2_queue *dst_vq)
+ {
+ 	struct venus_inst *inst = priv;
++	struct a9_venc_inst *a9 = container_of(inst, struct a9_venc_inst, inst);
++	/* Queue creation precedes firmware-version negotiation. The image pins
++	 * FW6.0.39; limit this default-off experiment to its SM6115 HFI4 device.
++	 */
++	bool bidir = a9->bidir_buffers && IS_V4(inst->core) &&
++		IS_AR50_LITE(inst->core) &&
++		of_device_is_compatible(inst->core->dev->of_node, "qcom,sm6115-venus");
+ 	int ret;
+ 
+ 	src_vq->type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+@@ -1580,7 +1593,7 @@
+ 	src_vq->min_queued_buffers = 1;
+ 	src_vq->dev = inst->core->dev;
+ 	src_vq->lock = &inst->ctx_q_lock;
+-	if (inst->core->res->hfi_version == HFI_VERSION_1XX)
++	if (inst->core->res->hfi_version == HFI_VERSION_1XX || bidir)
+ 		src_vq->bidirectional = 1;
+ 	ret = vb2_queue_init(src_vq);
+ 	if (ret)
+@@ -1597,7 +1610,12 @@
+ 	dst_vq->min_queued_buffers = 1;
+ 	dst_vq->dev = inst->core->dev;
+ 	dst_vq->lock = &inst->ctx_q_lock;
+-	return vb2_queue_init(dst_vq);
++	if (bidir)
++		dst_vq->bidirectional = 1;
++	ret = vb2_queue_init(dst_vq);
++	if (!ret && bidir)
++		a9_enc_trace(inst, "a9_bidir_buffers", "end", 0);
++	return ret;
+ }
+ 
+ static void venc_inst_init(struct venus_inst *inst)
+@@ -1626,6 +1644,7 @@
+ 		return -ENOMEM;
+ 	inst = &priv->inst;
+ 	priv->mapped_eos = READ_ONCE(a9_mapped_eos);
++	priv->bidir_buffers = READ_ONCE(a9_bidir_buffers);
+ 	priv->output_size = READ_ONCE(a9_output_size);
+ 	priv->stock_work_mode = READ_ONCE(a9_stock_work_mode);
+ 

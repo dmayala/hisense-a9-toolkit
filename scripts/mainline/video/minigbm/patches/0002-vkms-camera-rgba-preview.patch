@@ -1,0 +1,42 @@
+--- a/dumb_driver.c
++++ b/dumb_driver.c
+@@ -76,11 +76,30 @@
+ /* A9: Mesa's shipped fallback importer has no lock_ycbcr. Refuse YUV
+  * textures before a handle can reach SurfaceFlinger's fatal import path.
+  * Codec2 uses private CPU-readable NV12 CAPTURE and converts to RGB for BQ. */
++static int vkms_camera_init(struct driver *drv)
++{
++	int ret = dumb_driver_init(drv);
++	if (ret)
++		return ret;
++	/* RGB camera destinations are written by the HAL's CPU postprocessor. */
++	drv_modify_combination(drv, DRM_FORMAT_ABGR8888, &LINEAR_METADATA,
++			       BO_USE_CAMERA_WRITE);
++	return 0;
++}
++
+ static void vkms_resolve_format_and_use_flags(struct driver *drv, uint32_t format,
+                                               uint64_t use_flags, uint32_t *out_format,
+                                               uint64_t *out_use_flags)
+ {
+ 	drv_resolve_format_and_use_flags_helper(drv, format, use_flags, out_format, out_use_flags);
++	/* Camera Surface consumers must reach Mesa as RGB. Explicit YUV and
++	 * encoder/private CPU streams retain the existing NV12 resolution. */
++	if (format == DRM_FORMAT_FLEX_IMPLEMENTATION_DEFINED &&
++	    (use_flags & BO_USE_CAMERA_WRITE) &&
++	    (use_flags & (BO_USE_TEXTURE | BO_USE_SCANOUT | BO_USE_RENDERING)) &&
++	    !(use_flags & BO_USE_HW_VIDEO_ENCODER))
++		*out_format = DRM_FORMAT_ABGR8888;
++
+ 	if ((use_flags & (BO_USE_TEXTURE | BO_USE_SCANOUT | BO_USE_RENDERING)) &&
+ 	    (*out_format == DRM_FORMAT_NV12 || *out_format == DRM_FORMAT_NV21 ||
+ 	     *out_format == DRM_FORMAT_YVU420 || *out_format == DRM_FORMAT_YVU420_ANDROID)) {
+@@ -104,7 +123,7 @@
+ 
+ const struct backend backend_vkms = {
+ 	.name = "vkms",
+-	.init = dumb_driver_init,
++	.init = vkms_camera_init,
+ 	.bo_create = vkms_bo_create,
+ 	.bo_create_with_modifiers = dumb_bo_create_with_modifiers,
+ 	.bo_destroy = drv_dumb_bo_destroy,

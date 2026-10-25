@@ -1,0 +1,276 @@
+; Static first-pass policy, B4 2026-10-20. NOT enforcing boot qualification.
+; Reused from enforcing-integrated-20261019/repo (2026-10-19).
+; build-draft.py appends this to an input vendor policy in a NEW overlay.
+; Legacy SRC/OBS notes below describe that earlier implementation/evidence;
+; current service bodies are not rewritten by the draft. See README.md.
+;
+; Style: Treble vendor CIL. Platform PUBLIC types are referenced by their
+; versioned name (<type>_202504, mapped by the GSI's mapping/202504.cil);
+; types declared here are unversioned. No typepermissive in this file.
+;
+; Evidence tags on every rule group:
+;   OBS  = a denial in the integ-1 combined-image bundles (G2a 20261016T192536Z,
+;          G2b 20261016T193617Z, ~/A9-wt/integ-1/runs/...). For a9ml_* domains
+;          the denial was logged under the old phhsu_daemon/vendor_file labels
+;          and is re-targeted at the new type (MAPPED).
+;   SRC  = required by the helper's source (scripts/mainline/...), never logged
+;          because phhsu_daemon's inherited grants hid it. Stage 0 (collection
+;          boot, runs/enforcing-1.md section 5) must confirm or remove these.
+;   TREBLE = crosses the core/vendor boundary; listed in runs/enforcing-1.md
+;          section 4 and counted by sepolicy/check.py (strict neverallow delta).
+
+; ===================================================================== types
+; --- helper domains (one per vendor helper; no shared catch-all)
+(type a9ml_eink)       (roletype object_r a9ml_eink)    (roletype r a9ml_eink)
+(type a9ml_eink_exec)  (roletype object_r a9ml_eink_exec)
+(type a9ml_gpu)        (roletype object_r a9ml_gpu)     (roletype r a9ml_gpu)
+(type a9ml_gpu_exec)   (roletype object_r a9ml_gpu_exec)
+(type a9ml_bt)         (roletype object_r a9ml_bt)      (roletype r a9ml_bt)
+(type a9ml_bt_exec)    (roletype object_r a9ml_bt_exec)
+(type a9ml_compat)     (roletype object_r a9ml_compat)  (roletype r a9ml_compat)
+(type a9ml_compat_exec) (roletype object_r a9ml_compat_exec)
+(typeattributeset domain (a9ml_eink a9ml_gpu a9ml_bt a9ml_compat))
+(typeattributeset file_type (a9ml_eink_exec a9ml_gpu_exec a9ml_bt_exec a9ml_compat_exec))
+(typeattributeset exec_type (a9ml_eink_exec a9ml_gpu_exec a9ml_bt_exec a9ml_compat_exec))
+(typeattributeset vendor_file_type (a9ml_eink_exec a9ml_gpu_exec a9ml_bt_exec a9ml_compat_exec))
+; --- attributes used as rule subjects (CIL allow takes one name or attribute)
+(typeattribute a9ml_domain)       (typeattributeset a9ml_domain (a9ml_eink a9ml_gpu a9ml_bt a9ml_compat))
+(typeattribute a9ml_sh_domain)    (typeattributeset a9ml_sh_domain (a9ml_eink a9ml_gpu a9ml_bt))
+(typeattribute a9ml_fw_writer)    (typeattributeset a9ml_fw_writer (a9ml_gpu a9ml_bt))
+(typeattribute a9ml_param_writer) (typeattributeset a9ml_param_writer (a9ml_eink a9ml_gpu))
+(typeattribute a9ml_exec_type)    (typeattributeset a9ml_exec_type (a9ml_eink_exec a9ml_gpu_exec a9ml_bt_exec a9ml_compat_exec))
+; compat: a9service (platform_app, s0:c512,c768) connects to it at s0; the
+; old phhsu_daemon had the same attribute (MLS constraint on connectto). SRC
+(typeattributeset mlstrustedsubject (a9ml_compat))
+
+; --- firmware staging and helper output live in /data/vendor (vendor_data_file):
+;   /data/vendor/a9fw   firmware_class.path (enforcing cmdline), root 0755
+;   /data/vendor/a9ml   gpu qualification log/result, E Ink fault dmesg
+; NOT a dedicated type: the kernel is a coredomain, and Treble forbids core
+; domains any vendor data type other than vendor_data_file (plat neverallow
+; base_typeattr_420/421, measured by check.py). Integrity comes from root-only
+; DAC (0755/0644) and the sha256 checks every stager already does.
+
+; --- sysfs (genfscon below)
+(type a9ml_sysfs_param)    (roletype object_r a9ml_sysfs_param)    ; A9 module parameters
+(type a9ml_sysfs_gate)     (roletype object_r a9ml_sysfs_gate)     ; the three E Ink drive gates
+(type a9ml_sysfs_beacon)   (roletype object_r a9ml_sysfs_beacon)   ; qcom_pon beacon
+(type a9ml_sysfs_drmdebug) (roletype object_r a9ml_sysfs_drmdebug) ; drm.debug
+(type a9ml_sysfs_eink)     (roletype object_r a9ml_sysfs_eink)     ; a9_eink attribute dirs
+(type a9ml_sysfs_eink_uevent) (roletype object_r a9ml_sysfs_eink_uevent)
+(type a9ml_sysfs_frontlight)  (roletype object_r a9ml_sysfs_frontlight)
+(typeattributeset fs_type (a9ml_sysfs_param a9ml_sysfs_gate a9ml_sysfs_beacon a9ml_sysfs_drmdebug a9ml_sysfs_eink a9ml_sysfs_eink_uevent a9ml_sysfs_frontlight))
+(typeattributeset sysfs_type (a9ml_sysfs_param a9ml_sysfs_gate a9ml_sysfs_beacon a9ml_sysfs_drmdebug a9ml_sysfs_eink a9ml_sysfs_eink_uevent a9ml_sysfs_frontlight))
+
+; --- properties: vendor.a9ml.* and vendor.a9.* (vendor_property_contexts)
+(type a9ml_prop) (roletype object_r a9ml_prop)
+(typeattributeset property_type (a9ml_prop))
+(typeattributeset vendor_property_type (a9ml_prop))
+(typeattributeset vendor_internal_property_type (a9ml_prop))
+
+; ===================================================================== genfs
+; module parameters (kernfs labels are computed at creation, so modules
+; loaded after policy load get them). OBS: phhsu_daemon wrote these.
+(genfscon sysfs "/module/a9_eink/parameters" (u object_r a9ml_sysfs_param ((s0) (s0))))
+(genfscon sysfs "/module/fp9929a/parameters" (u object_r a9ml_sysfs_param ((s0) (s0))))
+(genfscon sysfs "/module/panel_hisense_hlte556n_eink/parameters" (u object_r a9ml_sysfs_param ((s0) (s0))))
+(genfscon sysfs "/module/vkms/parameters" (u object_r a9ml_sysfs_param ((s0) (s0))))
+(genfscon sysfs "/module/msm/parameters" (u object_r a9ml_sysfs_param ((s0) (s0))))
+(genfscon sysfs "/module/firmware_class/parameters" (u object_r a9ml_sysfs_param ((s0) (s0))))
+(genfscon sysfs "/devices/platform/soc@0/5e00000.display-subsystem/driver_override" (u object_r a9ml_sysfs_param ((s0) (s0))))
+(genfscon sysfs "/module/a9_eink/parameters/enable" (u object_r a9ml_sysfs_gate ((s0) (s0))))
+(genfscon sysfs "/module/fp9929a/parameters/allow_power_on" (u object_r a9ml_sysfs_gate ((s0) (s0))))
+(genfscon sysfs "/module/panel_hisense_hlte556n_eink/parameters/enable" (u object_r a9ml_sysfs_gate ((s0) (s0))))
+(genfscon sysfs "/module/qcom_pon/parameters" (u object_r a9ml_sysfs_beacon ((s0) (s0))))
+(genfscon sysfs "/module/drm/parameters/debug" (u object_r a9ml_sysfs_drmdebug ((s0) (s0))))
+; a9_eink attribute directory (status, controls, force_clear, manual_clear,
+; test_pattern), per possible card number: genfscon is a prefix, not a glob.
+(genfscon sysfs "/devices/platform/eink-display/drm/card0/card0-DSI-1/eink" (u object_r a9ml_sysfs_eink ((s0) (s0))))
+(genfscon sysfs "/devices/platform/eink-display/drm/card1/card1-DSI-1/eink" (u object_r a9ml_sysfs_eink ((s0) (s0))))
+(genfscon sysfs "/devices/platform/eink-display/drm/card2/card2-DSI-1/eink" (u object_r a9ml_sysfs_eink ((s0) (s0))))
+(genfscon sysfs "/devices/platform/eink-display/drm/card3/card3-DSI-1/eink" (u object_r a9ml_sysfs_eink ((s0) (s0))))
+(genfscon sysfs "/devices/platform/eink-display/drm/card4/card4-DSI-1/eink" (u object_r a9ml_sysfs_eink ((s0) (s0))))
+(genfscon sysfs "/devices/platform/eink-display/drm/card5/card5-DSI-1/eink" (u object_r a9ml_sysfs_eink ((s0) (s0))))
+(genfscon sysfs "/devices/platform/eink-display/uevent" (u object_r a9ml_sysfs_eink_uevent ((s0) (s0))))
+; frontlight LED class dirs of the two AW99703 (dmesg: a9-frontlight 0-0036
+; a9:white:center, 1-0036 a9:warm:center; i2c0=4a80000, i2c1=4a84000 under
+; geniqup@4ac0000, sm6115.dtsi). Path INFERRED, check in stage 0 (ls -Z).
+(genfscon sysfs "/devices/platform/soc@0/4ac0000.geniqup/4a80000.i2c/i2c-0/0-0036/leds" (u object_r a9ml_sysfs_frontlight ((s0) (s0))))
+(genfscon sysfs "/devices/platform/soc@0/4ac0000.geniqup/4a84000.i2c/i2c-1/1-0036/leds" (u object_r a9ml_sysfs_frontlight ((s0) (s0))))
+; health/suspend: the PMI632 charger power_supply (OBS: 534 hal_health_default
+; and 12 system_suspend denials on generic sysfs, paths measured).
+(genfscon sysfs "/devices/platform/soc@0/1c40000.spmi/spmi-0/0-02/1c40000.spmi:pmic@2:charger@1000/power_supply" (u object_r sysfs_batteryinfo ((s0) (s0))))
+(genfscon sysfs "/devices/platform/soc@0/1c40000.spmi/spmi-0/0-02/1c40000.spmi:pmic@2:charger@1000/power_supply/battery/wakeup" (u object_r sysfs_wakeup ((s0) (s0))))
+(genfscon sysfs "/devices/platform/soc@0/1c40000.spmi/spmi-0/0-02/1c40000.spmi:pmic@2:charger@1000/power_supply/a9-usb/wakeup" (u object_r sysfs_wakeup ((s0) (s0))))
+
+; ============================================== init -> helper transitions
+; SRC (rc: services exec the helper directly, #!/vendor/bin/sh, no seclabel)
+(typetransition init_202504 a9ml_eink_exec process a9ml_eink)
+(typetransition init_202504 a9ml_gpu_exec process a9ml_gpu)
+(typetransition init_202504 a9ml_bt_exec process a9ml_bt)
+(typetransition init_202504 a9ml_compat_exec process a9ml_compat)
+(allow init_202504 a9ml_exec_type (file (read getattr map execute open)))
+(allow init_202504 a9ml_domain (process (transition siginh rlimitinh)))
+(dontaudit init_202504 a9ml_domain (process (noatsecure)))
+(allow a9ml_eink a9ml_eink_exec (file (read getattr map execute open entrypoint execute_no_trans)))  ; "$0" close
+(allow a9ml_gpu a9ml_gpu_exec (file (read getattr map execute open entrypoint)))
+(allow a9ml_bt a9ml_bt_exec (file (read getattr map execute open entrypoint)))
+(allow a9ml_compat a9ml_compat_exec (file (read getattr map execute open entrypoint)))
+
+; ================================= common to the three shell helpers (SRC)
+; vendor sh + vendor toybox (PATH=/vendor/bin:/vendor/xbin via rc setenv),
+; /vendor/bin/awk and the probes are plain vendor_file.
+(allow a9ml_sh_domain vendor_shell_exec_202504 (file (read getattr map execute open)))
+(allow a9ml_sh_domain vendor_toolbox_exec_202504 (file (read getattr map execute open execute_no_trans)))
+(allow a9ml_sh_domain vendor_file_202504 (file (read getattr map execute open execute_no_trans)))
+(allow a9ml_domain vendor_file_202504 (dir (read getattr open search)))
+(allow a9ml_sh_domain vendor_file_202504 (lnk_file (read getattr)))
+(allow a9ml_sh_domain vendor_configs_file_202504 (dir (read getattr open search)))
+(allow a9ml_sh_domain vendor_configs_file_202504 (file (read getattr open map)))
+(allow a9ml_sh_domain self (fifo_file (read write getattr open ioctl)))
+(allow a9ml_sh_domain self (process (fork sigchld signal sigkill getpgid setpgid)))
+; log lines: echo >> /dev/kmsg
+(allow a9ml_domain kmsg_device_202504 (chr_file (write append open getattr)))
+; sysfs: readlink/cat of /sys/class/drm, /sys/bus/platform, /sys/module, hci0
+(allow a9ml_domain sysfs_202504 (dir (read getattr open search)))
+(allow a9ml_domain sysfs_202504 (lnk_file (read getattr)))
+(allow a9ml_sh_domain sysfs_202504 (file (read getattr open)))
+(allow a9ml_sh_domain a9ml_sysfs_param (dir (read getattr open search)))
+(allow a9ml_sh_domain a9ml_sysfs_param (file (read getattr open)))
+(allow a9ml_param_writer a9ml_sysfs_param (file (write)))
+; /proc/uptime, /proc/cmdline (BT deadline, drmdebug-off)
+(allow a9ml_sh_domain proc_uptime_202504 (file (read getattr open)))
+(allow a9ml_sh_domain proc_cmdline_202504 (file (read getattr open)))
+; properties. getprop of ro.boot.a9ml.eink (bootloader_prop), ro.vendor.*/
+; vendor.hwc.* (vendor_default_prop), vendor.a9ml.*/vendor.a9.* (a9ml_prop),
+; sys.boot_completed (boot_status_prop is exported: domain may read).
+(allow a9ml_domain bootloader_prop_202504 (file (read getattr map open)))
+(allow a9ml_domain vendor_default_prop_202504 (file (read getattr map open)))
+(allow a9ml_domain a9ml_prop (file (read getattr map open)))
+(allow a9ml_sh_domain property_socket_202504 (sock_file (write)))
+(allow a9ml_sh_domain init_202504 (unix_stream_socket (connectto)))
+(allow a9ml_sh_domain a9ml_prop (property_service (set)))
+; /data/vendor/a9fw + /data/vendor/a9ml (created by init.hlte556n.rc at
+; post-fs-data). SRC (MAPPED from the OBS shell_data_file accesses)
+(allow a9ml_sh_domain system_data_root_file_202504 (dir (search getattr)))
+(allow a9ml_sh_domain vendor_data_file_202504 (dir (search getattr read open)))
+(allow a9ml_sh_domain vendor_data_file_202504 (file (getattr)))
+(allow a9ml_fw_writer vendor_data_file_202504 (dir (create write setattr add_name remove_name)))
+(allow a9ml_fw_writer vendor_data_file_202504 (file (create read write getattr setattr open unlink)))
+(allow a9ml_eink vendor_data_file_202504 (dir (write add_name)))
+(allow a9ml_eink vendor_data_file_202504 (file (create write getattr setattr open)))
+; chown/chmod of the firmware tree (root, DAC), insmod
+(allow a9ml_fw_writer self (capability (chown fowner)))
+(allow a9ml_sh_domain self (capability (sys_module)))
+(allow a9ml_sh_domain vendor_kernel_modules_202504 (dir (read getattr open search)))
+(allow a9ml_sh_domain vendor_kernel_modules_202504 (file (read getattr open map)))
+(allow a9ml_sh_domain vendor_kernel_modules_202504 (system (module_load)))   ; OBS (ecc.ko, MAPPED vendor_file->vendor_kernel_modules)
+
+; ============================================================ a9ml_eink
+; setup: card classification, msm card root-only (OBS: chown card2 setattr),
+; scheduling of a9_eink/msm kernel threads, hwc pointer, gates closed.
+(allow a9ml_eink gpu_device_202504 (dir (read getattr open search)))   ; /dev/dri
+(allow a9ml_eink graphics_device_202504 (chr_file (getattr setattr)))
+(allow a9ml_eink gpu_device_202504 (chr_file (getattr)))
+(allow a9ml_eink self (capability (chown fowner sys_nice)))
+(allow a9ml_eink proc_202504 (dir (read getattr open search)))
+(allow a9ml_eink kernel_202504 (dir (search getattr)))
+(allow a9ml_eink kernel_202504 (file (read getattr open)))
+(allow a9ml_eink kernel_202504 (process (setsched getsched)))
+(allow a9ml_eink vendor_default_prop_202504 (property_service (set)))   ; vendor.hwc.drm.device
+; E Ink attributes (status reads, force_clear dry run; stage.py drops the chown-to-system loop), gates,
+; drm debug off, fault dmesg
+(allow a9ml_eink a9ml_sysfs_eink (dir (read getattr open search)))
+(allow a9ml_eink a9ml_sysfs_eink (file (read write getattr open)))
+(allow a9ml_eink a9ml_sysfs_gate (file (read write getattr open)))
+(allow a9ml_eink a9ml_sysfs_drmdebug (file (read write getattr open)))
+(allow a9ml_eink kernel_202504 (system (syslog_read)))
+(allow a9ml_eink self (capability2 (syslog)))
+
+; ============================================================= a9ml_gpu
+; setup: firmware_class.path, firmware copy, vkms.map_wc (param, above),
+; vkms-image driver_override + insmod; select: persist.graphics.egl.
+; persist.graphics.egl may only be SET by init/vendor_init/gpuservice (plat
+; neverallow): the helper publishes vendor.a9ml.gpu.want and
+; init.a9ml-gpu.rc copies it (A9ML_EGL_VIA_INIT=1, staged), then `verify` reads it back.
+(allow a9ml_gpu graphics_config_writable_prop_202504 (file (read getattr map open)))
+; a9-gpu-probe (info/render/dmabuf): render node, vkms card, dma heap, Mesa
+(allow a9ml_gpu gpu_device_202504 (dir (read getattr open search)))
+(allow a9ml_gpu gpu_device_202504 (chr_file (read write getattr open ioctl map)))
+(allow a9ml_gpu dmabuf_heap_device_202504 (dir (read getattr open search)))
+(allow a9ml_gpu dmabuf_system_heap_device_202504 (chr_file (read getattr open ioctl)))
+(allow a9ml_gpu same_process_hal_file_202504 (file (read getattr open map execute)))
+(allow a9ml_gpu same_process_hal_file_202504 (dir (read getattr open search)))
+; deadline guard: sysrq b if the GPU qualification hangs (safety path)
+(allow a9ml_gpu proc_sysrq_202504 (file (write getattr open)))
+
+; ============================================================== a9ml_bt
+; a9-bt-identity: one HCI management query (OBS: create bind read write
+; ioctl 0x48d3 HCIGETDEVINFO, net_admin), identity file in /vendor/etc.
+(allow a9ml_bt self (bluetooth_socket (create bind read write getopt setopt ioctl)))
+(allowx a9ml_bt self (ioctl bluetooth_socket (0x48d3)))
+(allow a9ml_bt self (capability (net_admin)))
+
+; ==================================================== hal_bluetooth_default
+; OBS: ioctl 0x48d3 on its HCI_USER socket (3 denials)
+(allow hal_bluetooth_default self (bluetooth_socket (ioctl)))
+(allowx hal_bluetooth_default self (ioctl bluetooth_socket (0x48d3)))
+
+; ========================================================== a9ml_compat
+; E Ink compat shim (a9service socket server). SRC: eink-compat.c.
+(allow a9ml_compat self (unix_stream_socket (create bind listen accept read write getattr getopt setopt shutdown)))
+(allow a9ml_compat a9ml_sysfs_eink (dir (read getattr open search)))
+(allow a9ml_compat a9ml_sysfs_eink (file (read write getattr open)))
+(allow a9ml_compat a9ml_sysfs_frontlight (dir (read getattr open search)))
+(allow a9ml_compat a9ml_sysfs_frontlight (file (read write getattr open)))
+(allow a9ml_compat sysfs_202504 (file (read getattr open)))
+(allow a9ml_compat self (process (fork sigchld signal sigkill setpgid getpgid)))
+(allow a9ml_compat self (fifo_file (read write getattr)))
+; TREBLE: a9service (platform_app) is the only client; the shim reads the
+; frontlight properties and sets the three legacy sys.* properties the
+; patched framework reads (sys.linevibrator_type = AOD/ColorFade sentinel).
+(allow platform_app_202504 a9ml_compat (unix_stream_socket (connectto)))
+; the AOSP way of naming a known core<->vendor socket: plat neverallow
+; base_typeattr_411/412 exempts socket_between_core_and_vendor_violators
+(typeattributeset socket_between_core_and_vendor_violators (a9ml_compat))
+(allow a9ml_compat platform_app_202504 (unix_stream_socket (read write getattr getopt shutdown)))
+(allow a9ml_compat system_prop_202504 (file (read getattr map open)))
+(allow a9ml_compat system_prop_202504 (property_service (set)))   ; TREBLE: new neverallow pair (plat base_typeattr_878/879), counted
+(allow a9ml_compat property_socket_202504 (sock_file (write)))
+(allow a9ml_compat init_202504 (unix_stream_socket (connectto)))
+; NOT granted (fail soft in eink-compat.c run_tool): exec of /system/bin/service
+; (color_display night-light) and /system/bin/settings (theme overlay).
+
+; ============================================================== kernel
+; firmware_class.path=/data/vendor/a9fw: E Ink waveform/template, Adreno
+; SQE/GMU/zap, QCA BT. OBS: 19 firmware_load + open/read + dir search on
+; shell_data_file (/data/local/tmp/a9fw), MAPPED to vendor_data_file.
+(allow kernel_202504 vendor_data_file_202504 (dir (search)))
+(allow kernel_202504 vendor_data_file_202504 (file (read getattr open)))
+(allow kernel_202504 vendor_data_file_202504 (system (firmware_load)))
+
+; ============================================================ /data = RAM
+; fstab: /data is /dev/block/ram0, formattable. OBS: mke2fs (e2fs) and
+; tune2fs (fsck) on ram_device, exact ioctls. Without this an enforcing boot
+; has no /data. No UFS block device is touched (probes.cil MUST-DENY).
+(allow e2fs_202504 ram_device_202504 (blk_file (open read write ioctl)))
+(allowx e2fs_202504 ram_device_202504 (ioctl blk_file (0x125e 0x1272 0x1277 0x127b 0x127c)))
+(allow fsck_202504 ram_device_202504 (blk_file (open read write ioctl)))
+(allowx fsck_202504 ram_device_202504 (ioctl blk_file (0x127c)))
+
+; ======================================================= graphics clients
+; /dev/dri/card0 (vkms, buffer allocation) is labelled gpu_device in
+; vendor_file_contexts (OBS: 446 app/allocator/system_server/mediaswcodec
+; denials on graphics_device card0, now ordinary gpu_device access the
+; platform already grants). The a9_eink card stays graphics_device for the
+; composer (OBS: 151 denials on unlabelled `device` card3).
+(allow surfaceflinger_202504 a9ml_sysfs_eink_uevent (file (read getattr open)))   ; OBS (MAPPED from sysfs)
+
+; ============================================================ vendor_init
+; rc actions of this vendor that touch our sysfs: early-init beacon 2,
+; drm.debug 0x10 at early-boot, the shutdown gate close (safety path).
+(allow vendor_init_202504 a9ml_sysfs_beacon (file (write open getattr)))
+(allow vendor_init_202504 a9ml_sysfs_drmdebug (file (write open getattr)))
+(allow vendor_init_202504 a9ml_sysfs_gate (file (write open getattr)))
+(allow vendor_init_202504 a9ml_prop (property_service (set)))   ; vendor.a9ml.shim.handoff
+(allow vendor_init_202504 a9ml_prop (file (read getattr map open)))

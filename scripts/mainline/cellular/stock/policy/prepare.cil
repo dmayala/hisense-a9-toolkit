@@ -1,0 +1,4 @@
+; Candidate4: vendor_init shell services must actually enter the interpreter.
+(allow vendor_init_202504 shell_exec_202504 (file (read open getattr map execute execute_no_trans entrypoint)))
+(allow vendor_init_202504 toolbox_exec_202504 (file (read open getattr map execute execute_no_trans)))
+(allow vendor_init_202504 system_file_202504 (file (read open getattr map execute execute_no_trans)))

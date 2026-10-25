@@ -1,0 +1,2 @@
+snd-soc-a9-es9218-objs := a9-es9218-card.o
+obj-$(CONFIG_SND_SOC_A9_ES9218) += snd-soc-a9-es9218.o

@@ -1,0 +1,12 @@
+; Volatile FBE hold only. Timers/freshness/cap/return behavior are unchanged.
+(type a9ml_row29_hold_file) (roletype object_r a9ml_row29_hold_file)
+(typeattributeset file_type (a9ml_row29_hold_file))
+(allow a9ml_row29_hold_file tmpfs_202504 (filesystem (associate)))
+(allow init_202504 a9ml_row29_hold_file (dir (create read open search getattr setattr relabelto)))
+(allow a9ml_deadman device_202504 (dir (search)))
+(allow a9ml_deadman a9ml_row29_hold_file (dir (search getattr)))
+(allow a9ml_deadman a9ml_row29_hold_file (file (getattr)))
+(allow shell_202504 a9ml_row29_hold_file (dir (search getattr write add_name remove_name)))
+(allow shell_202504 a9ml_row29_hold_file (file (create read write open getattr setattr unlink)))
+(allow phhsu_daemon a9ml_row29_hold_file (dir (search getattr write add_name remove_name)))
+(allow phhsu_daemon a9ml_row29_hold_file (file (create read write open getattr setattr unlink)))

@@ -1,0 +1,29 @@
+--- a/scripts/mainline/boot-deadline/b-try.sh
++++ b/scripts/mainline/boot-deadline/b-try.sh
+@@ -12,6 +12,11 @@
+ if [[ -n $onb ]]; then
+   onb=$(realpath "$onb")
+   [[ -x $onb && $hold -gt 0 ]] || { echo 'A9_BTRY_ONB requires an executable script and A9_BTRY_HOLD>0' >&2; exit 2; }
++fi
++preboot=${A9_BTRY_TWRP_PREBOOT:-}
++if [[ -n $preboot ]]; then
++  preboot=$(realpath "$preboot")
++  [[ -x $preboot && ${A9_BTRY_FORMAT:-0} == 1 && -n $VENDOR ]] || { echo 'A9_BTRY_TWRP_PREBOOT requires executable, vendor and FORMAT=1' >&2; exit 2; }
+ fi
+ . "${A9_HOME:-/home/user/A9}/scripts/a9-env.sh"
+ edl_count() {
+@@ -254,7 +259,13 @@
+   got=$(timeout 180 "$ADB" shell 'blockdev --setrw /dev/block/mapper/vendor_b && dd if=/tmp/b-try-vendor.img of=/dev/block/mapper/vendor_b bs=4M conv=fsync >/dev/null 2>&1 && sync && rm /tmp/b-try-vendor.img && sha256sum /dev/block/mapper/vendor_b' | tr -d '\r' | cut -d' ' -f1)
+   [[ $got == "$want" ]] || { detail=vendor_mismatch; exit 2; }
+   rm -f "$VENDOR"
+-  if [[ ${A9_BTRY_FORMAT:-0} == 1 ]]; then timeout 300 "$ADB" shell twrp format data >&2 || { detail=format_failed; exit 2; }; fi
++  if [[ ${A9_BTRY_FORMAT:-0} == 1 ]]; then
++    if [[ -n $preboot ]]; then
++      timeout --signal=TERM --kill-after=10 360 "$preboot" >"$out/twrp-preboot.log" 2>&1 || { detail=twrp_preboot_failed; exit 2; }
++    else
++      timeout 300 "$ADB" shell twrp format data >&2 || { detail=format_failed; exit 2; }
++    fi
++  fi
+   adb_cmd shell 'sh /system/bin/rebootsystem.sh' >/dev/null 2>&1 || true
+ fi
+ bootloader 180

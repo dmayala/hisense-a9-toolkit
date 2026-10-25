@@ -1,0 +1,34 @@
+; R10 OBS hex paths decode to /memfd:gnss-events (deleted) twice and
+; /memfd:gnss-status (deleted) once, all denied open in hal_gnss_default.
+; SRC gnss-hal/service.cpp Service::start creates those anonymous root0600
+; files, then opens /proc/self/fd entries for independent reader/writer offsets.
+; Failure returns EX_ILLEGAL_STATE before the confined LOC child can spawn.
+; Anonymous memfd inodes need a creator type transition, not a path regex or
+; a general tmpfs/open grant. The child retains the HAL SID; only it and the
+; HAL share this non-executable type. No mmap or executable permission needed.
+(type a9ml_gnss_memfd_file) (roletype object_r a9ml_gnss_memfd_file)
+(typeattributeset file_type (a9ml_gnss_memfd_file))
+(typetransition hal_gnss_default tmpfs_202504 file a9ml_gnss_memfd_file)
+(allow hal_gnss_default a9ml_gnss_memfd_file (file (create read write open getattr setattr append)))
+(allow a9ml_gnss_memfd_file tmpfs_202504 (filesystem (associate)))
+
+; R10 OBS shell dumpsys -> GNSS binder/call. The app probe uses LocationManager
+; through system_server; no direct untrusted-app HAL access is added. Admit
+; shell diagnostics plus transfer/use/write of its output pipe. Service dispatch
+; still requires UID1000 for data-plane transactions; dump emits counters only.
+(allow shell_202504 hal_gnss_default (binder (call transfer)))
+(allow hal_gnss_default shell_202504 (binder (transfer)))
+(allow hal_gnss_default shell_202504 (fd (use)))
+(allow hal_gnss_default shell_202504 (fifo_file (write getattr)))
+
+; R10 OBS HAL read of its public vendor debug-WiFi property area. Standard
+; read-only property mapping permissions; no setter and no generic app grant.
+(allow hal_wifi_default persist_vendor_debug_wifi_prop_202504 (file (read open getattr map)))
+; R10 OBS supplicant search of wifi_data_file directory. Allow traversal only;
+; keep credential files and directory enumeration/modification inaccessible.
+(allow hal_wifi_supplicant_default wifi_data_file_202504 (dir (search)))
+
+; R10 OBS a9-camcap stats /dev/qcom_rmtfs_mem1 65 times. Its entity->devnode
+; resolver stats each /dev entry to compare major/minor. Permit metadata only,
+; preserving the real MPSS device label and denying open/read/write/ioctl/map.
+(allow a9ml_camcap a9_wifi_rmtfs_device (chr_file (getattr)))

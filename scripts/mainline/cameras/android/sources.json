@@ -1,0 +1,18 @@
+{
+  "yaml-0.2.5": {
+    "url": "https://pyyaml.org/download/libyaml/yaml-0.2.5.tar.gz",
+    "sha256": "c642ae9b75fee120b2d96c712538bd2cf283228d2337df2cf2988e3c02678ef4"
+  },
+  "libjpeg-turbo-3.0.4": {
+    "url": "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.0.4/libjpeg-turbo-3.0.4.tar.gz",
+    "sha256": "99130559e7d62e8d695f2c0eaeef912c5828d5b84a0537dcb24c9678c9d5b76b"
+  },
+  "libexif-0.6.25": {
+    "url": "https://github.com/libexif/libexif/releases/download/v0.6.25/libexif-0.6.25.tar.gz",
+    "sha256": "16fdfa59cf9d301a9ccd5c1bc2fe05c78ee0ee2bf96e39640039e3dc0fd593cb"
+  },
+  "libyuv": {
+    "url": "https://chromium.googlesource.com/libyuv/libyuv/+archive/500f45652c459cfccd20f83f297eb66cb7b015cb.tar.gz",
+    "sha256": "2cb512b82b24f92e68d5dae0ada61f8815744e9446c1b4dfaf7e37beb9816dcf"
+  }
+}

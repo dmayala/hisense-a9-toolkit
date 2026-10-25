@@ -1,0 +1,13 @@
+<manifest version="1.0" type="device">
+    <!-- The installed mapper.minigbm.so exposes both stable-C v5 and HIDL v4.
+         Keep the existing native-v5 entry; the legacy camera shim needs v4. -->
+    <hal format="hidl">
+        <name>android.hardware.graphics.mapper</name>
+        <transport arch="64">passthrough</transport>
+        <version>4.0</version>
+        <interface>
+            <name>IMapper</name>
+            <instance>default</instance>
+        </interface>
+    </hal>
+</manifest>

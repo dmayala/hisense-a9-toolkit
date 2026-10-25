@@ -1,0 +1,38 @@
+# A camera-enabled vendor starts the provider after loading the media modules.
+# The manual property remains available to stop/restart it during raw capture.
+# exec_start waits for the module loader before starting the provider.
+on post-fs-data
+    exec_start a9_camera_modules
+    start vendor.camera-provider-a9
+on property:vendor.a9ml.camera=1
+    exec_start a9_camera_modules
+    start vendor.camera-provider-a9
+
+on property:vendor.a9ml.camera=0
+    stop vendor.camera-provider-a9
+
+service a9_camera_modules /vendor/bin/sh /vendor/bin/a9-camera-load
+    class late_start
+    user root
+    group root
+    disabled
+    oneshot
+    seclabel u:r:vendor_init:s0
+
+service vendor.camera-provider-a9 /vendor/bin/hw/android.hardware.camera.provider@2.4-service.a9
+    class hal
+    user cameraserver
+    group camera system input graphics
+    setenv LD_LIBRARY_PATH /vendor/lib64/a9-camera
+    setenv LD_PRELOAD /vendor/lib64/a9-camera/liba9-camera-import.so
+    setenv LIBCAMERA_IPA_MODULE_PATH /vendor/lib64/libcamera/ipa
+    setenv LIBCAMERA_IPA_PROXY_PATH /vendor/libexec/libcamera
+    setenv LIBCAMERA_IPA_CONFIG_PATH /vendor/share/libcamera/ipa/simple
+    # Init discards stderr; bionic syslog sends libcamera diagnostics to logd.
+    setenv LIBCAMERA_LOG_FILE syslog
+    setenv LIBCAMERA_LOG_LEVELS *:INFO
+    # A6L port: bounded to first240 frames, exposes requested/cached sensor controls.
+    setenv LIBCAMERA_A6L_QUALITY_DIAGNOSTICS 1
+    disabled
+    # R4 POC uses permissive policy. Enforcing camera policy is not qualified.
+    seclabel u:r:hal_camera_default:s0

@@ -1,0 +1,85 @@
+From 7135a7c6f3f247fea73876ba595fc33d2da7c524 Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 15:09:31 -0700
+Subject: [PATCH] power: supply: pmi632-a9: qualify battery OV health like
+ stock (FV + 40 mV)
+
+healthd on the phone reported OVER_VOLTAGE at full charge ("battery l=100
+v=4450 t=31.0 h=5"): the driver took the raw BAT_OV status bit as health.
+Stock smblib_get_prop_batt_health qualifies BAT_OV with the battery voltage
+>= FV + 40 mV; do the same, with FV from the read-back FV register, capped at
+the A9 stock profile 4450 mV so a bad FV can never raise the threshold.
+
+Observe mode: constant quantized QG codes are valid at rest/termination and
+cannot prove stale hardware, so the 30 s "no change" -ESTALE guard applies to
+the experimental control path only; getters still reject failed/old samples.
+
+Logic only: no register write is added (the probe-only FV write budget is
+unchanged). From the sol-pmic proposal scripts/mainline/pmic/
+kernel-telemetry-PROPOSAL.patch at A9 commit 2b763b9 (proposed as 0014,
+integrated as 0031).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/power/supply/pmi632-a9.c     |  8 ++++++--
+ drivers/power/supply/pmi632-policy.h | 14 ++++++++++++++
+ 2 files changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/power/supply/pmi632-a9.c b/drivers/power/supply/pmi632-a9.c
+index c6def0e05..3cb7cc89c 100644
+--- a/drivers/power/supply/pmi632-a9.c
++++ b/drivers/power/supply/pmi632-a9.c
+@@ -243,7 +243,11 @@ static int a9_read_sample(struct a9_pmic *p, struct a9_sample *s)
+ 		p->last_change = jiffies;
+ 		p->have_raw = true;
+ 	}
+-	if (time_after(jiffies, p->last_change + 30 * HZ))
++	/* Constant quantized data is valid at rest/termination. In observe it
++	 * cannot prove stale hardware, so retain this fail-closed guard only for
++	 * the experimental control path. Getters still reject failed/old samples.
++	 */
++	if (!a9_is_observe() && time_after(jiffies, p->last_change + 30 * HZ))
+ 		return -ESTALE;
+ 	s->uv = div_u64((u64)get_unaligned_le16(raw) * 194637, 1000);
+ 	/* QG is negative on charge. power_supply battery current is positive in. */
+@@ -279,7 +283,7 @@ static int a9_health(const struct a9_pmic *p)
+ 	if (p->error || p->fv_error || p->latched ||
+ 	    time_after(jiffies, p->sampled_at + 5 * HZ))
+ 		return POWER_SUPPLY_HEALTH_UNSPEC_FAILURE;
+-	if (s->status2 & BIT(1))
++	if (a9_battery_overvoltage(s))
+ 		return POWER_SUPPLY_HEALTH_OVERVOLTAGE;
+ 	if (a9_is_observe() && !a9_observed_limits_ok(s))
+ 		return POWER_SUPPLY_HEALTH_UNSPEC_FAILURE;
+diff --git a/drivers/power/supply/pmi632-policy.h b/drivers/power/supply/pmi632-policy.h
+index 75fca6907..7fa006cd0 100644
+--- a/drivers/power/supply/pmi632-policy.h
++++ b/drivers/power/supply/pmi632-policy.h
+@@ -8,6 +8,8 @@
+ #define A9_ICL_UA 500000
+ #define A9_COLD_DC 100
+ #define A9_HOT_DC 400
++#define A9_PROFILE_FV_UV 4450000
++#define A9_OV_MARGIN_UV 40000
+ 
+ /*
+  * MEASURED: adcmap_batt_therm_30k_NCP_XH103 in the phone's own Image,
+@@ -53,6 +55,18 @@ struct a9_sample {
+ 	int temp_valid;
+ };
+ 
++static inline int a9_battery_overvoltage(const struct a9_sample *s)
++{
++	int fv_uv = 3600000 + (int)s->fv_raw * 10000;
++
++	/* Stock smblib_get_prop_batt_health qualifies BAT_OV with FV + 40 mV.
++	 * Never raise this threshold above the A9 stock profile for bad firmware FV.
++	 */
++	if (fv_uv > A9_PROFILE_FV_UV)
++		fv_uv = A9_PROFILE_FV_UV;
++	return (s->status2 & 0x02) && s->uv >= fv_uv + A9_OV_MARGIN_UV;
++}
++
+ static inline int a9_observed_limits_ok(const struct a9_sample *s)
+ {
+ 	/* Read-only warning against the A9 normal-temperature stock profile. */

@@ -1,0 +1,48 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-3-Clause)
+/* Stock /soc/fp_fingerprint@0, adapted to gpiod + mainline pinctrl.
+ * QUP SE5 SPI pins 14..17 stay reserved and its Linux controller stays off.
+ */
+&{/} {
+	fingerprint {
+		compatible = "sunwave,fingerprint";
+		pinctrl-names = "default";
+		pinctrl-0 = <&sf_power_default &sf_reset_default
+			     &sf_irq_default &sf_logic_default>;
+		power-gpios = <&tlmm 100 0>;
+		reset-gpios = <&tlmm 19 0>;
+		irq-gpios = <&tlmm 97 0>;
+		logic-gpios = <&tlmm 70 0>;
+		wakeup-source;
+	};
+};
+
+&tlmm {
+	sf_power_default: sf-power-default-state {
+		pins = "gpio100";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+		output-high;
+	};
+	sf_reset_default: sf-reset-default-state {
+		pins = "gpio19";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+		output-high;
+	};
+	sf_irq_default: sf-irq-default-state {
+		pins = "gpio97";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+		input-enable;
+	};
+	sf_logic_default: sf-logic-default-state {
+		pins = "gpio70";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+		input-enable;
+	};
+};

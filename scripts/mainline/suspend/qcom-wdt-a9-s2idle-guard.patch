@@ -1,0 +1,52 @@
+diff --git a/drivers/watchdog/qcom-wdt.c b/drivers/watchdog/qcom-wdt.c
+--- a/drivers/watchdog/qcom-wdt.c
++++ b/drivers/watchdog/qcom-wdt.c
+@@ -12,6 +12,12 @@
+ #include <linux/of_address.h>
+ #include <linux/platform_device.h>
+ #include <linux/watchdog.h>
++#include <linux/suspend.h>
++
++/* A9 closed-gate s2idle qualification only; upstream behavior by default. */
++static bool a9_guard;
++module_param(a9_guard, bool, 0400);
++MODULE_PARM_DESC(a9_guard, "A9 test: retain the armed watchdog across s2idle");
+ 
+ enum wdt_reg {
+ 	WDT_RST,
+@@ -68,6 +74,9 @@
+ {
+ 	struct watchdog_device *wdd = arg;
+ 
++	if (a9_guard && of_machine_is_compatible("hisense,hlte556n"))
++		pr_emerg("A9 PM guard: hardware watchdog pretimeout timeout=%u pretimeout=%u active=%u\n",
++			 wdd->timeout, wdd->pretimeout, watchdog_active(wdd));
+ 	watchdog_notify_pretimeout(wdd);
+ 
+ 	return IRQ_HANDLED;
+@@ -345,6 +354,15 @@
+ {
+ 	struct qcom_wdt *wdt = dev_get_drvdata(dev);
+ 
++	if (a9_guard && of_machine_is_compatible("hisense,hlte556n")) {
++		/* Refuse deeper sleep; never restart the deadline in resume. */
++		if (pm_suspend_target_state != PM_SUSPEND_TO_IDLE)
++			return -EPERM;
++		if (!watchdog_active(&wdt->wdd))
++			return -EBUSY;
++		dev_info(dev, "A9 PM guard: watchdog retained in s2idle\n");
++		return 0;
++	}
+ 	if (watchdog_active(&wdt->wdd))
+ 		qcom_wdt_stop(&wdt->wdd);
+ 
+@@ -354,6 +372,9 @@
+ static int __maybe_unused qcom_wdt_resume(struct device *dev)
+ {
+ 	struct qcom_wdt *wdt = dev_get_drvdata(dev);
++
++	if (a9_guard && of_machine_is_compatible("hisense,hlte556n"))
++		return 0;
+ 
+ 	if (watchdog_active(&wdt->wdd))
+ 		qcom_wdt_start(&wdt->wdd);

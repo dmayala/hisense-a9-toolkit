@@ -1,0 +1,4 @@
+# New files on kdebuginfo inherit kdebuginfo_data_file; the policy has no
+# "associate" to the filesystem for it, so mkdir/create fail (measured
+# 2026-10-14: avc denied { associate } ... tclass=filesystem permissive=0).
+allow kdebuginfo_data_file labeledfs filesystem associate

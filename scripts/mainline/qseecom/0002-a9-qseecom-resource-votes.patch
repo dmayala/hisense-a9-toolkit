@@ -1,0 +1,52 @@
+--- a/drivers/firmware/qcom/qcom_scm.c
++++ b/drivers/firmware/qcom/qcom_scm.c
+@@ -50,6 +50,7 @@
+ 	struct clk *core_clk;
+ 	struct clk *iface_clk;
+ 	struct clk *bus_clk;
++	struct clk *qsee_clk;
+ 	struct icc_path *path;
+ 	struct completion *waitq_comps;
+ 	struct reset_controller_dev reset;
+@@ -2233,7 +2234,25 @@
+ 	if (!__scm)
+ 		return -EPROBE_DEFER;
+ 	mutex_lock(&qcom_scm_qseecom_call_lock);
+-	ret = qcom_scm_call(__scm->dev, desc, res);
++	/* Unlike the feature probes, TA calls can authenticate/decrypt images.
++	 * Stock qseecom votes CE1 plus the crypto interconnect for these calls.
++	 */
++	if (desc->owner == QSEECOM_TZ_OWNER_QSEE_OS ||
++	    desc->owner == QSEECOM_TZ_OWNER_TZ_APPS) {
++		ret = clk_prepare_enable(__scm->qsee_clk);
++		if (ret)
++			goto unlock;
++		ret = qcom_scm_bw_enable();
++		if (ret)
++			goto disable_clk;
++		ret = qcom_scm_call(__scm->dev, desc, res);
++		qcom_scm_bw_disable();
++ disable_clk:
++		clk_disable_unprepare(__scm->qsee_clk);
++	} else {
++		ret = qcom_scm_call(__scm->dev, desc, res);
++	}
++ unlock:
+ 	mutex_unlock(&qcom_scm_qseecom_call_lock);
+ 	return ret;
+ }
+@@ -2884,6 +2903,14 @@
+ 	if (IS_ERR(scm->bus_clk))
+ 		return PTR_ERR(scm->bus_clk);
+ 
++	/* A9 stock QSEECOM_CE1_CLK voter; rate is assigned by the board DT.
++	 * Keep separate from core_clk, whose generic probe votes INT_MAX.
++	 */
++	scm->qsee_clk = devm_clk_get_optional(&pdev->dev, "qsee");
++	if (IS_ERR(scm->qsee_clk))
++		return dev_err_probe(&pdev->dev, PTR_ERR(scm->qsee_clk),
++				     "failed to acquire QSEE CE clock\n");
++
+ 	scm->reset.ops = &qcom_scm_pas_reset_ops;
+ 	scm->reset.nr_resets = 1;
+ 	scm->reset.of_node = pdev->dev.of_node;

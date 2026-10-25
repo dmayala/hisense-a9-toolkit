@@ -1,0 +1,23 @@
+--- a/drivers/net/ipa/ipa_main.c
++++ b/drivers/net/ipa/ipa_main.c
+@@ -637,6 +637,10 @@
+ }
+ 
+ static const struct of_device_id ipa_match[] = {
++	{
++		.compatible	= "qcom,sm6115-ipa",
++		.data		= &ipa_data_v4_2,
++	},
+ 	{
+ 		.compatible	= "qcom,msm8998-ipa",
+ 		.data		= &ipa_data_v3_1,
+--- a/Documentation/devicetree/bindings/net/qcom,ipa.yaml
++++ b/Documentation/devicetree/bindings/net/qcom,ipa.yaml
+@@ -57,6 +57,7 @@
+       - items:
+           - enum:
+               - qcom,qcm2290-ipa
++              - qcom,sm6115-ipa
+           - const: qcom,sc7180-ipa
+       - items:
+           - enum:

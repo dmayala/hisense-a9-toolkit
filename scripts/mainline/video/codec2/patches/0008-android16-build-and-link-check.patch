@@ -1,0 +1,54 @@
+diff --git a/components/EncodeComponent.cpp b/components/EncodeComponent.cpp
+index 65de283..7d3cadf 100644
+--- a/components/EncodeComponent.cpp
++++ b/components/EncodeComponent.cpp
+@@ -20,7 +20,7 @@
+ #include <base/bind.h>
+ #include <base/bind_helpers.h>
+ #include <log/log.h>
+-#include <media/stagefright/MediaDefs.h>
++#include <media/stagefright/foundation/MediaDefs.h>
+ #include <ui/GraphicBuffer.h>
+ #include <ui/Size.h>
+ #include <utils/Trace.h>
+diff --git a/components/EncodeInterface.cpp b/components/EncodeInterface.cpp
+index 12152e6..9f683e6 100644
+--- a/components/EncodeInterface.cpp
++++ b/components/EncodeInterface.cpp
+@@ -13,7 +13,7 @@
+ #include <C2PlatformSupport.h>
+ #include <SimpleC2Interface.h>
+ #include <android/hardware/graphics/common/1.0/types.h>
+-#include <media/stagefright/MediaDefs.h>
++#include <media/stagefright/foundation/MediaDefs.h>
+ #include <utils/Log.h>
+ 
+ #include <v4l2_codec2/common/Common.h>
+diff --git a/service/service.cpp b/service/service.cpp
+index 03865ef..cedb3ff 100644
+--- a/service/service.cpp
++++ b/service/service.cpp
+@@ -15,6 +15,8 @@
+ #include <hidl/HidlTransportSupport.h>
+ #include <log/log.h>
+ #include <minijail.h>
++#include <cstdio>
++#include <cstring>
+ 
+ #ifdef V4L2_CODEC2_SERVICE_V4L2_STORE
+ #include <v4l2_codec2/v4l2/V4L2ComponentStore.h>
+@@ -32,7 +34,13 @@ static constexpr char kExtSeccompPolicyPath[] =
+         "/vendor/etc/seccomp_policy/"
+         "android.hardware.media.c2-extended-seccomp_policy";
+ 
+-int main(int /* argc */, char** /* argv */) {
++int main(int argc, char** argv) {
++    // Host/QEMU can validate the linked payload without entering minijail,
++    // opening binder/video devices, registering services or reading properties.
++    if (argc == 2 && strcmp(argv[1], "--link-check") == 0) {
++        puts("V4L2 Codec2 HIDL 1.2 payload linked");
++        return 0;
++    }
+     ALOGD("Service starting...");
+ 
+     signal(SIGPIPE, SIG_IGN);

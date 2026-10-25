@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# eink-probe wrapper: uses system python if it has numpy+cv2, else nix-shell.
+# Never contacts the phone itself (only `act`, via your --adb prefix).
+D=$(cd "$(dirname "$0")" && pwd)
+if python3 -c 'import numpy, cv2' 2>/dev/null; then exec python3 "$D/probe.py" "$@"; fi
+exec nix-shell -p 'python3.withPackages(p:[p.numpy p.opencv4 p.pillow])' \
+  --run "python3 $(printf '%q' "$D/probe.py") $(printf '%q ' "$@")"

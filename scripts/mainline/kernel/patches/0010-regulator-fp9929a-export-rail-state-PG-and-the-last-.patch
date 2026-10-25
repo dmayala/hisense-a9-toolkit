@@ -1,0 +1,108 @@
+From 2abb683b3c82d825ff2ff0d121c6a7c946b282a1 Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 21:17:16 -0700
+Subject: [PATCH 10/13] regulator: fp9929a: export rail state, PG and the last
+ temperature sample
+
+For the Hisense A9 E Ink display driver (a9_eink): it must know that the
+rails really came up before it sends drive frames, and it needs the TMST byte
+sampled inside the power-up sequence for the waveform temperature bin. The
+accessor never does I2C and never powers the chip.
+---
+ drivers/regulator/fp9929a.c       | 33 +++++++++++++++++++++++++++++++
+ include/linux/regulator/fp9929a.h | 28 ++++++++++++++++++++++++++
+ 2 files changed, 61 insertions(+)
+ create mode 100644 include/linux/regulator/fp9929a.h
+
+diff --git a/drivers/regulator/fp9929a.c b/drivers/regulator/fp9929a.c
+index d5eca1926..b5c8dc5b3 100644
+--- a/drivers/regulator/fp9929a.c
++++ b/drivers/regulator/fp9929a.c
+@@ -39,6 +39,7 @@
+ #include <linux/mutex.h>
+ #include <linux/of.h>
+ #include <linux/regulator/driver.h>
++#include <linux/regulator/fp9929a.h>
+ #include <linux/regulator/of_regulator.h>
+ #include <linux/string.h>
+ 
+@@ -150,6 +151,7 @@ static int fp9929a_enable(struct regulator_dev *rdev)
+ 		return 0;
+ 	}
+ 
++	fp->have_temp = false;	/* only this power-up's sample counts */
+ 	gpiod_set_value_cansleep(fp->pwrup, 1);
+ 	usleep_range(5000, 5100);
+ 
+@@ -337,6 +339,37 @@ static int fp9929a_probe(struct i2c_client *client)
+ 	return 0;
+ }
+ 
++/*
++ * For the E Ink display driver: whether the rails are up, PG, and the
++ * temperature sampled during the last power-up. Never touches the chip over
++ * I2C and never powers it (the vendor sysfs "temperature" did both).
++ */
++int fp9929a_get_status(struct device_node *np, struct fp9929a_status *st)
++{
++	struct i2c_client *client = of_find_i2c_device_by_node(np);
++	struct fp9929a *fp;
++
++	if (!client)
++		return -EPROBE_DEFER;
++	fp = READ_ONCE(client->dev.driver) ? i2c_get_clientdata(client) : NULL;
++	if (!fp) {
++		put_device(&client->dev);
++		return -EPROBE_DEFER;
++	}
++	if (st) {
++		mutex_lock(&fp->lock);
++		st->on = fp->on;
++		st->temp_valid = fp->have_temp;
++		st->temp_c = fp->temp_c;
++		st->pg_valid = !!fp->pg;
++		st->pg_good = fp->pg && gpiod_get_raw_value_cansleep(fp->pg) == 0;
++		mutex_unlock(&fp->lock);
++	}
++	put_device(&client->dev);
++	return 0;
++}
++EXPORT_SYMBOL_GPL(fp9929a_get_status);
++
+ static void fp9929a_shutdown(struct i2c_client *client)
+ {
+ 	struct fp9929a *fp = i2c_get_clientdata(client);
+diff --git a/include/linux/regulator/fp9929a.h b/include/linux/regulator/fp9929a.h
+new file mode 100644
+index 000000000..aaada7e8a
+--- /dev/null
++++ b/include/linux/regulator/fp9929a.h
+@@ -0,0 +1,28 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* FITI FP9929A E Ink PMIC: state for the E Ink display driver (Hisense A9). */
++#ifndef __LINUX_REGULATOR_FP9929A_H
++#define __LINUX_REGULATOR_FP9929A_H
++
++#include <linux/types.h>
++
++struct device_node;
++
++struct fp9929a_status {
++	bool on;		/* rails up (power-up sequence completed) */
++	bool pg_valid;		/* a PG line is wired */
++	bool pg_good;		/* PG raw level 0 (MEASURED: 0 when on, 1 when off) */
++	bool temp_valid;	/* a TMST sample exists */
++	int temp_c;		/* TMST byte from the last power-up, unsigned deg C */
++};
++
++#if IS_REACHABLE(CONFIG_REGULATOR_FP9929A)
++/* 0, or -EPROBE_DEFER while the chip's driver is not bound. Never does I2C. */
++int fp9929a_get_status(struct device_node *np, struct fp9929a_status *st);
++#else
++static inline int fp9929a_get_status(struct device_node *np, struct fp9929a_status *st)
++{
++	return -ENODEV;
++}
++#endif
++
++#endif

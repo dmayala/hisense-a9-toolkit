@@ -1,0 +1,2 @@
+# Stock-radio mode: custom AIDL executable retained, no service or start trigger.
+# Restore its original init and VINTF fragments together for an explicit fallback.

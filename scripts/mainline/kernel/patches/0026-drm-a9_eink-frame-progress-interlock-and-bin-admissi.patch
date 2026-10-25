@@ -1,0 +1,883 @@
+From d386ccc01ed74b780b387b786ea862d41c61588f Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 10:07:15 -0700
+Subject: [PATCH] drm/a9_eink: frame-progress interlock and bin admission;
+ regulator: fp9929a: emergency off
+
+Review 7 (finding 3) showed that a nonzero drive frame left on the glass
+is only bounded by the FP9929A whole-session max_on_ms timer: if the
+worker stops, a frame is late, or drm_client_modeset_commit() blocks
+while a drive buffer scans out, one polarity can be held for seconds.
+Finding 2 showed that the complete Clear request is 60-208 frames across
+the 14 temperature bins, so the frame envelope has to be admitted per
+bin before any drive.
+
+fp9929a: fp9929a_emergency_off(why), exported, callable from any context
+including hardirq/hrtimer (no lock, no sleep). It latches an emergency
+fault, closes allow_power_on, drives VCOM-EN low at once (gpiod_set_value;
+TLMM does not sleep, as for the panic notifier) and queues a work on
+system_highpri_wq 50 ms later that, under the gate lock but without
+fp->lock (the stuck party may hold it), drops VCOM-EN again (a power-up
+that had passed its gate check may have raised it) and PWRUP, and marks
+the rails off. If VCOM-EN was raised after the first drop, the stock 50 ms
+passes again before PWRUP. queue_delayed_work, not mod: repeated calls do
+not postpone the drop. While latched, power-up fails with -EIO at entry
+and at every gate check (before PWRUP, before VCOM-EN, in and after the
+PG wait). Only writing 1 to fp9929a.clear_fault clears it, and that write
+fails with -EBUSY while the delayed drop is still pending. A normal
+disable does not clear it. fp9929a_get_status() reports it (emergency).
+
+a9_eink transport: an hrtimer (HRTIMER_MODE_REL_HARD) per transport,
+(re)armed with 3 frame periods (A9X_STALL_FRAMES x period_us, ~35 ms)
+BEFORE every commit of a non-null frame and cancelled
+(hrtimer_try_to_cancel) after every SUCCESSFUL commit of a null one
+(a9x_show of a null frame, a9x_blank, the power-up and power-down zero
+commits). It is therefore armed exactly while a drive frame may be on the
+glass and no newer commit has started. 3 periods: on boot 11 zero-frame
+commits ran with a maximum gap of 13.2 ms, the dry run computed a frame
+in ~3.3 ms; a gap above 3 periods means >= 2 extra refreshes (drive
+pulses) of one frame beyond the 1.5-period "late" threshold. On expiry
+(hardirq, no locks): if the transport is on, fp9929a_emergency_off(),
+latch a9x_stall_fault, run the driver's hook (enable := 0, so a worker
+that resumes aborts), dev_crit.
+
+The power-down now commits a zero frame whenever the interlock is armed
+(a drive commit was started, even if it failed: it may have latched), not
+only when front_null is false. If that zero commit fails, it is a fault:
+emergency off + latch, then DPMS off as before. The second initial zero
+commit of the power-up is now checked; on failure power-up fails and the
+caller powers off. Teardown cancels the timer (a still-armed one is an
+emergency).
+
+While a9x_stall_fault is latched, a9_update() refuses (aborts++) and
+a9_power_on() returns -EIO. a9_eink.clear_fault (write 1) clears it. The
+status sysfs first line gains " stall_fault %d" at its end.
+
+Bin admission: a9_eink.bin_min/bin_max (0..13, default 0/13, min <= max
+enforced on write). A real waveform update (not zero_test, not a dry run)
+is refused before power-up if the bin of the previous FP9929A TMST sample
+(temp_fallback if none) and the fresh PMI632 thermistor is outside the
+window, and again after power-up, with this power-up's TMST, before the
+first frame (power off, aborts++, "bin N outside [min,max]: update
+refused"). Dry runs report it but are not refused. The below-0 C refusal
+is kept. Note: TMST is only resampled at a power-up, so a stale
+out-of-window sample keeps refusing until the window changes or a
+zero_test session (not bin-checked) resamples it.
+
+The fault latch, clear_fault and the bin window live in the new
+a9_eink_guard.c so the host harness compiles them unchanged. Host tests:
+tests/mainline-fp9929a (cases q, r, r2, r3) and the new
+tests/mainline-a9eink-stall (real a9_eink_transport.c + guard against a
+mocked DRM commit and pthread hrtimer) in the A9 work repo.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/a9_eink/Makefile            |   2 +-
+ drivers/gpu/drm/a9_eink/a9_eink.h           |  35 +++++-
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c       |  71 ++++++++++-
+ drivers/gpu/drm/a9_eink/a9_eink_guard.c     |  79 ++++++++++++
+ drivers/gpu/drm/a9_eink/a9_eink_transport.c | 133 ++++++++++++++++++--
+ drivers/regulator/fp9929a.c                 | 120 +++++++++++++++++-
+ include/linux/regulator/fp9929a.h           |  11 ++
+ 7 files changed, 428 insertions(+), 23 deletions(-)
+ create mode 100644 drivers/gpu/drm/a9_eink/a9_eink_guard.c
+
+diff --git a/drivers/gpu/drm/a9_eink/Makefile b/drivers/gpu/drm/a9_eink/Makefile
+index 31dc45a28..31f1256f9 100644
+--- a/drivers/gpu/drm/a9_eink/Makefile
++++ b/drivers/gpu/drm/a9_eink/Makefile
+@@ -2,5 +2,5 @@
+ # a9tcon.c / a9tcon.h are copied unchanged from scripts/mainline/tcon (A9 repo);
+ # kcompat/ maps their <stdint.h>/<stddef.h>/<string.h> to kernel headers.
+ ccflags-y += -I$(src) -I$(src)/kcompat
+-a9_eink-y := a9_eink_drv.o a9_eink_transport.o a9_eink_engine.o a9tcon.o
++a9_eink-y := a9_eink_drv.o a9_eink_transport.o a9_eink_guard.o a9_eink_engine.o a9tcon.o
+ obj-$(CONFIG_DRM_A9_EINK) += a9_eink.o
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index e93204620..950ea24d3 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -2,6 +2,8 @@
+ #ifndef A9_EINK_H
+ #define A9_EINK_H
+ 
++#include <linux/atomic.h>
++#include <linux/hrtimer.h>
+ #include <linux/iosys-map.h>
+ #include <linux/ktime.h>
+ #include <linux/mutex.h>
+@@ -49,11 +51,42 @@ struct a9x_transport {
+ 	u64 last_vbl;
+ 	ktime_t last_commit, on_since, off_since;
+ 	u32 period_us;			/* frame period of the transport mode */
++	/*
++	 * Frame-progress interlock (a9x_stall_*, a9_eink_transport.c): armed
++	 * before every commit of a drive frame, cancelled by a successful
++	 * all-zero commit. Expiry: FP9929A emergency off, fault latched.
++	 */
++	struct hrtimer stall;
++	bool stall_armed;		/* a drive frame may be on the glass */
++	char stall_why[96];		/* message for fp9929a_emergency_off */
++	/* hardirq-safe hook run on a fault (driver: enable := 0); may be NULL */
++	void (*fault)(struct a9x_transport *t);
+ 	/* stats */
+-	u64 frames, late, vbl_skips, commits_failed;
++	u64 frames, late, vbl_skips, commits_failed, stalls;
+ 	u32 max_gap_us;
+ };
+ 
++/*
++ * Deadline of the interlock in frame periods. Measured on boot 11: all-zero
++ * commits ran with a maximum gap of 13.2 ms (period 11.76 ms); the dry run
++ * computed a frame in ~3.3 ms. A gap above 3 periods (~35 ms) means the frame
++ * on the glass got >= 2 refreshes (drive pulses) more than intended beyond
++ * the 1.5-period "late" threshold: no healthy update gets there.
++ */
++#define A9X_STALL_FRAMES 3
++#define A9X_PERIOD_DEFAULT_US 11764	/* 85 Hz, if the mode gave none */
++
++/*
++ * Latched by the interlock or a failed power-down zero commit; cleared only
++ * by writing 1 to a9_eink.clear_fault (a9_eink_guard.c).
++ */
++extern atomic_t a9x_stall_fault;
++/* bin admission (a9_eink.bin_min/bin_max): true if bin is in [*lo, *hi] */
++bool a9_bin_admitted(int bin, int *lo, int *hi);
++
++void a9x_init(struct a9x_transport *t);	/* once, before anything else */
++void a9x_fini(struct a9x_transport *t);	/* after a9x_detach, process context */
++
+ int a9x_attach(struct a9x_transport *t);	/* -EAGAIN: msm not there yet */
+ void a9x_detach(struct a9x_transport *t);
+ int a9x_power_on(struct a9x_transport *t);
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index ac6d12629..b028110a6 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -30,6 +30,14 @@
+  * pipeline down (hv_hold_ms later, default 0). hv_max_ms caps any continuous
+  * high-voltage period. If a power-down commit fails, the FP9929A is forced
+  * down through its regulator.
++ * Frame-progress interlock (a9_eink_transport.c): a drive frame left on the
++ * glass for more than 3 frame periods without a newer commit, or a failed
++ * zero commit at power-down, drops the FP9929A rails from hardirq context
++ * (fp9929a_emergency_off), sets enable = 0 and latches a fault: updates are
++ * refused until 1 is written to a9_eink.clear_fault (and fp9929a.clear_fault
++ * for the PMIC). Real updates also run only inside the temperature-bin
++ * window a9_eink.bin_min..bin_max (default 0..13), checked before power-up
++ * and again, with the fresh samples, before the first frame.
+  *
+  * Userspace control ABI (docs/mainline-eink-compat.md): the connector's
+  * "eink" sysfs group: mode (513/515/518/521, default 518), black_threshold,
+@@ -421,11 +429,11 @@ static ssize_t status_show(struct device *kdev, struct device_attribute *attr, c
+ 	struct a9x_transport *t = &a9->tx;
+ 
+ 	return sysfs_emit(buf,
+-		"enable %d waveform %d transport %d hv_on %d\n"
++		"enable %d waveform %d transport %d hv_on %d stall_fault %d\n"
+ 		"updates %llu aborts %llu frames %llu late %llu vbl_skips %llu commit_fail %llu max_gap_us %u\n"
+ 		"last mode %#x pre %#x clear %d type %u bin %d t1 %d t2 %d frames %u steps %u dry %d aborted %d"
+ 		" rect %d,%d-%d,%d begin_us %u total_us %u\n",
+-		enable, a9->wf_loaded, a9x_attached(t), t->on,
++		enable, a9->wf_loaded, a9x_attached(t), t->on, atomic_read(&a9x_stall_fault),
+ 		a9->updates, a9->aborts, t->frames, t->late, t->vbl_skips, t->commits_failed,
+ 		t->max_gap_us, a9->last.mode, a9->last.pre, a9->last.clear, a9->last.type,
+ 		a9->last.bin, a9->last.t1, a9->last.t2, a9->last.frames, a9->last.steps,
+@@ -537,6 +545,12 @@ static bool a9_hv_maybe_on(struct a9_eink *a9)
+ 	return fp9929a_get_status(a9->pmic_np, &st) || st.on;
+ }
+ 
++/* transport fault (hardirq, from the interlock): stop the worker's waveform */
++static void a9_tx_fault(struct a9x_transport *t)
++{
++	WRITE_ONCE(enable, false);
++}
++
+ /* ---- pipeline power ------------------------------------------------------------- */
+ static void a9_force_hv_off(struct a9_eink *a9, const char *why)
+ {
+@@ -569,6 +583,9 @@ static int a9_power_on(struct a9_eink *a9)
+ {
+ 	int ret;
+ 
++	if (atomic_read(&a9x_stall_fault))
++		return -EIO;	/* frame-progress fault latched: a9_eink.clear_fault */
++
+ 	if (a9->hv_fault) {
+ 		a9_power_off(a9);
+ 		if (a9->hv_fault)
+@@ -643,8 +660,14 @@ static void a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 	bool *force_clear = dry ? &a9->dry_force_clear : &a9->force_clear;
+ 	struct sha256_ctx sc;
+ 	ktime_t t0 = ktime_get();
+-	int t1, t2, bin, ret, steps;
++	unsigned int zt = READ_ONCE(zero_test);
++	int t1, t2, bin, ret, steps, lo, hi;
+ 
++	if (atomic_read(&a9x_stall_fault)) {
++		dev_err_ratelimited(a9->dev, "update refused: frame-progress fault latched (write 1 to a9_eink.clear_fault)\n");
++		a9->aborts++;
++		return;
++	}
+ 	/* attaching only looks the msm card up and allocates buffers: also done in
+ 	 * a dry run, so the transport side can be checked without any commit */
+ 	if (!a9x_attached(&a9->tx)) {
+@@ -652,6 +675,23 @@ static void a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 		if (ret && ret != -EAGAIN)
+ 			dev_warn_ratelimited(a9->dev, "transport attach: %d\n", ret);
+ 	}
++	if (!dry && !zt) {
++		/*
++		 * Bin admission before any power-up: t1 is the PREVIOUS power-up's
++		 * TMST sample (temp_fallback if none), t2 the fresh thermistor.
++		 * The fresh TMST is checked again after power-up, before a frame.
++		 */
++		a9_temps(a9, &t1, &t2);
++		mutex_lock(&a9->eng_lock);
++		bin = a9t_temp_bin(&a9->e.st, t1, t2);
++		mutex_unlock(&a9->eng_lock);
++		if (!a9_bin_admitted(bin, &lo, &hi)) {
++			dev_err(a9->dev, "bin %d outside [%d,%d] before power-up (t1 %d from the previous power-up, t2 %d): update refused\n",
++				bin, lo, hi, t1, t2);
++			a9->aborts++;
++			return;
++		}
++	}
+ 	if (!dry) {
+ 		ret = a9_power_on(a9);
+ 		if (ret) {
+@@ -671,8 +711,8 @@ static void a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 		return;
+ 	}
+ 
+-	if (!dry && READ_ONCE(zero_test)) {
+-		unsigned int i, n = min(READ_ONCE(zero_test), 850U);	/* <= 10 s at 85 Hz */
++	if (!dry && zt) {
++		unsigned int i, n = min(zt, 850U);	/* <= 10 s at 85 Hz */
+ 
+ 		memset(a9->frame, 0, A9T_FRAME_BYTES);
+ 		for (i = 0; i < n; i++) {
+@@ -713,6 +753,24 @@ static void a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 		a9->dry_save_have_pre = a9->e.have_pre;
+ 	}
+ 	bin = a9t_temp_bin(&a9->e.st, t1, t2);
++	/* bin admission with this power-up's samples, before any frame */
++	if (!a9_bin_admitted(bin, &lo, &hi)) {
++		if (dry) {
++			dev_info(a9->dev, "dry run: bin %d outside [%d,%d]: a real update would be refused\n",
++				 bin, lo, hi);
++		} else {
++			a9->last.bin = bin;
++			a9->last.t1 = t1;
++			a9->last.t2 = t2;
++			a9->last.frames = 0;
++			a9->last.aborted = 1;
++			mutex_unlock(&a9->eng_lock);
++			dev_err(a9->dev, "bin %d outside [%d,%d]: update refused\n", bin, lo, hi);
++			a9->aborts++;
++			a9_power_off(a9);
++			return;
++		}
++	}
+ 	if (*init_pending) {
+ 		a9e_begin_init(&a9->e, bin);
+ 		ret = a9_run_frames(a9, dry, NULL);
+@@ -1064,6 +1122,8 @@ static int a9_probe(struct platform_device *pdev)
+ 	a9->tx.wq = &a9->wq;
+ 	a9->tx.fourcc = strcmp(f, "XB24") ? DRM_FORMAT_XRGB8888 : DRM_FORMAT_XBGR8888;
+ 	mutex_init(&a9->tx.lock);
++	a9->tx.fault = a9_tx_fault;
++	a9x_init(&a9->tx);
+ 
+ 	a9->tables = a9_vzalloc(dev, sizeof(*a9->tables));
+ 	a9->shadow = a9_vzalloc(dev, A9T_N);
+@@ -1137,6 +1197,7 @@ static void a9_teardown(struct a9_eink *a9)
+ 		a9->thread = NULL;
+ 	}
+ 	a9x_detach(&a9->tx);
++	a9x_fini(&a9->tx);
+ }
+ 
+ static void a9_remove(struct platform_device *pdev)
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_guard.c b/drivers/gpu/drm/a9_eink/a9_eink_guard.c
+new file mode 100644
+index 000000000..a2fd1e2a6
+--- /dev/null
++++ b/drivers/gpu/drm/a9_eink/a9_eink_guard.c
+@@ -0,0 +1,79 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * a9_eink guards that do not need the DRM side: the frame-progress fault
++ * latch with its clear_fault parameter, and the temperature-bin admission
++ * window (bin_min/bin_max). Separate so the host test harness
++ * (tests/mainline-a9eink-stall in the A9 repo) compiles exactly this code.
++ */
++#include <linux/atomic.h>
++#include <linux/kernel.h>
++#include <linux/moduleparam.h>
++#include <linux/mutex.h>
++#include <linux/printk.h>
++
++#include "a9_eink.h"
++
++atomic_t a9x_stall_fault = ATOMIC_INIT(0);
++
++static int a9_clear_fault_set(const char *val, const struct kernel_param *kp)
++{
++	bool clear;
++	int ret = kstrtobool(val, &clear);
++
++	if (ret)
++		return ret;
++	if (clear && atomic_xchg(&a9x_stall_fault, 0))
++		pr_info("a9_eink: frame-progress fault cleared (clear_fault)\n");
++	return 0;
++}
++
++static const struct kernel_param_ops a9_clear_fault_ops = {
++	.set = a9_clear_fault_set,
++};
++module_param_cb(clear_fault, &a9_clear_fault_ops, NULL, 0200);
++MODULE_PARM_DESC(clear_fault,
++		 "Write 1 to clear a latched frame-progress fault (write-only); the FP9929A's own fp9929a.clear_fault is separate");
++
++/*
++ * Temperature-bin admission (review 7 finding 2): a real waveform update runs
++ * only if its bin is in [bin_min, bin_max]; checked before power-up (previous
++ * FP9929A sample + fresh thermistor) and again after it (fresh samples),
++ * before any frame. 0..13, bin_min <= bin_max (a write that would invert the
++ * window is refused: narrow by raising bin_min last, widen by bin_max first).
++ */
++static int bin_min;
++static int bin_max = A9T_BINS - 1;
++static DEFINE_MUTEX(a9_bin_lock);
++
++static int a9_bin_set(const char *val, const struct kernel_param *kp)
++{
++	int v, ret = kstrtoint(val, 0, &v);
++
++	if (ret)
++		return ret;
++	if (v < 0 || v > A9T_BINS - 1)
++		return -EINVAL;
++	mutex_lock(&a9_bin_lock);
++	if (kp->arg == &bin_min ? v > READ_ONCE(bin_max) : v < READ_ONCE(bin_min))
++		ret = -EINVAL;
++	else
++		WRITE_ONCE(*(int *)kp->arg, v);
++	mutex_unlock(&a9_bin_lock);
++	return ret;
++}
++
++static const struct kernel_param_ops a9_bin_ops = {
++	.set = a9_bin_set,
++	.get = param_get_int,
++};
++module_param_cb(bin_min, &a9_bin_ops, &bin_min, 0644);
++MODULE_PARM_DESC(bin_min, "Lowest temperature bin a real update may run at (0..13, default 0)");
++module_param_cb(bin_max, &a9_bin_ops, &bin_max, 0644);
++MODULE_PARM_DESC(bin_max, "Highest temperature bin a real update may run at (0..13, default 13)");
++
++bool a9_bin_admitted(int bin, int *lo, int *hi)
++{
++	*lo = READ_ONCE(bin_min);
++	*hi = READ_ONCE(bin_max);
++	return bin >= *lo && bin <= *hi;
++}
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_transport.c b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+index cda450c24..f436203c0 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_transport.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+@@ -17,10 +17,24 @@
+  * a9_eink card is given to the composer). If it does, our commits fail with
+  * -EBUSY and the update is aborted; power-off then falls back to forcing the
+  * FP9929A down (a9_eink_drv.c).
++ *
++ * Frame-progress interlock (review 7 finding 3): while a drive (non-null)
++ * frame may be on the glass and no newer commit has started, an hrtimer runs
++ * with a deadline of A9X_STALL_FRAMES frame periods. It is (re)armed BEFORE
++ * every commit of a drive frame and cancelled only after a successful commit
++ * of an all-zero one. If the worker stops computing, a commit blocks in
++ * drm_client_modeset_commit() (holding t->lock and DRM locks), or a frame is
++ * late, it expires in hardirq context and, without any lock, drops the
++ * FP9929A rails (fp9929a_emergency_off: VCOM-EN at once, PWRUP 50 ms later),
++ * latches a9x_stall_fault and stops the worker (enable := 0). A blank frame
++ * cannot be guaranteed when the commit path is what hangs, so HV removal is
++ * the action; blanking stays the normal (process-context) path.
+  */
+ #include <linux/delay.h>
+ #include <linux/device.h>
++#include <linux/hrtimer.h>
+ #include <linux/of.h>
++#include <linux/regulator/fp9929a.h>
+ 
+ #include <drm/drm_atomic.h>
+ #include <drm/drm_bridge.h>
+@@ -38,7 +52,78 @@
+ #define TX_H A9T_TH
+ 
+ static int a9x_power_off_locked(struct a9x_transport *t);
+-static int a9x_commit_locked(struct a9x_transport *t, int idx);
++static int a9x_commit_locked(struct a9x_transport *t, int idx, bool null);
++
++static u32 a9x_period_us(struct a9x_transport *t)
++{
++	return t->period_us ? t->period_us : A9X_PERIOD_DEFAULT_US;
++}
++
++static u32 a9x_stall_ms(struct a9x_transport *t)
++{
++	return DIV_ROUND_UP(A9X_STALL_FRAMES * a9x_period_us(t), 1000);
++}
++
++/* hardirq (HRTIMER_MODE_REL_HARD): no locks, no sleeping */
++static enum hrtimer_restart a9x_stall_fn(struct hrtimer *h)
++{
++	struct a9x_transport *t = container_of(h, struct a9x_transport, stall);
++
++	if (!READ_ONCE(t->on))
++		return HRTIMER_NORESTART;
++	fp9929a_emergency_off(t->stall_why);
++	atomic_set(&a9x_stall_fault, 1);
++	WRITE_ONCE(t->stalls, t->stalls + 1);
++	if (t->fault)
++		t->fault(t);
++	dev_crit(t->dev, "%s: FP9929A emergency off, fault latched (a9_eink.clear_fault)\n",
++		 t->stall_why);
++	return HRTIMER_NORESTART;
++}
++
++/* t->lock held: a drive frame is about to be committed */
++static void a9x_stall_arm(struct a9x_transport *t)
++{
++	t->stall_armed = true;
++	hrtimer_start(&t->stall, ns_to_ktime((u64)A9X_STALL_FRAMES * a9x_period_us(t) * 1000),
++		      HRTIMER_MODE_REL_HARD);
++}
++
++/*
++ * t->lock held: an all-zero frame is established. Never waits for a running
++ * callback (it is then firing: the fault is latched either way).
++ */
++static void a9x_stall_disarm(struct a9x_transport *t)
++{
++	hrtimer_try_to_cancel(&t->stall);
++	t->stall_armed = false;
++}
++
++/* t->lock held: the transport cannot establish a zero frame */
++static void a9x_zero_failed(struct a9x_transport *t, const char *why)
++{
++	hrtimer_try_to_cancel(&t->stall);
++	fp9929a_emergency_off(why);
++	atomic_set(&a9x_stall_fault, 1);
++	if (t->fault)
++		t->fault(t);
++	dev_crit(t->dev, "%s: FP9929A emergency off, fault latched (a9_eink.clear_fault)\n", why);
++}
++
++void a9x_init(struct a9x_transport *t)
++{
++	hrtimer_setup(&t->stall, a9x_stall_fn, CLOCK_MONOTONIC, HRTIMER_MODE_REL_HARD);
++	snprintf(t->stall_why, sizeof(t->stall_why),
++		 "a9_eink: no frame progress for %u ms with a drive frame on the panel",
++		 a9x_stall_ms(t));
++}
++
++/* teardown, after a9x_detach: an armed interlock is still a drive frame */
++void a9x_fini(struct a9x_transport *t)
++{
++	if (hrtimer_cancel(&t->stall) && READ_ONCE(t->stall_armed))
++		a9x_zero_failed(t, "a9_eink: teardown with a drive frame armed");
++}
+ 
+ static void a9x_free_locked(struct a9x_transport *t)
+ {
+@@ -54,6 +139,8 @@ static void a9x_free_locked(struct a9x_transport *t)
+ 	t->ms = NULL;
+ 	t->on = false;
+ 	t->vbl_ref = false;
++	/* nothing scans out any more (the unregister path tried the zero frame) */
++	a9x_stall_disarm(t);
+ }
+ 
+ /* msm card going away: called under its clientlist_mutex */
+@@ -160,6 +247,9 @@ int a9x_attach(struct a9x_transport *t)
+ 		/* period from the mode: htotal * vtotal / clock */
+ 		t->period_us = div_u64((u64)found->mode->htotal * found->mode->vtotal * 1000,
+ 				       found->mode->clock);
++		snprintf(t->stall_why, sizeof(t->stall_why),
++			 "a9_eink: no frame progress for %u ms with a drive frame on the panel",
++			 a9x_stall_ms(t));
+ 	}
+ 	mutex_unlock(&t->client.modeset_mutex);
+ 	if (!found) {
+@@ -243,7 +333,12 @@ void a9x_detach(struct a9x_transport *t)
+ 	drm_dev_put(ddev);
+ }
+ 
+-static int a9x_commit_locked(struct a9x_transport *t, int idx)
++/*
++ * @null: the buffer carries no drive. A drive frame arms the interlock BEFORE
++ * the commit (it may latch even if the call then fails or never returns); a
++ * zero frame cancels it only once its commit succeeded.
++ */
++static int a9x_commit_locked(struct a9x_transport *t, int idx, bool null)
+ {
+ 	struct drm_crtc *crtc;
+ 	ktime_t now;
+@@ -254,11 +349,15 @@ static int a9x_commit_locked(struct a9x_transport *t, int idx)
+ 	mutex_lock(&t->client.modeset_mutex);
+ 	t->ms->fb = t->buf[idx]->fb;
+ 	mutex_unlock(&t->client.modeset_mutex);
++	if (!null)
++		a9x_stall_arm(t);
+ 	ret = drm_client_modeset_commit(&t->client);
+ 	if (ret) {
+ 		t->commits_failed++;
+ 		return ret;
+ 	}
++	if (null)
++		a9x_stall_disarm(t);
+ 	now = ktime_get();
+ 	crtc = t->ms->crtc;
+ 	if (t->on && t->vbl_ref) {
+@@ -302,7 +401,7 @@ int a9x_power_on(struct a9x_transport *t)
+ 	t->front_null = true;
+ 	/* full modeset with an all-zero buffer: DSI on, panel prepare (lines,
+ 	 * FP9929A up), bridge init; video starts before the bridge init */
+-	ret = a9x_commit_locked(t, 0);
++	ret = a9x_commit_locked(t, 0, true);
+ 	if (ret) {
+ 		dev_err(t->dev, "transport enable failed: %d\n", ret);
+ 		/* a failed enable may have left the CRTC half on: caller powers off */
+@@ -312,9 +411,14 @@ int a9x_power_on(struct a9x_transport *t)
+ 		return ret;
+ 	}
+ 	t->on = true;
+-	/* one more all-zero refresh before any drive frame */
+-	a9x_commit_locked(t, 1);
+ 	t->on_since = ktime_get();
++	/* one more all-zero refresh before any drive frame; failure: caller powers off */
++	ret = a9x_commit_locked(t, 1, true);
++	if (ret) {
++		dev_err(t->dev, "second all-zero refresh failed: %d\n", ret);
++		mutex_unlock(&t->lock);
++		return ret;
++	}
+ 	t->vbl_ref = !drm_crtc_vblank_get(t->ms->crtc);
+ 	if (t->vbl_ref)
+ 		t->last_vbl = drm_crtc_vblank_count(t->ms->crtc);
+@@ -325,6 +429,7 @@ int a9x_power_on(struct a9x_transport *t)
+ int a9x_show(struct a9x_transport *t, const u8 *frame)
+ {
+ 	int back, ret, r;
++	bool null = a9e_frame_is_null(frame);
+ 
+ 	mutex_lock(&t->lock);
+ 	if (!t->on || t->gone) {
+@@ -339,10 +444,10 @@ int a9x_show(struct a9x_transport *t, const u8 *frame)
+ 			iosys_map_memcpy_to(&t->map[back], (size_t)r * t->pitch,
+ 					    frame + (size_t)r * TX_W * 4, TX_W * 4);
+ 	}
+-	ret = a9x_commit_locked(t, back);
++	ret = a9x_commit_locked(t, back, null);
+ 	if (!ret) {
+ 		t->frames++;
+-		t->front_null = a9e_frame_is_null(frame);
++		t->front_null = null;
+ 	}
+ 	mutex_unlock(&t->lock);
+ 	return ret;
+@@ -355,14 +460,20 @@ static int a9x_power_off_locked(struct a9x_transport *t)
+ 
+ 	if (!t->on || t->gone)
+ 		return 0;
+-	if (!t->front_null) {
++	/* armed: a drive commit was started, whatever front_null says */
++	if (!t->front_null || t->stall_armed) {
+ 		/* never power down (or idle) on a frame that drives */
+ 		int back = t->front ^ 1;
+ 
+ 		iosys_map_memset(&t->map[back], 0, 0, (size_t)t->pitch * TX_H);
+-		if (!a9x_commit_locked(t, back))
++		if (!a9x_commit_locked(t, back, true))
+ 			t->front_null = true;
++		else
++			t->front_null = false;	/* the drive commit may have latched */
+ 	}
++	/* no zero frame established: remove HV directly, then still DPMS off */
++	if (!t->front_null || t->stall_armed)
++		a9x_zero_failed(t, "a9_eink: zero frame before power-down failed");
+ 	/* let the zero frame scan out for at least two refreshes */
+ 	if (t->period_us) {
+ 		s64 since = ktime_us_delta(ktime_get(), t->last_commit);
+@@ -402,10 +513,10 @@ int a9x_blank(struct a9x_transport *t)
+ 	int back, ret = 0;
+ 
+ 	mutex_lock(&t->lock);
+-	if (t->on && !t->gone && !t->front_null) {
++	if (t->on && !t->gone && (!t->front_null || t->stall_armed)) {
+ 		back = t->front ^ 1;
+ 		iosys_map_memset(&t->map[back], 0, 0, (size_t)t->pitch * TX_H);
+-		ret = a9x_commit_locked(t, back);
++		ret = a9x_commit_locked(t, back, true);
+ 		if (!ret)
+ 			t->front_null = true;
+ 	}
+diff --git a/drivers/regulator/fp9929a.c b/drivers/regulator/fp9929a.c
+index 0179c5a77..c2f7c7e06 100644
+--- a/drivers/regulator/fp9929a.c
++++ b/drivers/regulator/fp9929a.c
+@@ -55,6 +55,14 @@
+  *    on: closing the gate is not a power-down;
+  *  - panic: the notifier drives VCOM-EN low, waits 50 ms and drives PWRUP low
+  *    unconditionally, also in the middle of a power-up.
++ *  - emergency off: fp9929a_emergency_off() (exported; any context, also
++ *    hardirq/hrtimer: no lock, no sleep) closes the gate, LATCHES an
++ *    emergency fault, drives VCOM-EN low at once and queues a highpri work
++ *    that 50 ms later, under the gate lock but without fp->lock (the caller
++ *    may be the one stuck holding it), drops VCOM-EN again and PWRUP. While
++ *    latched every power-up fails with -EIO, at entry and at every gate
++ *    check; only writing 1 to clear_fault clears it (-EBUSY while the drop
++ *    is still pending). For the a9_eink frame-progress interlock.
+  *  - power-good: after VCOM-EN=1 the PG line (DT GPIO_ACTIVE_HIGH, logical 1
+  *    = rails settled good) must read 1 twice in a row within
+  *    fp9929a.pg_timeout_ms (default 100) of the VCOM-EN assertion (a read
+@@ -177,6 +185,15 @@ static unsigned int max_on_ms = FP9929A_MAX_ON_CEIL;
+ /* bumped by every write of 1 to clear_fault; a latch older than it is void */
+ static atomic_t fp9929a_clear_gen = ATOMIC_INIT(0);
+ 
++/*
++ * Emergency latch (fp9929a_emergency_off): set from any context, cleared only
++ * by clear_fault. fp9929a_emerg_busy: the delayed PWRUP drop is not done yet;
++ * clear_fault refuses meanwhile, so the latch can never be cleared while a
++ * power-up could still race the work that completes the drop.
++ */
++static atomic_t fp9929a_emerg = ATOMIC_INIT(0);
++static atomic_t fp9929a_emerg_busy = ATOMIC_INIT(0);
++
+ static int fp9929a_clear_fault_set(const char *val, const struct kernel_param *kp)
+ {
+ 	bool clear;
+@@ -185,8 +202,15 @@ static int fp9929a_clear_fault_set(const char *val, const struct kernel_param *k
+ 	ret = kstrtobool(val, &clear);
+ 	if (ret)
+ 		return ret;
+-	if (clear)
+-		atomic_inc(&fp9929a_clear_gen);
++	if (!clear)
++		return 0;
++	if (atomic_read(&fp9929a_emerg_busy)) {
++		pr_err("fp9929a: clear_fault: emergency power-down still in progress\n");
++		return -EBUSY;
++	}
++	atomic_inc(&fp9929a_clear_gen);
++	if (atomic_xchg(&fp9929a_emerg, 0))
++		pr_info("fp9929a: emergency fault cleared (clear_fault)\n");
+ 	return 0;
+ }
+ 
+@@ -195,7 +219,7 @@ static const struct kernel_param_ops fp9929a_clear_fault_ops = {
+ };
+ module_param_cb(clear_fault, &fp9929a_clear_fault_ops, NULL, 0200);
+ MODULE_PARM_DESC(clear_fault,
+-		 "Write 1 to clear a latched max_on_ms fault (write-only)");
++		 "Write 1 to clear a latched max_on_ms or emergency-off fault (write-only)");
+ 
+ struct fp9929a {
+ 	struct device *dev;
+@@ -217,6 +241,9 @@ struct fp9929a {
+ 	bool off_valid;		/* off_at holds a power-down done by this driver */
+ 	ktime_t off_at;		/* when PWRUP last went low (power-down completed) */
+ 	struct delayed_work max_on_work;
++	struct delayed_work emerg_work;	/* fp9929a_emergency_off: PWRUP 50 ms later */
++	ktime_t emerg_at;	/* when fp9929a_emergency_off last dropped VCOM-EN */
++	ktime_t vcom_on_at;	/* when VCOM-EN was last raised (under the gate lock) */
+ 	struct notifier_block panic_nb;
+ 	bool have_temp;
+ 	int temp_c;
+@@ -377,7 +404,8 @@ static int fp9929a_wait_pg(struct fp9929a *fp, ktime_t vcom_on,
+ 	int good = 0, v;
+ 
+ 	for (;;) {
+-		if (!READ_ONCE(allow_power_on) || READ_ONCE(fp->expired))
++		if (!READ_ONCE(allow_power_on) || READ_ONCE(fp->expired) ||
++		    atomic_read(&fp9929a_emerg))
+ 			return -ECANCELED;
+ 		v = gpiod_get_value_cansleep(fp->pg);
+ 		*last = v;
+@@ -539,7 +567,8 @@ static int fp9929a_write_vcom(struct fp9929a *fp)
+ static bool fp9929a_gate_open(struct fp9929a *fp)
+ {
+ 	mutex_lock(&fp9929a_gate_lock);
+-	if (READ_ONCE(allow_power_on) && !READ_ONCE(fp->expired))
++	if (READ_ONCE(allow_power_on) && !READ_ONCE(fp->expired) &&
++	    !atomic_read(&fp9929a_emerg))
+ 		return true;
+ 	mutex_unlock(&fp9929a_gate_lock);
+ 	return false;
+@@ -559,6 +588,11 @@ static int fp9929a_gate_closed(struct fp9929a *fp, const char *before)
+ 			 before, fp->max_on_ms);
+ 		return -EIO;
+ 	}
++	if (atomic_read(&fp9929a_emerg)) {
++		dev_crit(fp->dev, "power-up aborted before %s: emergency off latched, rails down\n",
++			 before);
++		return -EIO;
++	}
+ 	dev_warn(fp->dev, "power-up aborted before %s: allow_power_on closed, rails down\n",
+ 		 before);
+ 	return -EPERM;
+@@ -570,6 +604,11 @@ static int __fp9929a_enable(struct fp9929a *fp)
+ 	int ret, pg_last = -1;
+ 	ktime_t vcom_on;
+ 
++	if (atomic_read(&fp9929a_emerg)) {
++		dev_err_ratelimited(fp->dev,
++				    "power-up refused: emergency off latched (write 1 to clear_fault)\n");
++		return -EIO;
++	}
+ 	if (!READ_ONCE(allow_power_on)) {
+ 		dev_warn(fp->dev,
+ 			 "power-up refused: boot with fp9929a.allow_power_on=1 to allow it\n");
+@@ -611,6 +650,10 @@ static int __fp9929a_enable(struct fp9929a *fp)
+ 	WRITE_ONCE(fp->expired, false);	/* nothing is energized here */
+ 	if (!fp9929a_gate_open(fp)) {
+ 		mutex_unlock(&fp->lock);
++		if (atomic_read(&fp9929a_emerg)) {
++			dev_err(fp->dev, "power-up refused: emergency off latched\n");
++			return -EIO;
++		}
+ 		dev_warn(fp->dev, "power-up refused: allow_power_on closed\n");
+ 		return -EPERM;
+ 	}
+@@ -662,6 +705,8 @@ static int __fp9929a_enable(struct fp9929a *fp)
+ 	 */
+ 	vcom_on = ktime_get();
+ 	gpiod_set_value_cansleep(fp->vcom_en, 1);
++	/* after the write: the emergency work compares it with emerg_at */
++	WRITE_ONCE(fp->vcom_on_at, ktime_get());
+ 	mutex_unlock(&fp9929a_gate_lock);
+ 
+ 	pg_ms = READ_ONCE(pg_timeout_ms);
+@@ -805,6 +850,66 @@ static int fp9929a_panic(struct notifier_block *nb, unsigned long ev, void *p)
+ 	return NOTIFY_DONE;
+ }
+ 
++/*
++ * Second half of fp9929a_emergency_off(), 50 ms after it dropped VCOM-EN.
++ * Under the gate lock (no power-up can raise a pin meanwhile, and none passes
++ * a gate check while the latch is set) but WITHOUT fp->lock: the stuck party
++ * may hold it. VCOM-EN is dropped again because a power-up that had already
++ * passed its gate check may have raised it after the first drop; if it was
++ * raised since then (vcom_on_at), the stock 50 ms passes again before PWRUP.
++ */
++static void fp9929a_emerg_work(struct work_struct *work)
++{
++	struct fp9929a *fp = container_of(to_delayed_work(work), struct fp9929a,
++					  emerg_work);
++
++	mutex_lock(&fp9929a_gate_lock);
++	gpiod_set_value_cansleep(fp->vcom_en, 0);
++	if (READ_ONCE(fp->vcom_on_at) >= READ_ONCE(fp->emerg_at))
++		msleep(50);
++	gpiod_set_value_cansleep(fp->pwrup, 0);
++	fp9929a_mark_off(fp);
++	WRITE_ONCE(fp->on, false);
++	WRITE_ONCE(fp->energized, false);
++	mutex_unlock(&fp9929a_gate_lock);
++	atomic_dec(&fp9929a_emerg_busy);
++	dev_crit(fp->dev, "emergency off: PWRUP dropped; power-up refused until clear_fault\n");
++}
++
++/**
++ * fp9929a_emergency_off - drop the E Ink rails now, from any context
++ * @why: reason, logged
++ *
++ * Callable from hardirq/hrtimer context: takes no lock and does not sleep
++ * (TLMM GPIOs do not sleep, as for the panic notifier). Closes the gate,
++ * latches the emergency fault (power-ups fail with -EIO until 1 is written
++ * to clear_fault), drives VCOM-EN low immediately and queues the PWRUP drop
++ * 50 ms later on system_highpri_wq. Repeated calls do not postpone it.
++ */
++void fp9929a_emergency_off(const char *why)
++{
++	struct fp9929a *fp = READ_ONCE(fp9929a_inst);
++
++	atomic_set(&fp9929a_emerg, 1);
++	WRITE_ONCE(allow_power_on, false);
++	if (!fp) {
++		pr_crit("fp9929a: emergency off (%s): no device bound, gate closed\n", why);
++		return;
++	}
++	WRITE_ONCE(fp->emerg_at, ktime_get());
++	gpiod_set_value(fp->vcom_en, 0);
++	/*
++	 * One busy count per queued run (the work drops it when done). Queue,
++	 * not mod: repeated calls never postpone a pending drop.
++	 */
++	atomic_inc(&fp9929a_emerg_busy);
++	if (!queue_delayed_work(system_highpri_wq, &fp->emerg_work, msecs_to_jiffies(50)))
++		atomic_dec(&fp9929a_emerg_busy);
++	pr_crit_ratelimited("fp9929a: emergency off (%s): VCOM-EN dropped, PWRUP in 50 ms\n",
++			    why);
++}
++EXPORT_SYMBOL_GPL(fp9929a_emergency_off);
++
+ static void fp9929a_unregister_panic(void *data)
+ {
+ 	struct fp9929a *fp = data;
+@@ -835,6 +940,10 @@ static int fp9929a_probe(struct i2c_client *client)
+ 					   fp9929a_max_on_work);
+ 	if (ret)
+ 		return ret;
++	ret = devm_delayed_work_autocancel(dev, &fp->emerg_work,
++					   fp9929a_emerg_work);
++	if (ret)
++		return ret;
+ 
+ 	/* ASIS: look at what the bootloader left before changing anything */
+ 	fp->pwrup = devm_gpiod_get(dev, "pwrup", GPIOD_ASIS);
+@@ -945,6 +1054,7 @@ int fp9929a_get_status(struct device_node *np, struct fp9929a_status *st)
+ 		mutex_lock(&fp->lock);
+ 		st->on = fp->on;
+ 		st->forced_off = fp9929a_fault_latched(fp);
++		st->emergency = atomic_read(&fp9929a_emerg);
+ 		st->temp_valid = fp->have_temp;
+ 		st->temp_c = fp->temp_c;
+ 		st->pg_valid = !!fp->pg;
+diff --git a/include/linux/regulator/fp9929a.h b/include/linux/regulator/fp9929a.h
+index a7b24aaf4..33793a564 100644
+--- a/include/linux/regulator/fp9929a.h
++++ b/include/linux/regulator/fp9929a.h
+@@ -10,6 +10,8 @@ struct device_node;
+ struct fp9929a_status {
+ 	bool on;		/* rails up (power-up sequence completed) */
+ 	bool forced_off;	/* max_on_ms fault latched: power-up returns -EIO */
++	bool emergency;		/* fp9929a_emergency_off() latched: power-up -EIO
++				 * until 1 is written to fp9929a.clear_fault */
+ 	bool pg_valid;		/* a PG line is wired */
+ 	bool pg_good;		/* PG logical 1 (DT active-high): rails settled good;
+ 				 * docs/mainline-fp9929a-pg.md */
+@@ -20,11 +22,20 @@ struct fp9929a_status {
+ #if IS_REACHABLE(CONFIG_REGULATOR_FP9929A)
+ /* 0, or -EPROBE_DEFER while the chip's driver is not bound. Never does I2C. */
+ int fp9929a_get_status(struct device_node *np, struct fp9929a_status *st);
++/*
++ * Drop the rails now (VCOM-EN at once, PWRUP 50 ms later) and latch a fault.
++ * Any context, including hardirq/hrtimer: no lock, no sleep.
++ */
++void fp9929a_emergency_off(const char *why);
+ #else
+ static inline int fp9929a_get_status(struct device_node *np, struct fp9929a_status *st)
+ {
+ 	return -ENODEV;
+ }
++
++static inline void fp9929a_emergency_off(const char *why)
++{
++}
+ #endif
+ 
+ #endif

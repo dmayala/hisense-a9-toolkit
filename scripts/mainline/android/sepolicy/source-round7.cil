@@ -1,0 +1,58 @@
+; R7: observed enforcing R6 failures, plus their immediate source-backed needs.
+; No functional permissive domain; do not turn every diagnostic AVC into allow.
+
+; OBS init->radio noatsecure. Preserve the launcher's private library path,
+; following A6L/R5. OBS sed reads wlan_mac.bin in the read-only seed mount;
+; OBS umount requests sys_rawio. No block-device write/ioctl grant is added.
+(allow init_202504 a9_wifi_radio (process (noatsecure)))
+(allow a9_wifi_radio mnt_vendor_file_202504 (file (read open getattr)))
+(allow a9_wifi_radio self (capability (sys_rawio)))
+
+; OBS CameraManager user_namespace/create twice. libcamera Process::start
+; clone3(CLONE_NEWUSER | CLONE_NEWNET | CLONE_PIDFD) isolates its IPA proxy.
+; kernel copy_namespaces requires SYS_ADMIN in that NEW user namespace, not
+; the host one, before constructing its network namespace.
+(allow hal_camera_default self (user_namespace (create)))
+(allow hal_camera_default self (cap_userns (sys_admin)))
+; OBS stat-only enumeration of /dev by the raw media enumerator/loader.
+(allow a9ml_camcap a9ml_fastrpc_device (chr_file (getattr)))
+(allow a9ml_camcap audio_device_202504 (dir (getattr)))
+(allow a9ml_camcap tty_device_202504 (chr_file (getattr)))
+(allow vendor_init_202504 video_device_202504 (chr_file (getattr)))
+
+; OBS 54 dac_read_search checks during successful manual ALSA capture.
+(allow a9ml_audio self (capability (dac_read_search)))
+
+; OBS cmd settings already reached system_server, but its reply to the helper's
+; command-substitution pipe was denied. Binder call/find/use were in R6; the
+; transferred descriptor also needs pipe access. SettingsProvider can reply
+; through the same pipe. Audio's existing cmd media_session uses this mechanism.
+(allow system_server_202504 a9ml_framework_client (fifo_file (read write getattr)))
+(allow system_app_202504 a9ml_key_aod (fifo_file (read write getattr)))
+; SRC /data/user/0 may be a symlink into /data/data. Do not mistake an absent
+; prefs file on RAM /data for an AVC, or grant reads of all system data files.
+(allow a9ml_key_aod system_data_file_202504 (lnk_file (read getattr)))
+(allow a9ml_key_aod system_userdir_file_202504 (lnk_file (read getattr)))
+(allow a9ml_key_aod a9ml_aod_app_data (lnk_file (read getattr)))
+; SRC app_process for prefs.jar consults the ART APEX boot-image cache and
+; apex-info-list.xml. The same lookups were observed in the permissive console
+; during R6, but permissions belong to the named helper, not that console.
+(allow a9ml_key_aod apex_module_data_file_202504 (dir (search getattr)))
+; ART cache is a private GSI type, not exported in the 202504 mapping. This
+; development image deliberately links to the matching cached GSI definition.
+(allow a9ml_key_aod apex_art_data_file (dir (read open search getattr)))
+(allow a9ml_key_aod apex_art_data_file (file (read open getattr map execute)))
+(allow a9ml_key_aod apex_info_file_202504 (file (read open getattr)))
+
+; SRC init.svc.vendor.* matches vendor_default_prop BEFORE the GSI's shorter
+; init.svc.* private-status prefix. The R4 private-status read did not cover
+; these names. Give only these POC service states a dedicated readable type;
+; no caller gains a property_service/set permission on that type.
+(type a9ml_service_status_prop) (roletype object_r a9ml_service_status_prop)
+(typeattributeset property_type (a9ml_service_status_prop))
+(typeattributeset vendor_property_type (a9ml_service_status_prop))
+(typeattributeset vendor_internal_property_type (a9ml_service_status_prop))
+(allow shell_202504 a9ml_service_status_prop (file (read open getattr map)))
+(allow a9ml_script_domain a9ml_service_status_prop (file (read open getattr map)))
+; OBS sensors checks canonical MPSS state while listing its remoteproc peers.
+(allow a9ml_sensors a9ml_sysfs_mpss (file (getattr)))

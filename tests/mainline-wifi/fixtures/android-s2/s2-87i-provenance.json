@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "mode": "offline-historical-evidence",
+  "sources": {
+    "/home/user/A9-build/mainline/wifi-android/s2-87i-runs/run-5duvs_wv/evidence/run.log": {
+      "sha256": "b5337bd8114f51269666fd05884436d297f35bfe1e91b11211f3f4b150c9604c",
+      "selected": "s2-87i-run.txt",
+      "selected_sha256": "0c7746bc2de2782b6bf2b9124725092e066538da367c7ad8afe5612ef7569dd0"
+    },
+    "/home/user/A9-build/mainline/wifi-android/s2-87i-runs/run-5duvs_wv/evidence/probe.log": {
+      "sha256": "5895f4f9a749526dc61b11cc912701a1b08dd4a7097c7fff8996705c02f5b5a2",
+      "selected": "s2-87i-probe.txt",
+      "selected_sha256": "750b2c5256f1fae56be54387c83f85b23e620735701525837673b15af95688f3"
+    },
+    "/home/user/A9-build/mainline/wifi-android/s2-87i-runs/run-5duvs_wv/evidence/framework-cleanup.log": {
+      "sha256": "5ee6be4aaf3f1f60e4f81db04924085c41d955c912f6a6b52cb291e802bb3f62",
+      "selected": "s2-87i-framework-cleanup.txt",
+      "selected_sha256": "f41438862b6c867a2cdb37f84174d5724d462f1fb5f4f460e1086e8be48a9a0b"
+    },
+    "/home/user/A9-build/mainline/wifi-android/s2-87i-runs/run-5duvs_wv/evidence/root-status.jsonl": {
+      "sha256": "3ae838a034a41642a77eaac1e9fa33eaeae854849b6346705da2bcd8266a76d1",
+      "selected": "s2-87i-root-status.jsonl",
+      "selected_sha256": "236b30d14d245a5751f9a9d13fa8b4e57c85b680a4ab2097819f3d5aeab400be"
+    }
+  },
+  "observations": [
+    "transport rc zero and valid root rc one at network",
+    "Bridge entered scan after input; start-scan/list-scan-results/select share the old phase",
+    "root enable/readback, probe and cleanup succeeded"
+  ],
+  "unknowns": [
+    "No raw scan reply or Java exception retained; failing operation and exact cause cannot be recovered.",
+    "Demo root exit 255 is a batch failure, not a captured S2 scan denial."
+  ]
+}

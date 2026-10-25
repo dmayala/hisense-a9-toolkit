@@ -1,0 +1,2 @@
+<!-- Stock-radio mode: suppress custom AIDL declarations without deleting its executable. -->
+<manifest version="1.0" type="device" />

@@ -1,0 +1,1267 @@
+--- a/Makefile
++++ b/Makefile
+@@ -10,6 +10,11 @@
+ RMTFS_EFS_PATH ?= /var/lib/rmtfs
+ 
+ SRCS := qmi_rmtfs.c rmtfs.c rproc.c sharedmem.c storage.c util.c
++ifeq ($(A9_RMTFS_SAFE),1)
++override CFLAGS += -DA9_RMTFS_SAFE
++LDFLAGS := $(filter-out -ludev -lpthread,$(LDFLAGS))
++SRCS := qmi_rmtfs.c rmtfs.c a9-sharedmem.c a9-storage.c util.c
++endif
+ OBJS := $(SRCS:.c=.o)
+ 
+ $(OUT): $(OBJS)
+--- a/rmtfs.c
++++ b/rmtfs.c
+@@ -20,15 +20,129 @@
+ #include "qmi_rmtfs.h"
+ #include "util.h"
+ #include "rmtfs.h"
++#ifdef A9_RMTFS_SAFE
++#include <sys/stat.h>
++#include <sys/statfs.h>
++#include <linux/magic.h>
++#include <fcntl.h>
++#include "a9-wire.h"
++#include "a9-diagnostics.h"
++#include "a9-sha256.h"
++#else
++#define a9_negative(reason, result) (result)
++#endif
+ 
+ #define RMTFS_QMI_SERVICE	14
+ #define RMTFS_QMI_VERSION	1
+ #define RMTFS_QMI_INSTANCE	0
+ 
+ static struct rmtfs_mem *rmem;
+-static sig_atomic_t sig_int_count;
++static volatile sig_atomic_t sig_int_count;
+ static char slot_suffix[SLOT_SUFFIX_LEN];
+ 
++#ifdef A9_RMTFS_SAFE
++static int a9_request_failed;
++/* A9 policy is configured on FD16 before MPSS start. The controller releases
++ * its one-byte gate only after the live single-MPSS topology proof. DIAG CMD
++ * metadata is a consistency check, never an admission dependency. */
++#define A9_MPSS_DIAG_SERVICE 4097
++static uint32_t a9_local_node,a9_peer_node,a9_mpss_command_port;
++static int a9_have_peer;
++static int a9_gate_released;
++static int a9_data_noted;
++/* Controller teardown channel: SIGUSR1, sent before it stops MPSS. Only after
++ * it may BYE / MPSS DEL_SERVER end the daemon as an expected, clean exit. */
++static volatile sig_atomic_t a9_teardown;
++static int a9_teardown_logged;
++#define A9_TEARDOWN_EXIT 1000
++static void a9_teardown_handler(int signo){(void)signo;a9_teardown=1;}
++static int a9_teardown_exit(const char *reason)
++{
++    char line[96];
++    snprintf(line,sizeof(line),"A9_WIFI_TEARDOWN rmtfs reason=%s\n",reason);
++    if(write(STDERR_FILENO,line,strlen(line))<0){}
++    a9_ring_result("teardown");a9_ring_dump();
++    return A9_TEARDOWN_EXIT;
++}
++/* Metadata only: SHA-256 of the four RAM copies (never their bytes). */
++static void a9_store_hashes(const char *when)
++{
++    static const struct {int fd;const char *name;} s[]={{10,"modemst1"},{11,"modemst2"},{12,"fsg"},{15,"fsc"}};
++    char line[512],h[65];size_t used;unsigned i;
++    used=(size_t)snprintf(line,sizeof(line),"A9_WIFI_RMTFS_STORE_SHA256 when=%s",when);
++    for(i=0;i<4&&used<sizeof(line)-80;i++) {
++        if(a9_sha_fd(s[i].fd,h))strcpy(h,"unreadable");
++        used+=(size_t)snprintf(line+used,sizeof(line)-used," %s=%s",s[i].name,h);
++    }
++    line[used++]='\n';
++    if(write(STDERR_FILENO,line,used)<0){}
++}
++static unsigned a9_del_client_notes;
++static int a9_admission_record(char *phase)
++{
++    char record[13];
++    ssize_t n;
++    do { n=pread(16,record,sizeof(record),0); } while(n<0&&errno==EINTR);
++    if(n!=sizeof(record)||memcmp(record,"A9RMTFS1:0:",11)||record[12]!='\n'||
++       (record[11]!='0'&&record[11]!='1'))return -EINVAL;
++    *phase=record[11];return 0;
++}
++static int a9_admission_init(void)
++{
++    struct stat st;struct statfs fs;char phase;int flags=fcntl(16,F_GETFL);
++    a9_have_peer=0;
++    if(fstat(16,&st)||fstatfs(16,&fs)||!S_ISREG(st.st_mode)||st.st_size!=13||
++       fs.f_type!=TMPFS_MAGIC||flags<0||(flags&O_ACCMODE)!=O_RDONLY||
++       (flags&O_APPEND)||a9_admission_record(&phase)||phase!='0')return -EINVAL;
++    a9_peer_node=0;a9_have_peer=1;a9_gate_released=0;a9_data_noted=0;a9_del_client_notes=0;return 0;
++}
++static int a9_admission_wait(void)
++{
++    struct timespec start,now,pause={.tv_nsec=10000000};char phase;
++    if(clock_gettime(CLOCK_BOOTTIME,&start))return -EIO;
++    for(;;) {
++        if(clock_gettime(CLOCK_BOOTTIME,&now))return -EIO;
++        if(now.tv_sec-start.tv_sec>10||
++           (now.tv_sec-start.tv_sec==10&&now.tv_nsec>=start.tv_nsec))return -ETIMEDOUT;
++        if(sig_int_count)return -ECANCELED;
++        if(a9_admission_record(&phase))return -EINVAL;
++        if(phase=='1'){a9_gate_released=1;return 0;}
++        if(a9_gate_released)return -ECANCELED;
++        if(nanosleep(&pause,NULL)&&errno!=EINTR)return -EIO;
++    }
++}
++static void a9_request_fault(const char *reason)
++{
++    if(!a9_request_failed) {
++        a9_negative(reason, 0);
++        fprintf(stderr,"A9_WIFI_FAULT rmtfs %s\n",reason);
++    }
++    a9_request_failed=1;
++}
++#else
++#define a9_request_fault(reason) ((void)0)
++#endif
++
++/* Run 9: the modem opens and uses handles from different short-lived ports
++ * of the one admitted node. As upstream, caller handles are owned by the
++ * node (port is not part of the key); other nodes never reach this code. */
++static struct rmtfd *request_storage_open(const struct qrtr_packet *pkt, const char *path)
++{
++#ifdef A9_RMTFS_SAFE
++    return storage_open_peer(pkt->node, 0, path, slot_suffix);
++#else
++    return storage_open(pkt->node, path, slot_suffix);
++#endif
++}
++static struct rmtfd *request_storage_get(const struct qrtr_packet *pkt, int caller)
++{
++#ifdef A9_RMTFS_SAFE
++    return storage_get_peer(pkt->node, 0, caller);
++#else
++    return storage_get(pkt->node, caller);
++#endif
++}
++
+ static bool dbgprintf_enabled;
+ static void dbgprintf(const char *fmt, ...)
+ {
+@@ -44,6 +158,7 @@
+ 
+ static void qmi_result_error(struct rmtfs_qmi_result *result, unsigned error)
+ {
++	a9_request_fault("request-error");
+ 	/* Only propagate initial error */
+ 	if (result->result == QMI_RMTFS_RESULT_FAILURE)
+ 		return;
+@@ -58,7 +173,7 @@
+ 	struct rmtfs_open_req req = {};
+ 	DEFINE_QRTR_PACKET(resp_buf, 256);
+ 	struct rmtfd *rmtfd;
+-	unsigned int txn;
++	unsigned int txn = 0;
+ 	ssize_t len;
+ 	int caller_id = -1;
+ 	int ret;
+@@ -66,12 +181,14 @@
+ 	ret = qmi_decode_message(&req, &txn, pkt, QMI_REQUEST,
+ 				 QMI_RMTFS_OPEN, rmtfs_open_req_ei);
+ 	if (ret < 0) {
++        a9_negative("qmi-open-decode", ret);
+ 		qmi_result_error(&resp.result, QMI_RMTFS_ERR_MALFORMED_MSG);
+ 		goto respond;
+ 	}
+ 
+-	rmtfd = storage_open(pkt->node, req.path, slot_suffix);
++	rmtfd = request_storage_open(pkt, req.path);
+ 	if (!rmtfd) {
++        a9_negative("open-storage", 0);
+ 		qmi_result_error(&resp.result, QMI_RMTFS_ERR_INTERNAL);
+ 		goto respond;
+ 	}
+@@ -88,6 +205,8 @@
+ 				 QMI_RESPONSE, QMI_RMTFS_OPEN, txn, &resp,
+ 				 rmtfs_open_resp_ei);
+ 	if (len < 0) {
++        a9_negative("qmi-open-encode", (int)len);
++		a9_request_fault("response-encode");
+ 		fprintf(stderr, "[RMTFS] failed to encode open-response: %s\n",
+ 			strerror(-len));
+ 		return;
+@@ -95,9 +214,12 @@
+ 
+ 	ret = qrtr_sendto(sock, pkt->node, pkt->port,
+ 			  resp_buf.data, resp_buf.data_len);
+-	if (ret < 0)
++	if (ret < 0) {
++        a9_negative("qmi-open-send", ret);
++		a9_request_fault("response-send");
+ 		fprintf(stderr, "[RMTFS] failed to send open-response: %s\n",
+ 			strerror(-ret));
++	}
+ }
+ 
+ static void rmtfs_close(int sock, const struct qrtr_packet *pkt)
+@@ -106,19 +228,21 @@
+ 	struct rmtfs_close_req req = {};
+ 	DEFINE_QRTR_PACKET(resp_buf, 256);
+ 	struct rmtfd *rmtfd;
+-	unsigned int txn;
++	unsigned int txn = 0;
+ 	ssize_t len;
+ 	int ret;
+ 
+ 	ret = qmi_decode_message(&req, &txn, pkt, QMI_REQUEST,
+ 				 QMI_RMTFS_CLOSE, rmtfs_close_req_ei);
+ 	if (ret < 0) {
++        a9_negative("qmi-close-decode", ret);
+ 		qmi_result_error(&resp.result, QMI_RMTFS_ERR_MALFORMED_MSG);
+ 		goto respond;
+ 	}
+ 
+-	rmtfd = storage_get(pkt->node, req.caller_id);
++	rmtfd = request_storage_get(pkt, req.caller_id);
+ 	if (!rmtfd) {
++        a9_negative("close-caller", 0);
+ 		qmi_result_error(&resp.result, QMI_RMTFS_ERR_INTERNAL);
+ 		goto respond;
+ 	}
+@@ -127,13 +251,15 @@
+ 	rmtfs_mem_free(rmem);
+ 
+ respond:
+-	dbgprintf("[RMTFS] close %s => %d (%d:%d)\n",
++	dbgprintf("[RMTFS] close %u => (%d:%d)\n",
+ 		  req.caller_id, resp.result.result, resp.result.error);
+ 
+ 	len = qmi_encode_message(&resp_buf,
+ 				 QMI_RESPONSE, QMI_RMTFS_CLOSE, txn, &resp,
+ 				 rmtfs_close_resp_ei);
+ 	if (len < 0) {
++        a9_negative("qmi-close-encode", (int)len);
++		a9_request_fault("response-encode");
+ 		fprintf(stderr, "[RMTFS] failed to encode close-response: %s\n",
+ 			strerror(-len));
+ 		return;
+@@ -141,9 +267,12 @@
+ 
+ 	ret = qrtr_sendto(sock, pkt->node, pkt->port,
+ 			  resp_buf.data, resp_buf.data_len);
+-	if (ret < 0)
++	if (ret < 0) {
++        a9_negative("qmi-close-send", ret);
++		a9_request_fault("response-send");
+ 		fprintf(stderr, "[RMTFS] failed to send close-response: %s\n",
+ 			strerror(-ret));
++	}
+ }
+ 
+ static void rmtfs_iovec(int sock, struct qrtr_packet *pkt)
+@@ -159,18 +288,19 @@
+ 	uint8_t is_write = 0;
+ 	off_t phys_base;
+ 	uint8_t force = 0;
+-	unsigned txn;
++	unsigned txn = 0;
+ 	off_t offset;
+ 	ssize_t len;
+ 	ssize_t n;
+ 	char buf[SECTOR_SIZE];
+ 	int ret;
+-	int i;
+-	int j;
++	size_t i;
++	uint32_t j;
+ 
+ 	ret = qmi_decode_message(&req, &txn, pkt, QMI_REQUEST,
+ 				 QMI_RMTFS_RW_IOVEC, rmtfs_iovec_req_ei);
+ 	if (ret < 0) {
++        a9_negative("qmi-iovec-decode", ret);
+ 		qmi_result_error(&resp.result, QMI_RMTFS_ERR_MALFORMED_MSG);
+ 		goto respond;
+ 	}
+@@ -181,16 +311,28 @@
+ 	num_entries = req.iovec_len;
+ 	force = req.is_force_sync;
+ 
+-	rmtfd = storage_get(pkt->node, caller_id);
++	rmtfd = request_storage_get(pkt, caller_id);
+ 	if (!rmtfd) {
++        a9_negative("iovec-caller", 0);
+ 		fprintf(stderr, "[RMTFS] iovec request for non-existing caller\n");
+ 		qmi_result_error(&resp.result, QMI_RMTFS_ERR_INTERNAL);
+ 		goto respond;
+ 	}
+ 
++#ifdef A9_RMTFS_SAFE
++	/* Validate the whole vector against this handle's actual image size first. */
++	for (i = 0; i < num_entries; i++) {
++		if ((ret = storage_validate_range(rmtfd, (size_t)entries[i].num_sector * SECTOR_SIZE,
++		                                 (off_t)entries[i].sector_addr * SECTOR_SIZE))) {
++            a9_negative("iovec-storage-range", ret);
++			qmi_result_error(&resp.result, QMI_RMTFS_ERR_INTERNAL);
++			goto respond;
++		}
++	}
++#endif
+ 	for (i = 0; i < num_entries; i++) {
+ 		phys_base = entries[i].phys_offset;
+-		sector_base = entries[i].sector_addr * SECTOR_SIZE;
++		sector_base = (off_t)entries[i].sector_addr * SECTOR_SIZE;
+ 		offset = 0;
+ 
+ 		for (j = 0; j < entries[i].num_sector; j++) {
+@@ -208,6 +350,7 @@
+ 			}
+ 
+ 			if (n != SECTOR_SIZE) {
++                a9_negative("iovec-transfer", (int)n);
+ 				fprintf(stderr, "[RMTFS] failed to %s sector %d\n",
+ 					is_write ? "write" : "read", entries[i].sector_addr + j);
+ 				qmi_result_error(&resp.result, QMI_RMTFS_ERR_INTERNAL);
+@@ -222,8 +365,10 @@
+ 	dbgprintf("[RMTFS] iovec %d, %sforced => (%d:%d)\n", caller_id, force ? "" : "not ",
+ 							     resp.result.result, resp.result.error);
+ 
+-	if (is_write)
+-		storage_sync(rmtfd);
++	if (is_write && rmtfd && (ret = storage_sync(rmtfd))) {
++        a9_negative("iovec-storage-sync", ret);
++		qmi_result_error(&resp.result, QMI_RMTFS_ERR_INTERNAL);
++    }
+ 
+ 	for (i = 0; i < num_entries; i++) {
+ 		dbgprintf("[RMTFS]       %s %d:%d 0x%x\n", is_write ? "write" : "read",
+@@ -236,6 +381,8 @@
+ 				 QMI_RESPONSE, QMI_RMTFS_RW_IOVEC, txn, &resp,
+ 				 rmtfs_iovec_resp_ei);
+ 	if (len < 0) {
++        a9_negative("qmi-iovec-encode", (int)len);
++		a9_request_fault("response-encode");
+ 		fprintf(stderr, "[RMTFS] failed to encode iovec-response: %s\n",
+ 			strerror(-len));
+ 		return;
+@@ -243,9 +390,12 @@
+ 
+ 	ret = qrtr_sendto(sock, pkt->node, pkt->port,
+ 			  resp_buf.data, resp_buf.data_len);
+-	if (ret < 0)
++	if (ret < 0) {
++        a9_negative("qmi-iovec-send", ret);
++		a9_request_fault("response-send");
+ 		fprintf(stderr, "[RMTFS] failed to send iovec-response: %s\n",
+ 			strerror(-ret));
++	}
+ }
+ 
+ static void rmtfs_alloc_buf(int sock, struct qrtr_packet *pkt)
+@@ -256,22 +406,26 @@
+ 	uint32_t alloc_size = 0;
+ 	uint32_t caller_id = 0;
+ 	int64_t address = 0;
+-	unsigned txn;
++	unsigned txn = 0;
+ 	ssize_t len;
+ 	int ret;
+ 
+ 	ret = qmi_decode_message(&req, &txn, pkt, QMI_REQUEST,
+ 				 QMI_RMTFS_ALLOC_BUFF, rmtfs_alloc_buf_req_ei);
+ 	if (ret < 0) {
++        a9_negative("qmi-alloc_buf-decode", ret);
+ 		qmi_result_error(&resp.result, QMI_RMTFS_ERR_MALFORMED_MSG);
+ 		goto respond;
+ 	}
+ 
+ 	caller_id = req.caller_id;
++	/* Run 9: upstream ALLOC_BUFF has no caller lookup (the modem asks from a
++	 * port that never opened a handle); only the size check applies. */
+ 	alloc_size = req.buff_size;
+ 
+ 	address = rmtfs_mem_alloc(rmem, alloc_size);
+ 	if (address < 0) {
++        a9_negative("alloc-buffer", (int)address);
+ 		qmi_result_error(&resp.result, QMI_RMTFS_ERR_INTERNAL);
+ 		goto respond;
+ 	}
+@@ -285,6 +439,8 @@
+ 				 QMI_RESPONSE, QMI_RMTFS_ALLOC_BUFF, txn, &resp,
+ 				 rmtfs_alloc_buf_resp_ei);
+ 	if (len < 0) {
++        a9_negative("qmi-alloc_buf-encode", (int)len);
++		a9_request_fault("response-encode");
+ 		fprintf(stderr, "[RMTFS] failed to encode alloc-buf-response: %s\n",
+ 			strerror(-len));
+ 		return;
+@@ -292,9 +448,12 @@
+ 
+ 	ret = qrtr_sendto(sock, pkt->node, pkt->port,
+ 			  resp_buf.data, resp_buf.data_len);
+-	if (ret < 0)
++	if (ret < 0) {
++        a9_negative("qmi-alloc_buf-send", ret);
++		a9_request_fault("response-send");
+ 		fprintf(stderr, "[RMTFS] failed to send alloc-buf-response: %s\n",
+ 			strerror(-ret));
++	}
+ }
+ 
+ static void rmtfs_get_dev_error(int sock, struct qrtr_packet *pkt)
+@@ -303,7 +462,7 @@
+ 	struct rmtfs_dev_error_req req = {};
+ 	DEFINE_QRTR_PACKET(resp_buf, 256);
+ 	struct rmtfd *rmtfd;
+-	unsigned txn;
++	unsigned txn = 0;
+ 	ssize_t len;
+ 	int ret;
+ 
+@@ -311,18 +470,21 @@
+ 				 QMI_RMTFS_GET_DEV_ERROR,
+ 				 rmtfs_dev_error_req_ei);
+ 	if (ret < 0) {
++        a9_negative("qmi-get_dev_error-decode", ret);
+ 		qmi_result_error(&resp.result, QMI_RMTFS_ERR_MALFORMED_MSG);
+ 		goto respond;
+ 	}
+ 
+-	rmtfd = storage_get(pkt->node, req.caller_id);
+-	if (rmtfd) {
++	rmtfd = request_storage_get(pkt, req.caller_id);
++	if (!rmtfd) {
++        a9_negative("dev-error-caller", 0);
+ 		qmi_result_error(&resp.result, QMI_RMTFS_ERR_INTERNAL);
+ 		goto respond;
+ 	}
+ 
+ 	resp.status = storage_get_error(rmtfd);
+ 	resp.status_valid = true;
++	if(resp.status)a9_request_fault("device-error");
+ 
+ respond:
+ 	dbgprintf("[RMTFS] dev_error %d => %d (%d:%d)\n", req.caller_id, resp.status, resp.result.result, resp.result.error);
+@@ -331,6 +493,8 @@
+ 				 QMI_RESPONSE, QMI_RMTFS_GET_DEV_ERROR, txn,
+ 				 &resp, rmtfs_dev_error_resp_ei);
+ 	if (len < 0) {
++        a9_negative("qmi-get_dev_error-encode", (int)len);
++		a9_request_fault("response-encode");
+ 		fprintf(stderr, "[RMTFS] failed to encode dev-error-response: %s\n",
+ 			strerror(-len));
+ 		return;
+@@ -338,9 +502,12 @@
+ 
+ 	ret = qrtr_sendto(sock, pkt->node, pkt->port,
+ 			  resp_buf.data, resp_buf.data_len);
+-	if (ret < 0)
++	if (ret < 0) {
++        a9_negative("qmi-get_dev_error-send", ret);
++		a9_request_fault("response-send");
+ 		fprintf(stderr, "[RMTFS] failed to send dev-error-response: %s\n",
+ 			strerror(-ret));
++	}
+ }
+ 
+ static int rmtfs_bye(uint32_t node)
+@@ -359,7 +526,7 @@
+ 
+ static int handle_rmtfs(int sock)
+ {
+-	struct sockaddr_qrtr sq;
++	struct sockaddr_qrtr sq = {0};
+ 	struct qrtr_packet pkt;
+ 	unsigned int msg_id;
+ 	socklen_t sl;
+@@ -367,31 +534,115 @@
+ 	int ret;
+ 
+ 	sl = sizeof(sq);
+-	ret = recvfrom(sock, buf, sizeof(buf), 0, (void *)&sq, &sl);
++	ret = recvfrom(sock, buf, sizeof(buf), MSG_TRUNC, (void *)&sq, &sl);
++#ifdef A9_RMTFS_SAFE
++    a9_diag_received(ret, ret < 0 ? errno : 0, &sq, sl, (const unsigned char *)buf, sizeof(buf));
++#endif
+ 	if (ret < 0) {
+ 		ret = -errno;
++        a9_negative("recvfrom", ret);
+ 		if (ret != -ENETRESET)
+ 			fprintf(stderr, "[RMTFS] recvfrom failed: %d\n", ret);
+ 		return ret;
+ 	}
+ 
++#ifdef A9_RMTFS_SAFE
++    if(sl!=sizeof(sq))return a9_negative("sockaddr-length", -EINVAL);
++    if(sq.sq_family!=AF_QIPCRTR)return a9_negative("sockaddr-family", -EINVAL);
++    if(ret<=0)return a9_negative("datagram-empty", -EINVAL);
++    if(ret>(int)sizeof(buf))return a9_negative("datagram-oversize", -EINVAL);
++    if(sq.sq_port==QRTR_PORT_CTRL) {
++        if(sq.sq_node!=a9_local_node)return a9_negative("control-source", -EINVAL);
++        if(ret!=sizeof(struct qrtr_ctrl_pkt))return a9_negative("control-length", -EINVAL);
++    } else {
++        if(sq.sq_node==a9_local_node)return a9_negative("data-source-local", -EINVAL);
++        if(!a9_have_peer)return a9_negative("static-policy-missing", -EINVAL);
++        if(sq.sq_node!=a9_peer_node)return a9_negative("data-source-changed", -EINVAL);
++    }
++#endif
+ 	dbgprintf("[RMTFS] packet; from: %d:%d\n", sq.sq_node, sq.sq_port);
+ 
+ 	ret = qrtr_decode(&pkt, buf, ret, &sq);
+ 	if (ret < 0) {
++        a9_negative("qrtr-decode", ret);
+ 		fprintf(stderr, "[RMTFS] unable to decode qrtr packet\n");
+ 		return ret;
+ 	}
++#ifdef A9_RMTFS_SAFE
++    a9_diag.control = pkt.type; a9_ring_control(pkt.type);
++#endif
+ 
+ 	switch (pkt.type) {
++#ifdef A9_RMTFS_SAFE
++    case QRTR_TYPE_NEW_SERVER:
++        /* The local nameserver ends the initial listing with an empty row. */
++        if(!pkt.service&&!pkt.version&&!pkt.instance&&!pkt.node&&!pkt.port)return 0;
++        if(pkt.service!=A9_MPSS_DIAG_SERVICE||pkt.version!=1||pkt.instance!=0||
++           pkt.node==a9_local_node||pkt.node==QRTR_NODE_BCAST||
++           !pkt.port||pkt.port==QRTR_PORT_CTRL)
++            return a9_negative("mpss-announcement", -EINVAL);
++        if(!a9_have_peer||pkt.node!=a9_peer_node||(a9_mpss_command_port&&pkt.port!=a9_mpss_command_port))
++            return a9_negative("mpss-source-changed", -EINVAL);
++        a9_mpss_command_port=pkt.port;
++        return 0;
++    case QRTR_TYPE_DEL_SERVER:
++        if(a9_have_peer&&pkt.service==A9_MPSS_DIAG_SERVICE&&pkt.version==1&&
++           pkt.instance==0&&pkt.node==a9_peer_node&&pkt.port==a9_mpss_command_port)
++            return a9_teardown?a9_teardown_exit("del-server"):a9_negative("mpss-del-server", -ENETRESET);
++        return a9_negative("control-unhandled", -EINVAL);
++#endif
+ 	case QRTR_TYPE_BYE:
+-		return rmtfs_bye(pkt.node);
++#ifdef A9_RMTFS_SAFE
++        if(a9_have_peer&&pkt.node==a9_peer_node) {
++            if(a9_teardown)return a9_teardown_exit("bye");
++            return a9_negative("peer-bye", -ENETRESET);
++        }
++#endif
++        return rmtfs_bye(pkt.node);
+ 	case QRTR_TYPE_DEL_CLIENT:
+-		return rmtfs_del_client(pkt.node, pkt.port);
++#ifdef A9_RMTFS_SAFE
++        /* Upstream treats a departing remote client as routine (no-op) and
++         * the modem closes short-lived client ports. Note only: no handle is
++         * released. BYE, DEL_SERVER of the MPSS CMD service and wrong-node
++         * senders remain terminal. */
++        if(a9_have_peer&&pkt.node==a9_peer_node) {
++            char note[96];
++            if(a9_del_client_notes<8) {
++                a9_del_client_notes++;
++                snprintf(note,sizeof(note),"del-client node=%u port=%u (note only)",pkt.node,pkt.port);
++                a9_note(note);
++            }
++            return 0;
++        }
++#endif
++        return rmtfs_del_client(pkt.node,pkt.port);
+ 	case QRTR_TYPE_DATA:
++#ifdef A9_RMTFS_SAFE
++        {
++            long long received_ms=-1,released_ms=-1;int gate;
++            if(a9_boot_ms(&received_ms))received_ms=-1;
++            gate=a9_admission_wait();
++            if(!a9_data_noted) {
++                char note[160];
++                a9_data_noted=1;
++                if(a9_boot_ms(&released_ms))released_ms=-1;
++                snprintf(note,sizeof(note),"first-data node=%u port=%u received=%lld.%03lld released=%lld.%03lld held_ms=%lld gate=%d",
++                         pkt.node,pkt.port,received_ms/1000,received_ms<0?0:received_ms%1000,
++                         released_ms/1000,released_ms<0?0:released_ms%1000,
++                         received_ms<0||released_ms<0?-1:released_ms-received_ms,gate);
++                a9_note(note);
++            }
++            if(gate)return a9_negative("topology-admission-gate",gate);
++            const char *reason = a9_wire_reason(pkt.data, pkt.data_len);
++            if(reason)return a9_negative(reason, -EINVAL);
++        }
++#endif
+ 		ret = qmi_decode_header(&pkt, &msg_id);
+ 		if (ret < 0)
+-			return ret;
++			return a9_negative("qmi-header", ret);
++#ifdef A9_RMTFS_SAFE
++        a9_diag.message = msg_id; a9_diag.message_decoded = 1;
++#endif
+ 
+ 		switch (msg_id) {
+ 		case QMI_RMTFS_OPEN:
+@@ -410,17 +661,24 @@
+ 			rmtfs_get_dev_error(sock, &pkt);
+ 			break;
+ 		default:
++			a9_request_fault("unknown-request");
+ 			fprintf(stderr, "[RMTFS] Unknown request: %d\n", msg_id);
+ 			break;
+ 		}
+ 
++#ifdef A9_RMTFS_SAFE
++		a9_ring_result(a9_request_failed ? "fault" : "ok");
++#endif
+ 		return 0;
+ 	}
+ 
+-	return ret;
++#ifdef A9_RMTFS_SAFE
++    return a9_negative("control-unhandled", -EINVAL);
++#else
++    return ret;
++#endif
+ }
+ 
+-static int sig_int_count;
+ 
+ static int run_rmtfs(int rprocfd)
+ {
+@@ -431,12 +689,33 @@
+ 	int nfds;
+ 	int ret;
+ 
++#ifdef A9_RMTFS_SAFE
++	{
++		struct sockaddr_qrtr addr;
++		socklen_t len = sizeof(addr), type_len = sizeof(int);
++		int type;
++		rmtfs_fd = A9_QRTR_FD;
++		if (getsockname(rmtfs_fd, (struct sockaddr *)&addr, &len) ||
++		    len != sizeof(addr) || addr.sq_family != AF_QIPCRTR ||
++		    addr.sq_port != RMTFS_QMI_SERVICE ||
++		    getsockopt(rmtfs_fd, SOL_SOCKET, SO_TYPE, &type, &type_len) ||
++		    type != SOCK_DGRAM) return -EINVAL;
++        a9_local_node=addr.sq_node;
++	}
++#else
+ 	rmtfs_fd = qrtr_open(RMTFS_QMI_SERVICE);
++#endif
+ 	if (rmtfs_fd < 0) {
+ 		fprintf(stderr, "failed to create qrtr socket\n");
+ 		return rmtfs_fd;
+ 	}
+ 
++#ifdef A9_RMTFS_SAFE
++    /* Optional later consistency notifications; the first OPEN needs no row. */
++    if(!a9_have_peer||a9_peer_node==a9_local_node)return -EINVAL;
++    ret = qrtr_new_lookup(rmtfs_fd, A9_MPSS_DIAG_SERVICE, 1, 0);
++    if(ret<0)return a9_negative("mpss-lookup", ret);
++#endif
+ 	dbgprintf("registering services\n");
+ 
+ 	ret = qrtr_publish(rmtfs_fd, RMTFS_QMI_SERVICE,
+@@ -446,15 +725,25 @@
+ 		return ret;
+ 	}
+ 
++#ifdef A9_RMTFS_SAFE
++	fprintf(stderr, "A9_WIFI_READY rmtfs\n");
++#endif
++
++	#ifndef A9_RMTFS_SAFE
+ 	if (rprocfd >= 0)
+ 		rproc_start();
++#endif
+ 
+ 	for (;;) {
++#ifdef A9_RMTFS_SAFE
++		if (a9_teardown && !a9_teardown_logged) { a9_teardown_logged = 1; a9_note("teardown-signalled"); }
++#endif
+ 		if (sig_int_count == 1 && !sig_int_handled) {
+-			if (rprocfd < 0)
+-				break;
++			if (rprocfd < 0) { ret = 0; break; }
+ 
++#ifndef A9_RMTFS_SAFE
+ 			rproc_stop();
++#endif
+ 			sig_int_handled = true;
+ 		} else if (sig_int_count > 1) {
+ 			break;
+@@ -480,8 +769,14 @@
+ 
+ 		if (FD_ISSET(rmtfs_fd, &rfds)) {
+ 			ret = handle_rmtfs(rmtfs_fd);
+-			if (ret == -ENETRESET)
+-				break;
++#ifdef A9_RMTFS_SAFE
++            if(ret==A9_TEARDOWN_EXIT){ret=0;break;}
++            if(ret<0||a9_request_failed) {
++                a9_request_fault("transport-or-wire");ret=-EIO;break;
++            }
++#else
++            if(ret==-ENETRESET)break;
++#endif
+ 		}
+ 	}
+ 
+@@ -492,9 +787,39 @@
+ 
+ static void sig_int_handler(int signo)
+ {
+-	sig_int_count++;
++	(void)signo;
++	if (sig_int_count < 2) sig_int_count++;
+ }
+ 
++#ifdef A9_RMTFS_SAFE
++int main(int argc, char **argv)
++{
++	struct sigaction action = {0};
++	int ret;
++	(void)argv;
++	if (argc != 1) {
++		fprintf(stderr, "A9 mode accepts no options; only fixed inherited FDs\n");
++		return 1;
++	}
++	if (a9_admission_init() || storage_init(NULL, false, false)) return 1;
++	rmem = rmtfs_mem_open();
++	if (!rmem) { storage_exit(); return 1; }
++	sigemptyset(&action.sa_mask);
++	action.sa_handler = sig_int_handler;
++	if (sigaction(SIGINT, &action, NULL) || sigaction(SIGTERM, &action, NULL)) {
++		storage_exit(); rmtfs_mem_close(rmem); return 1;
++	}
++	action.sa_handler = a9_teardown_handler;
++	if (sigaction(SIGUSR1, &action, NULL)) { storage_exit(); rmtfs_mem_close(rmem); return 1; }
++	/* No remoteproc code, automatic start/stop or reconnect loop. */
++	ret = run_rmtfs(-1);
++	if(ret<0)a9_request_fault("service-exit");
++	a9_store_hashes(a9_teardown?"teardown-exit":"exit");
++	storage_exit();
++	rmtfs_mem_close(rmem);
++	return ret < 0 ? 1 : 0;
++}
++#else
+ int main(int argc, char **argv)
+ {
+ 	struct sigaction action;
+@@ -588,3 +913,5 @@
+ 
+ 	return 0;
+ }
++
++#endif /* A9_RMTFS_SAFE */
+--- a/rmtfs.h
++++ b/rmtfs.h
+@@ -36,6 +36,11 @@
+ ssize_t storage_pread(const struct rmtfd *rmtfd, void *buf, size_t nbyte, off_t offset);
+ ssize_t storage_pwrite(struct rmtfd *rmtfd, const void *buf, size_t nbyte, off_t offset);
+ int storage_sync(struct rmtfd *rmtfd);
++#ifdef A9_RMTFS_SAFE
++struct rmtfd *storage_open_peer(unsigned node, unsigned port, const char *path, const char *slot_suffix);
++struct rmtfd *storage_get_peer(unsigned node, unsigned port, int caller_id);
++int storage_validate_range(const struct rmtfd *rmtfd, size_t n, off_t offset);
++#endif
+ 
+ int rproc_init(void);
+ int rproc_start(void);
+--- /dev/null
++++ b/a9-safe.h
+@@ -0,0 +1,13 @@
++/* A9 RAM-only protocol constants; no runtime path configuration. */
++#ifndef A9_SAFE_H
++#define A9_SAFE_H
++#include <stdint.h>
++#define A9_IMAGE_SIZE UINT64_C(0x200000)
++#define A9_FSC_SIZE UINT64_C(0x20000)
++#define A9_FSC_FD 15
++#define A9_MEM_BASE UINT64_C(0x89b01000)
++#define A9_MEM_SIZE UINT64_C(0x200000)
++#define A9_STORAGE_FD_BASE 10
++#define A9_MEM_FD 13
++#define A9_QRTR_FD 14
++#endif
+--- /dev/null
++++ b/a9-storage.c
+@@ -0,0 +1,118 @@
++/* RAM-only A9 backend. This file never opens any filesystem path. */
++#include <sys/stat.h>
++#include <sys/statfs.h>
++#include <sys/types.h>
++#include <linux/magic.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <string.h>
++#include <unistd.h>
++#include "rmtfs.h"
++#include "a9-safe.h"
++
++#define MAX_CALLERS 10
++struct rmtfd { unsigned id, node, port; int image; bool active; };
++static struct rmtfd handles[MAX_CALLERS];
++static bool initialized;
++static const int image_fds[] = {10, 11, 12, A9_FSC_FD};
++static const uint64_t image_sizes[] = {A9_IMAGE_SIZE, A9_IMAGE_SIZE, A9_IMAGE_SIZE, A9_FSC_SIZE};
++static const char *const paths[] = {
++	"/boot/modem_fs1", "/boot/modem_fs2", "/boot/modem_fsg", "/boot/modem_fsc"
++};
++
++int storage_init(const char *root, bool ro, bool partitions)
++{
++	struct stat st[4];
++	struct statfs fs;
++	int i, j, flags;
++	initialized = false;
++	memset(handles, 0, sizeof(handles));
++	if (root || ro || partitions) { errno = EINVAL; return -1; }
++	for (i = 0; i < 4; i++) {
++		int fd = image_fds[i];
++		if (fstat(fd, &st[i]) || fstatfs(fd, &fs)) return -1;
++		flags = fcntl(fd, F_GETFL);
++		if (!S_ISREG(st[i].st_mode) || st[i].st_size != image_sizes[i] ||
++		    fs.f_type != TMPFS_MAGIC || flags < 0 ||
++		    (flags & O_ACCMODE) != O_RDWR || (flags & O_APPEND)) {
++			errno = EINVAL; return -1;
++		}
++		for (j = 0; j < i; j++)
++			if (st[j].st_dev == st[i].st_dev && st[j].st_ino == st[i].st_ino) {
++				errno = EINVAL; return -1;
++			}
++	}
++	for (i = 0; i < MAX_CALLERS; i++) handles[i].id = i;
++	initialized = true;
++	return 0;
++}
++
++struct rmtfd *storage_open_peer(unsigned node, unsigned port, const char *path, const char *suffix)
++{
++	int image, i;
++	if (!initialized || !path || (suffix && suffix[0])) return NULL;
++	/* Caller must pass a bounded, terminated string (wire validator enforces it). */
++	if (strnlen(path, 256) >= 256) return NULL;
++	for (image = 0; image < 4; image++) if (!strcmp(path, paths[image])) break;
++	if (image == 4) return NULL;
++	for (i = 0; i < MAX_CALLERS; i++)
++		if (handles[i].active && handles[i].node == node && handles[i].port == port && handles[i].image == image)
++			return &handles[i];
++	for (i = 0; i < MAX_CALLERS; i++) if (!handles[i].active) {
++		handles[i].active = true; handles[i].node = node; handles[i].port = port; handles[i].image = image;
++		return &handles[i];
++	}
++	return NULL;
++}
++
++static bool valid(const struct rmtfd *h)
++{
++	int i;
++	if (!initialized) return false;
++	for (i = 0; i < MAX_CALLERS; i++)
++		if (h == &handles[i]) return h->active && h->image >= 0 && h->image < 4;
++	return false;
++}
++
++void storage_close(struct rmtfd *h) { if (valid(h)) h->active = false; }
++struct rmtfd *storage_get_peer(unsigned node, unsigned port, int id)
++{
++	if (!initialized || id < 0 || id >= MAX_CALLERS || !handles[id].active ||
++	    (handles[id].node != node || handles[id].port != port)) return NULL;
++	return &handles[id];
++}
++int storage_get_caller_id(const struct rmtfd *h) { return valid(h) ? (int)h->id : -1; }
++int storage_get_error(const struct rmtfd *h) { return valid(h) ? 0 : EINVAL; }
++void storage_exit(void) { initialized = false; memset(handles, 0, sizeof(handles)); }
++
++int storage_validate_range(const struct rmtfd *h, size_t n, off_t offset)
++{
++	if (!valid(h) || offset < 0 || (uint64_t)offset > image_sizes[h->image] ||
++	    n > image_sizes[h->image] - (uint64_t)offset) { errno = EINVAL; return -1; }
++	return 0;
++}
++
++ssize_t storage_pread(const struct rmtfd *h, void *buf, size_t n, off_t off)
++{
++	ssize_t ret;
++	if (storage_validate_range(h, n, off)) return -1;
++	do { ret = pread(image_fds[h->image], buf, n, off); } while (ret < 0 && errno == EINTR);
++	/* Never hide short reads or an invalid/externally resized descriptor. */
++	if (ret >= 0 && (size_t)ret != n) { errno = EIO; return -1; }
++	return ret;
++}
++ssize_t storage_pwrite(struct rmtfd *h, const void *buf, size_t n, off_t off)
++{
++	ssize_t ret;
++	if (storage_validate_range(h, n, off)) return -1;
++	do { ret = pwrite(image_fds[h->image], buf, n, off); } while (ret < 0 && errno == EINTR);
++	if (ret >= 0 && (size_t)ret != n) { errno = EIO; return -1; }
++	return ret;
++}
++int storage_sync(struct rmtfd *h)
++{
++	if (!valid(h)) { errno = EINVAL; return -1; }
++	return fdatasync(image_fds[h->image]);
++}
+--- /dev/null
++++ b/a9-sharedmem.c
+@@ -0,0 +1,50 @@
++/* FD13 only: launcher verifies the exact rmtfs char-device identity via sysfs. */
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <unistd.h>
++#include "rmtfs.h"
++#include "a9-safe.h"
++
++struct rmtfs_mem { int fd; };
++struct rmtfs_mem *rmtfs_mem_open(void)
++{
++	struct stat st;
++	struct rmtfs_mem *m;
++	int flags = fcntl(A9_MEM_FD, F_GETFL);
++	if (fstat(A9_MEM_FD, &st) || !S_ISCHR(st.st_mode) || flags < 0 ||
++	    (flags & O_ACCMODE) != O_RDWR || (flags & O_APPEND)) { errno = EINVAL; return NULL; }
++	m = calloc(1, sizeof(*m));
++	if (m) m->fd = A9_MEM_FD;
++	return m;
++}
++int64_t rmtfs_mem_alloc(struct rmtfs_mem *m, size_t n)
++{
++	if (!m || !n || n > A9_MEM_SIZE) return -EINVAL;
++	return A9_MEM_BASE;
++}
++void rmtfs_mem_free(struct rmtfs_mem *m) { (void)m; }
++static int range(struct rmtfs_mem *m, unsigned long p, ssize_t n)
++{
++	if (!m || n < 0 || p < A9_MEM_BASE || p - A9_MEM_BASE > A9_MEM_SIZE ||
++	    (uint64_t)n > A9_MEM_SIZE - (p - A9_MEM_BASE)) return -EINVAL;
++	return 0;
++}
++ssize_t rmtfs_mem_read(struct rmtfs_mem *m, unsigned long p, void *b, ssize_t n)
++{
++	ssize_t r;
++	if (range(m, p, n)) return -EINVAL;
++	do { r = pread(m->fd, b, n, p - A9_MEM_BASE); } while (r < 0 && errno == EINTR);
++	return r == n ? r : -EIO;
++}
++ssize_t rmtfs_mem_write(struct rmtfs_mem *m, unsigned long p, const void *b, ssize_t n)
++{
++	ssize_t r;
++	if (range(m, p, n)) return -EINVAL;
++	do { r = pwrite(m->fd, b, n, p - A9_MEM_BASE); } while (r < 0 && errno == EINTR);
++	return r == n ? r : -EIO;
++}
++void rmtfs_mem_close(struct rmtfs_mem *m) { if (m) { close(m->fd); free(m); } }
+--- /dev/null
++++ b/a9-wire.h
+@@ -0,0 +1,64 @@
++/* Strict wire checks before libqrtr's generic QMI decoder sees untrusted bytes. */
++#ifndef A9_WIRE_H
++#define A9_WIRE_H
++#include <stddef.h>
++#include <stdint.h>
++#include <string.h>
++#include "a9-safe.h"
++static uint16_t a9_le16(const unsigned char *p) { return p[0] | ((uint16_t)p[1] << 8); }
++static uint32_t a9_le32(const unsigned char *p)
++{
++	return p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
++}
++static const char *a9_wire_reason(const void *data, size_t size)
++{
++	const unsigned char *p = data, *v;
++	size_t off = 7, n, i;
++	unsigned msg, key, seen = 0, required;
++	uint64_t total = 0;
++	if (!p || size < 7) return "wire-short-header";
++	if (p[0] != 0) return "wire-type";
++	if (a9_le16(p + 5) != size - 7) return "wire-length";
++	msg = a9_le16(p + 3);
++	switch (msg) {
++	case 1: case 2: case 5: required = 2; break;
++	case 3: required = 30; break;
++	case 4: required = 6; break;
++	default: return "wire-message";
++	}
++	while (off < size) {
++		if (size - off < 3) return "wire-tlv-header";
++		key = p[off]; n = a9_le16(p + off + 1); off += 3;
++		if (n > size - off) return "wire-tlv-length";
++		if (key < 1 || key > 4 || !(required & (1u << key))) return "wire-tlv-type";
++		if (seen & (1u << key)) return "wire-tlv-duplicate";
++		seen |= 1u << key; v = p + off;
++		if (msg == 1) {
++			if (!n || n >= 256) return "wire-open-length";
++			if (memchr(v, 0, n)) return "wire-open-nul";
++		} else if (msg == 3 && key == 3) {
++			if (!n || !v[0] || n != 1 + (size_t)v[0] * 12) return "wire-vector-length";
++			for (i = 0; i < v[0]; i++) {
++				const unsigned char *e = v + 1 + 12 * i;
++				uint64_t sector = a9_le32(e), phys = a9_le32(e + 4), count = a9_le32(e + 8);
++				if (!count || sector > A9_IMAGE_SIZE / 512 || count > A9_IMAGE_SIZE / 512 - sector ||
++				    phys < A9_MEM_BASE || phys - A9_MEM_BASE > A9_MEM_SIZE ||
++				    count * 512 > A9_MEM_SIZE - (phys - A9_MEM_BASE)) return "wire-vector-range";
++				total += count;
++				if (total > A9_IMAGE_SIZE / 512) return "wire-vector-total";
++			}
++		} else if (msg == 3 && (key == 2 || key == 4)) {
++			if (n != 1 || v[0] > 1) return "wire-boolean";
++		} else {
++			if (n != 4) return "wire-scalar-length";
++			if (msg == 4 && key == 2 && (!a9_le32(v) || a9_le32(v) > A9_MEM_SIZE)) return "wire-alloc-size";
++		}
++		off += n;
++	}
++	return seen == required ? NULL : "wire-tlv-missing";
++}
++static inline int a9_wire_valid(const void *data, size_t size)
++{
++	return a9_wire_reason(data, size) == NULL;
++}
++#endif
+--- /dev/null
++++ b/a9-diagnostics.h
+@@ -0,0 +1,168 @@
++/* Metadata only, once per process, on the launcher's existing stderr pipe.
++ * No path opens, payload bytes, store contents or persistent device IDs.
++ */
++#ifndef A9_DIAGNOSTICS_H
++#define A9_DIAGNOSTICS_H
++#include <time.h>
++static struct {
++    int logged, received, recv_result, recv_errno, address_valid;
++    unsigned address_len, family;
++    uint32_t node, port;
++    int control, message, message_decoded, qmi_type;
++    char tlvs[384];
++    char vals[96];
++} a9_diag = {.control = -1, .message = -1, .qmi_type = -1};
++
++/* Ring of the most recent receipts (metadata and small scalar TLV values,
++ * never path or payload bytes); dumped once when the first fault is logged. */
++#define A9_RING 64
++static struct { long long ms; uint32_t node, port; int control, message; char vals[96]; char result[24]; } a9_ring[A9_RING];
++static unsigned a9_ring_count;
++static void a9_ring_result(const char *label)
++{
++    if (a9_ring_count) snprintf(a9_ring[(a9_ring_count - 1) % A9_RING].result,
++                                sizeof(a9_ring[0].result), "%s", label);
++}
++static void a9_ring_control(int type)
++{
++    if (a9_ring_count) a9_ring[(a9_ring_count - 1) % A9_RING].control = type;
++}
++
++static void a9_diag_received(int result, int error, const struct sockaddr_qrtr *sq,
++                             socklen_t sl, const unsigned char *data, size_t capacity)
++{
++    size_t size, off, used = 0;
++    unsigned count = 0;
++    int saved_errno = errno;
++    /* Do not reset the process-wide first-failure latch between packets. */
++    a9_diag.received = 1;
++    a9_diag.recv_result = result; a9_diag.recv_errno = error;
++    a9_diag.address_len = sl; a9_diag.address_valid = result >= 0 && sl == sizeof(*sq);
++    a9_diag.family = 0; a9_diag.node = 0; a9_diag.port = 0;
++    a9_diag.control = a9_diag.message = a9_diag.qmi_type = -1;
++    a9_diag.message_decoded = 0;
++    strcpy(a9_diag.tlvs, "-"); strcpy(a9_diag.vals, "-");
++    if (!a9_diag.address_valid) goto done;
++    a9_diag.family = sq->sq_family; a9_diag.node = sq->sq_node; a9_diag.port = sq->sq_port;
++    {
++        long long ms = 0; struct timespec up;
++        if (!clock_gettime(CLOCK_BOOTTIME, &up)) ms = (long long)up.tv_sec * 1000 + up.tv_nsec / 1000000;
++        a9_ring[a9_ring_count % A9_RING] = (typeof(a9_ring[0])){.ms = ms, .node = sq->sq_node,
++            .port = sq->sq_port, .control = -1, .message = -1};
++        strcpy(a9_ring[a9_ring_count % A9_RING].vals, "-");
++        strcpy(a9_ring[a9_ring_count % A9_RING].result, "-");
++        a9_ring_count++;
++    }
++    if (result <= 0 || sq->sq_port == QRTR_PORT_CTRL) goto done;
++    size = (size_t)result < capacity ? (size_t)result : capacity;
++    if (size < 7) goto done;
++    /* Header preview only; message_decoded distinguishes successful decoding. */
++    a9_diag.message = a9_le16(data + 3); a9_diag.qmi_type = data[0];
++    a9_ring[(a9_ring_count - 1) % A9_RING].message = a9_diag.message;
++    size_t vused = 0;
++    off = 7;
++    while (off < size && count < 16) {
++        unsigned key, length;
++        if (size - off < 3) {
++            used += (size_t)snprintf(a9_diag.tlvs + used, sizeof(a9_diag.tlvs) - used,
++                                    "%sshort-header", count ? "," : "");
++            break;
++        }
++        key = data[off]; length = a9_le16(data + off + 1); off += 3;
++        /* Each of at most 16 entries is at most 16 characters. */
++        used += (size_t)snprintf(a9_diag.tlvs + used, sizeof(a9_diag.tlvs) - used,
++                                "%s%u:%u%s", count ? "," : "", key, length,
++                                length > size - off ? "!" : "");
++        count++;
++        if (length > size - off) break;
++        /* Scalar TLV values (caller id, size, direction, force) only. */
++        if (length >= 1 && length <= 4 && vused + 24 < sizeof(a9_diag.vals)) {
++            unsigned long v = 0; unsigned k;
++            for (k = 0; k < length; k++) v |= (unsigned long)data[off + k] << (8 * k);
++            vused += (size_t)snprintf(a9_diag.vals + vused, sizeof(a9_diag.vals) - vused,
++                                      "%s%u=%lu", vused ? "," : "", key, v);
++        }
++        off += length;
++    }
++    if (vused) {
++        snprintf(a9_ring[(a9_ring_count - 1) % A9_RING].vals, sizeof(a9_ring[0].vals), "%s", a9_diag.vals);
++    }
++    if (count == 16 && off < size)
++        snprintf(a9_diag.tlvs + used, sizeof(a9_diag.tlvs) - used, ",capped");
++done:
++    errno = saved_errno;
++}
++
++static void a9_ring_dump(void)
++{
++    unsigned first = a9_ring_count > A9_RING ? a9_ring_count - A9_RING : 0, i;
++    int saved_errno = errno;
++    for (i = first; i < a9_ring_count; i++) {
++        char ring[192]; ssize_t w;
++        int m = snprintf(ring, sizeof(ring),
++            "A9_WIFI_RMTFS_RING seq=%u at=%lld.%03lld node=%u port=%u control=%d message=%d vals=%s result=%s\n",
++            i, a9_ring[i % A9_RING].ms / 1000, a9_ring[i % A9_RING].ms % 1000,
++            a9_ring[i % A9_RING].node, a9_ring[i % A9_RING].port, a9_ring[i % A9_RING].control,
++            a9_ring[i % A9_RING].message, a9_ring[i % A9_RING].vals, a9_ring[i % A9_RING].result);
++        if (m > 0 && (size_t)m < sizeof(ring))
++            do { w = write(STDERR_FILENO, ring, (size_t)m); } while (w < 0 && errno == EINTR);
++    }
++    errno = saved_errno;
++}
++
++static int a9_negative(const char *reason, int result)
++{
++    struct timespec up;
++    char line[1024];
++    int n, saved_errno = errno;
++    if (a9_diag.logged) return result;
++    a9_diag.logged = 1;
++    a9_ring_result(reason);
++    if (clock_gettime(CLOCK_BOOTTIME, &up)) { up.tv_sec = -1; up.tv_nsec = 0; }
++    n = snprintf(line, sizeof(line),
++        "A9_WIFI_RMTFS_DIAG uptime=%lld.%03ld reason=%s rc=%d received=%d recv=%d recv_errno=%d "
++        "sockaddr_len=%u address_valid=%d family=%u node=%u port=%u control=%d "
++        "message=%d message_decoded=%d qmi_type=%d tlvs=%s vals=%s\n",
++        (long long)up.tv_sec, up.tv_nsec / 1000000, reason, result,
++        a9_diag.received, a9_diag.recv_result, a9_diag.recv_errno,
++        a9_diag.address_len, a9_diag.address_valid, a9_diag.family, a9_diag.node, a9_diag.port,
++        a9_diag.control, a9_diag.message, a9_diag.message_decoded, a9_diag.qmi_type,
++        a9_diag.received ? a9_diag.tlvs : "-", a9_diag.received ? a9_diag.vals : "-");
++    if (n > 0 && (size_t)n < sizeof(line)) {
++        ssize_t written;
++        /* One bounded pipe record; logging errors never change trial decisions. */
++        do { written = write(STDERR_FILENO, line, (size_t)n); } while (written < 0 && errno == EINTR);
++    }
++    a9_ring_dump();
++    errno = saved_errno;
++    return result;
++}
++
++/* Observe-only notes (never faults, never change a decision): bounded count,
++ * one pipe record each, metadata only. CLOCK_BOOTTIME shares the controller's
++ * /proc/uptime base. */
++static int a9_boot_ms(long long *ms)
++{
++    struct timespec up;
++    if (clock_gettime(CLOCK_BOOTTIME, &up)) return -1;
++    *ms = (long long)up.tv_sec * 1000 + up.tv_nsec / 1000000;
++    return 0;
++}
++static unsigned a9_note_count;
++static void a9_note(const char *text)
++{
++    char line[256];
++    long long ms = -1;
++    int n, saved_errno = errno;
++    if (a9_note_count >= 32) return;
++    a9_note_count++;
++    if (a9_boot_ms(&ms)) ms = -1;
++    n = snprintf(line, sizeof(line), "A9_WIFI_RMTFS_NOTE uptime=%lld.%03lld %s\n",
++                 ms / 1000, ms < 0 ? 0 : ms % 1000, text);
++    if (n > 0 && (size_t)n < sizeof(line)) {
++        ssize_t written;
++        do { written = write(STDERR_FILENO, line, (size_t)n); } while (written < 0 && errno == EINTR);
++    }
++    errno = saved_errno;
++}
++#endif
+--- /dev/null
++++ b/a9-sha256.h
+@@ -0,0 +1,77 @@
++/* SPDX-License-Identifier: MIT */
++#ifndef A9_RMTFS_SHA256_H
++#define A9_RMTFS_SHA256_H
++#include <stdint.h>
++#include <stddef.h>
++#include <string.h>
++#include <unistd.h>
++#include <errno.h>
++struct a9_sha { uint32_t h[8]; uint64_t bytes; unsigned used; unsigned char b[64]; };
++static uint32_t a9_rotr(uint32_t x, unsigned n) { return (x >> n) | (x << (32-n)); }
++static void a9_sha_block(struct a9_sha *s, const unsigned char *p)
++{
++    static const uint32_t k[64] = {
++        0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
++        0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
++        0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
++        0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
++        0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
++        0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
++        0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
++        0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
++    };
++    uint32_t w[64], a,b,c,d,e,f,g,h;
++    unsigned i;
++    for (i=0;i<16;i++) w[i]=(uint32_t)p[i*4]<<24|(uint32_t)p[i*4+1]<<16|(uint32_t)p[i*4+2]<<8|p[i*4+3];
++    for (;i<64;i++) {
++        uint32_t x=w[i-15], y=w[i-2];
++        w[i]=w[i-16]+(a9_rotr(x,7)^a9_rotr(x,18)^(x>>3))+w[i-7]+(a9_rotr(y,17)^a9_rotr(y,19)^(y>>10));
++    }
++    a=s->h[0]; b=s->h[1]; c=s->h[2]; d=s->h[3]; e=s->h[4]; f=s->h[5]; g=s->h[6]; h=s->h[7];
++    for (i=0;i<64;i++) {
++        uint32_t t=h+(a9_rotr(e,6)^a9_rotr(e,11)^a9_rotr(e,25))+((e&f)^(~e&g))+k[i]+w[i];
++        uint32_t u=(a9_rotr(a,2)^a9_rotr(a,13)^a9_rotr(a,22))+((a&b)^(a&c)^(b&c));
++        h=g; g=f; f=e; e=d+t; d=c; c=b; b=a; a=t+u;
++    }
++    s->h[0]+=a;s->h[1]+=b;s->h[2]+=c;s->h[3]+=d;s->h[4]+=e;s->h[5]+=f;s->h[6]+=g;s->h[7]+=h;
++}
++static void a9_sha_init(struct a9_sha *s)
++{
++    static const uint32_t iv[]={0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};
++    memset(s,0,sizeof(*s)); memcpy(s->h,iv,sizeof(iv));
++}
++static void a9_sha_update(struct a9_sha *s, const unsigned char *p, size_t n)
++{
++    s->bytes+=n;
++    while (n) {
++        size_t take=64-s->used; if (take>n) take=n;
++        memcpy(s->b+s->used,p,take); s->used+=take; p+=take; n-=take;
++        if (s->used==64) { a9_sha_block(s,s->b); s->used=0; }
++    }
++}
++static void a9_sha_final(struct a9_sha *s, char out[65])
++{
++    uint64_t bits=s->bytes*8;
++    unsigned i;
++    unsigned char pad[128]={0x80};
++    unsigned n=s->used<56 ? 56-s->used : 120-s->used;
++    a9_sha_update(s,pad,n);
++    for (i=0;i<8;i++) pad[i]=(unsigned char)(bits>>(56-i*8));
++    a9_sha_update(s,pad,8);
++    for (i=0;i<32;i++) {
++        unsigned char x=(unsigned char)(s->h[i/4]>>(24-(i%4)*8));
++        out[i*2]="0123456789abcdef"[x>>4]; out[i*2+1]="0123456789abcdef"[x&15];
++    }
++    out[64]=0;
++}
++static int a9_sha_fd(int fd, char out[65])
++{
++    struct a9_sha s; unsigned char buf[8192]; off_t off=0; ssize_t n;
++    a9_sha_init(&s);
++    while ((n=pread(fd,buf,sizeof(buf),off))!=0) {
++        if (n<0) { if (errno==EINTR) continue; return -1; }
++        a9_sha_update(&s,buf,(size_t)n); off+=n;
++    }
++    a9_sha_final(&s,out); return 0;
++}
++#endif

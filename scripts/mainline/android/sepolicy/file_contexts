@@ -1,0 +1,39 @@
+# A9 mainline enforcing: appended to the staged vendor_file_contexts (stage.py).
+/vendor/bin/a9ml-eink\.sh       u:object_r:a9ml_eink_exec:s0
+/vendor/bin/a9ml-gpu\.sh        u:object_r:a9ml_gpu_exec:s0
+/vendor/bin/a9ml-bluetooth\.sh  u:object_r:a9ml_bt_exec:s0
+/vendor/bin/a9-eink-compat      u:object_r:a9ml_compat_exec:s0
+/vendor/lib/modules(/.*)?       u:object_r:vendor_kernel_modules:s0
+# DRM nodes (replace Cuttlefish's card0/card1 lines; ueventd labels at creation).
+# card0 is vkms on every mainline image (built in, registers before any module;
+# MEASURED dri-states, integ-1 G2a/G2b): buffer allocation for apps -> gpu_device.
+# card1.. = msm GPU, msm KMS, a9_eink: graphics_device (composer, helpers).
+/dev/dri/card0                 u:object_r:gpu_device:s0
+/dev/dri/card[1-9][0-9]*       u:object_r:graphics_device:s0
+/vendor/firmware(/.*)? u:object_r:a9ml_firmware_file:s0
+/vendor/bin/hw/android\.hardware\.thermal-service\.a9 u:object_r:hal_thermal_default_exec:s0
+/vendor/bin/hw/android\.hardware\.sensors-service\.a9 u:object_r:hal_sensors_default_exec:s0
+/vendor/bin/hw/android\.hardware\.vibrator-service\.a9 u:object_r:hal_vibrator_default_exec:s0
+/vendor/bin/hw/android\.hardware\.gnss-service\.a9 u:object_r:hal_gnss_default_exec:s0
+/vendor/bin/a9-gnss-loc u:object_r:a9ml_gnss_loc_exec:s0
+
+/vendor/bin/a9ml-wifi-firmware\.sh u:object_r:a9ml_fw_exec:s0
+/dev/fastrpc-adsp u:object_r:a9ml_fastrpc_device:s0
+/vendor/bin/hw/android\.hardware\.camera\.provider@2\.4-service\.a9 u:object_r:hal_camera_default_exec:s0
+/vendor/bin/hw/android\.hardware\.media\.c2@1\.2-service-v4l2-64 u:object_r:mediacodec_exec:s0
+/vendor/lib64/a9-camera(/.*)? u:object_r:a9ml_camera_lib_file:s0
+/vendor/lib64/libcamera(/.*)? u:object_r:a9ml_camera_lib_file:s0
+/vendor/lib64/a9-video(/.*)? u:object_r:a9ml_video_lib_file:s0
+/dev/media[0-9]+ u:object_r:video_device:s0
+/dev/video[0-9]+ u:object_r:video_device:s0
+/dev/v4l-subdev[0-9]+ u:object_r:video_device:s0
+/dev/ttyGS[0-9]+ u:object_r:tty_device:s0
+
+# Round6 standalone allocator, manual tools and private wrapper dependencies.
+/vendor/bin/hw/android\.hardware\.graphics\.allocator-service\.minigbm u:object_r:hal_graphics_allocator_default_exec:s0
+/vendor/lib64/a9-gralloc(/.*)? u:object_r:a9ml_gralloc_lib_file:s0
+/vendor/bin/a9ml-audio\.sh u:object_r:a9ml_audio_exec:s0
+/vendor/bin/a9-audio-(ctl|pcm) u:object_r:a9ml_audio_exec:s0
+/vendor/bin/a9-camcap u:object_r:a9ml_camcap_exec:s0
+/vendor/bin/a9ml-key-aod\.sh u:object_r:a9ml_key_aod_exec:s0
+/vendor/bin/a9ml-audit u:object_r:a9ml_audit_exec:s0

@@ -1,0 +1,150 @@
+/* Host shell around extracted, unmodified production functions. */
+#include <assert.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+
+enum { RPROC_OFFLINE, RPROC_DETACHED, RPROC_RUNNING };
+enum { RPROC_COREDUMP_DISABLED, RPROC_COREDUMP_ENABLED, RPROC_COREDUMP_INLINE };
+struct device { const char *of_node; };
+struct platform_device { struct device dev; };
+struct qcom_pas_data { int pas_id; bool early_boot, auto_boot; };
+struct firmware { int unused; };
+struct rproc {
+    struct device dev;
+    const char *firmware, *name;
+    bool auto_boot, recovery_disabled;
+    int dump_conf, state, attach_work, node;
+};
+
+static bool a9_adsp_manual_start, is_a9;
+static int requests, attaches, boots, publications, checks;
+static bool published_auto, published_recovery;
+static int published_dump;
+static struct rproc *current;
+static void (*pending_callback)(const struct firmware *, void *);
+static void *pending_context;
+static int rproc_list_mutex, rproc_list;
+#define THIS_MODULE NULL
+#define FW_ACTION_UEVENT 1
+#define GFP_KERNEL 0
+#define dev_info(dev, ...) ((void)(dev))
+#define dev_err(dev, ...) ((void)(dev))
+#define mutex_lock(p) ((void)(p))
+#define mutex_unlock(p) ((void)(p))
+#define list_add_rcu(p, q) ((void)(p), (void)(q))
+#define rproc_create_debug_dir(p) ((void)(p))
+#define rproc_delete_debug_dir(p) ((void)(p))
+#define rproc_char_device_remove(p) ((void)(p))
+#define put_device(p) ((void)(p))
+#define device_del(p) ((void)(p))
+#define release_firmware(p) ((void)(p))
+static int rproc_validate(struct rproc *p) { (void)p; return 0; }
+static int rproc_char_device_add(struct rproc *p) { (void)p; return 0; }
+static int device_add(struct device *dev)
+{
+    assert(dev == &current->dev);
+    publications++;
+    published_auto = current->auto_boot;
+    published_recovery = current->recovery_disabled;
+    published_dump = current->dump_conf;
+    return 0;
+}
+static bool __attribute__((unused)) of_machine_is_compatible(const char *name)
+{
+    assert(!strcmp(name, "hisense,hlte556n"));
+    return is_a9;
+}
+static bool __attribute__((unused)) of_device_is_compatible(const char *node, const char *name)
+{
+    return !strcmp(node, name);
+}
+static void schedule_work(int *work) { (void)work; attaches++; }
+static int rproc_boot(struct rproc *p) { boots++; p->state = RPROC_RUNNING; return 0; }
+static int request_firmware_nowait(void *module, int event, const char *name,
+                                  struct device *dev, int flags, void *context,
+                                  void (*callback)(const struct firmware *, void *))
+{
+    (void)module; (void)name; (void)dev; (void)flags;
+    assert(event == FW_ACTION_UEVENT);
+    requests++;
+    pending_callback = callback;
+    pending_context = context;
+    return 0;
+}
+
+@HELPER@
+@CALLBACK@
+@TRIGGER@
+@ADD@
+
+static int probe_preamble(struct platform_device *pdev,
+                          const struct qcom_pas_data *desc, struct rproc *rproc)
+{
+    int ret;
+@PREAMBLE@
+    return 0;
+}
+
+int main(void)
+{
+    const char *nodes[] = {"qcom,sm6115-adsp-pas", "qcom,sm6115-mpss-pas",
+                          "qcom,sm6115-cdsp-pas", "qcom,sdm660-adsp-pas",
+                          "qcom,sm6115-adsp-not-pas"};
+    const int pas_ids[] = {1, 4, 18};
+    for (int flag = 0; flag < 2; flag++)
+    for (int board = 0; board < 2; board++)
+    for (unsigned int node = 0; node < sizeof(nodes)/sizeof(nodes[0]); node++)
+    for (unsigned int id = 0; id < sizeof(pas_ids)/sizeof(pas_ids[0]); id++)
+    for (int early = 0; early < 2; early++)
+    for (int automatic = 0; automatic < 2; automatic++)
+    for (int recovery = 0; recovery < 2; recovery++)
+    for (int dump = 0; dump < 3; dump++) {
+        struct platform_device pdev = {.dev.of_node = nodes[node]};
+        struct qcom_pas_data desc = {.pas_id = pas_ids[id], .early_boot = early,
+                                     .auto_boot = automatic};
+        struct rproc r = {.state = RPROC_OFFLINE, .auto_boot = true,
+                          .recovery_disabled = recovery, .dump_conf = dump,
+                          .name = "test", .firmware = "present-or-missing.mdt"};
+        bool targeted = flag && board && node == 0;
+        bool rejected = targeted && (id != 0 || early);
+        bool gated = targeted && !rejected;
+        a9_adsp_manual_start = flag;
+        is_a9 = board;
+        current = &r;
+        requests = attaches = boots = publications = 0;
+        pending_callback = NULL;
+        int ret = probe_preamble(&pdev, &desc, &r);
+        assert(ret == (rejected ? -EINVAL : 0));
+        if (rejected) {
+            assert(!publications && !requests && !attaches && !boots);
+            checks++;
+            continue;
+        }
+        assert(r.auto_boot == (gated ? false : automatic));
+        assert(r.recovery_disabled == (gated ? true : recovery));
+        assert(r.dump_conf == (gated ? RPROC_COREDUMP_DISABLED : dump));
+        if (desc.early_boot)
+            r.state = RPROC_DETACHED; /* existing, unchanged probe tail */
+        assert(!rproc_add(&r));
+        assert(publications == 1);
+        assert(published_auto == r.auto_boot);
+        assert(published_recovery == r.recovery_disabled && published_dump == r.dump_conf);
+        assert(requests == (r.auto_boot && !early));
+        assert(attaches == (r.auto_boot && early));
+        if (gated) {
+            assert(r.state == RPROC_OFFLINE);
+            assert(!pending_callback && !requests && !attaches && !boots);
+        }
+        /* An ungated registration still queues its original firmware callback.
+         * NULL deliberately models missing firmware: production callback retries. */
+        if (pending_callback)
+            pending_callback(NULL, pending_context);
+        assert(boots == requests);
+        checks++;
+    }
+    printf("manual-start production extraction PASS: %d scope/descriptor/state cases\n", checks);
+    return 0;
+}

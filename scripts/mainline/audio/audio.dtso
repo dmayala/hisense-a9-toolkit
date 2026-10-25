@@ -1,0 +1,277 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/* R4 keeps its D1 card disabled; ESS is the sole live ALSA card (card0). */
+/dts-v1/;
+/plugin/;
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/clock/qcom,sm6115-lpasscc.h>
+#include <dt-bindings/sound/qcom,q6dsp-lpass-ports.h>
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/sound/qcom,q6afe.h>
+#include <dt-bindings/sound/qcom,q6asm.h>
+
+&{/sound} {
+  compatible = "hisense,a9-audio-card";
+  status = "okay";
+  model = "Hisense-A9-Audio";
+  pinctrl-names = "default", "sleep";
+  pinctrl-0 = <&ess_i2s_default>;
+  pinctrl-1 = <&ess_i2s_sleep>;
+  audio-routing = "HiFi Headphones", "HPOUTL", "HiFi Headphones", "HPOUTR",
+    "Headphones", "HPHL", "Headphones", "HPHR",
+    "Earpiece", "EAR", "IN1_HPHL", "HPHL_OUT", "IN2_HPHR", "HPHR_OUT",
+    "Speaker", "AW OUT", "AW IN", "AUX", "IN3_AUX", "AUX_OUT",
+    "AMIC1", "Main Mic", "Main Mic", "MIC BIAS1",
+    "AMIC2", "Headset Mic", "Headset Mic", "MIC BIAS2",
+    "TX SWR_INPUT0", "ADC1_OUTPUT", "TX SWR_INPUT4", "ADC2_OUTPUT";
+  aux-devs = <&a9_aw>;
+  mm1-dai-link {
+   link-name = "MultiMedia1";
+   cpu { sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA1>; };
+  };
+  mm2-dai-link {
+   link-name = "MultiMedia2";
+   cpu { sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA2>; };
+  };
+  wcd-rx0-dai-link {
+   link-name = "WCD Headset Earpiece";
+   cpu { sound-dai = <&q6afedai RX_CODEC_DMA_RX_0>; };
+   platform { sound-dai = <&q6routing>; };
+   codec { sound-dai = <&a9_wcd 0>, <&a9_a5_swr_rx 0>, <&a9_a5_rxmacro 0>; };
+  };
+  wcd-rx1-dai-link {
+   link-name = "WCD AUX Speaker";
+   cpu { sound-dai = <&q6afedai RX_CODEC_DMA_RX_1>; };
+   platform { sound-dai = <&q6routing>; };
+   codec { sound-dai = <&a9_wcd 0>, <&a9_a5_swr_rx 0>, <&a9_a5_rxmacro 1>; };
+  };
+  wcd-tx3-dai-link {
+   link-name = "WCD Main Mic";
+   cpu { sound-dai = <&q6afedai TX_CODEC_DMA_TX_3>; };
+   platform { sound-dai = <&q6routing>; };
+   codec { sound-dai = <&a9_wcd 1>, <&a9_a5_swr_va 0>, <&a9_txmacro 0>; };
+  };
+  wcd-tx4-dai-link {
+   link-name = "WCD Headset Mic";
+   cpu { sound-dai = <&q6afedai TX_CODEC_DMA_TX_4>; };
+   platform { sound-dai = <&q6routing>; };
+   codec { sound-dai = <&a9_wcd 1>, <&a9_a5_swr_va 0>, <&a9_txmacro 1>; };
+  };
+  ess-dai-link {
+   link-name = "ESS HiFi Playback";
+   cpu { sound-dai = <&q6afedai SECONDARY_MI2S_RX>; };
+   platform { sound-dai = <&q6routing>; };
+   codec { sound-dai = <&ess_dac>; };
+  };
+};
+
+&i2c1 {
+ #address-cells = <1>;
+ #size-cells = <0>;
+ ess_dac: audio-codec@48 {
+  compatible = "hisense,a9-es9218";
+  reg = <0x48>;
+  #sound-dai-cells = <0>;
+  reset-gpios = <&tlmm 65 GPIO_ACTIVE_LOW>;
+  select-gpios = <&tlmm 69 GPIO_ACTIVE_HIGH>;
+  oscillator-enable-gpios = <&tlmm 66 GPIO_ACTIVE_HIGH>;
+  pa-enable-gpios = <&tlmm 68 GPIO_ACTIVE_HIGH>;
+ };
+};
+&q6afedai {
+ #address-cells = <1>;
+ #size-cells = <0>;
+ dai@12 { reg = <SECONDARY_MI2S_RX>; qcom,sd-lines = <0>; };
+};
+&lpass_tlmm {
+ status = "okay";
+ ess_i2s_default: ess-i2s-default-state {
+  clk { pins = "gpio10"; function = "i2s2_clk"; drive-strength = <8>; bias-disable; output-high; };
+  ws { pins = "gpio11"; function = "i2s2_ws"; drive-strength = <8>; bias-disable; output-high; };
+  data { pins = "gpio12"; function = "i2s2_data"; drive-strength = <8>; bias-disable; output-high; };
+ };
+ ess_i2s_sleep: ess-i2s-sleep-state {
+  clk { pins = "gpio10"; function = "i2s2_clk"; drive-strength = <2>; bias-pull-down; input-enable; };
+  ws { pins = "gpio11"; function = "i2s2_ws"; drive-strength = <2>; bias-pull-down; input-enable; };
+  data { pins = "gpio12"; function = "i2s2_data"; drive-strength = <2>; bias-pull-down; input-enable; };
+ };
+};
+&tlmm {
+ /* Preserve R4's other reservations; release only ESS 65/66/68/69. */
+
+};
+
+&tlmm {
+	a9_a5_reset: a9-a5-reset-state {
+		pins = "gpio92";
+		function = "gpio";
+		drive-strength = <16>;
+		bias-disable;
+		/* Active-low reset remains asserted until driver validates supplies. */
+		output-low;
+	};
+};
+
+&{/} {
+ a9_wcd: a9-wcd-codec {
+  compatible = "hisense,a9-wcd937x";
+  #sound-dai-cells = <1>;
+  reset-gpios = <&tlmm 92 GPIO_ACTIVE_LOW>;
+  pinctrl-names = "default"; pinctrl-0 = <&a9_a5_reset>;
+  vdd-rxtx-supply = <&pm6125_l9>; vdd-px-supply = <&pm6125_l9>;
+  vdd-buck-supply = <&a9_a5_l14>;
+  qcom,micbias1-microvolt = <1800000>;
+  qcom,micbias2-microvolt = <1800000>;
+  qcom,micbias3-microvolt = <1800000>;
+  /* Stock bengal late_probe0x1014c8: eight button highs in mV
+   * 75,76,280,450,460,460,460,460; HS maximum1700mV. */
+  qcom,mbhc-buttons-vthreshold-microvolt = <75000 76000 280000 450000 460000 460000 460000 460000>;
+  qcom,mbhc-headset-vthreshold-microvolt = <1700000>;
+  qcom,rx-device = <&a9_a5_rx>; qcom,tx-device = <&a9_a5_tx>;
+ };
+};
+&i2c1 {
+ #address-cells = <1>; #size-cells = <0>;
+ a9_aw: amplifier@58 {
+  compatible = "hisense,a9-aw87519"; reg = <0x58>;
+  status = "okay";
+  reset-gpios = <&tlmm 107 GPIO_ACTIVE_HIGH>;
+ };
+};
+&soc {
+ #address-cells = <2>; #size-cells = <2>;
+ a9_txmacro: codec@a620000 {
+  compatible = "qcom,sm6115-lpass-tx-macro";
+  reg = <0 0x0a620000 0 0x1000>;
+  #sound-dai-cells = <1>; #clock-cells = <0>;
+  clocks = <&q6afecc LPASS_CLK_ID_TX_CORE_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+           <&q6afecc LPASS_CLK_ID_TX_CORE_NPL_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+           <&q6afecc LPASS_HW_DCODEC_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+           <&a9_a5_vamacro>;
+  clock-names = "mclk", "npl", "dcodec", "fsgen";
+ };
+};
+&rpm_requests {
+	regulators-0 {
+		a9_a5_l14: l14 {
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+		};
+	};
+};
+
+&lpass_tlmm {
+	status = "okay";
+	a9_a5_tx_clk: a9-a5-tx-clk-state {
+		pins = "gpio0"; function = "swr_tx_clk";
+		drive-strength = <10>; slew-rate = <3>; bias-disable;
+	};
+	a9_a5_tx_data: a9-a5-tx-data-state {
+		pins = "gpio1", "gpio2"; function = "swr_tx_data";
+		drive-strength = <10>; slew-rate = <3>; bias-bus-hold;
+	};
+	a9_a5_rx_clk: a9-a5-rx-clk-state {
+		pins = "gpio3"; function = "swr_rx_clk";
+		drive-strength = <10>; slew-rate = <3>; bias-disable;
+	};
+	a9_a5_rx_data: a9-a5-rx-data-state {
+		pins = "gpio4", "gpio5"; function = "swr_rx_data";
+		drive-strength = <10>; slew-rate = <3>; bias-bus-hold;
+	};
+};
+
+&soc {
+ #address-cells = <2>; #size-cells = <2>;
+	a9_a5_audiocc: clock-controller@a6a9000 {
+		compatible = "qcom,sm6115-lpassaudiocc";
+		reg = <0 0x0a6a9000 0 0x1000>;
+		#reset-cells = <1>;
+	};
+	a9_a5_lpasscc: clock-controller@a7ec000 {
+		compatible = "qcom,sm6115-lpasscc";
+		reg = <0 0x0a7ec000 0 0x1000>;
+		#reset-cells = <1>;
+	};
+	a9_a5_rxmacro: codec@a600000 {
+		compatible = "qcom,sm6115-lpass-rx-macro";
+		reg = <0 0x0a600000 0 0x1000>;
+		#sound-dai-cells = <1>;
+		#clock-cells = <0>;
+		clock-output-names = "a9-a5-rx-mclk";
+		clocks = <&q6afecc LPASS_CLK_ID_RX_CORE_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			<&q6afecc LPASS_CLK_ID_RX_CORE_NPL_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			<&q6afecc LPASS_HW_DCODEC_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			<&a9_a5_vamacro>;
+		clock-names = "mclk", "npl", "dcodec", "fsgen";
+	};
+	a9_a5_vamacro: codec@a730000 {
+		compatible = "qcom,sm6115-lpass-va-macro";
+		reg = <0 0x0a730000 0 0x1000>;
+		#sound-dai-cells = <1>;
+		#clock-cells = <0>;
+		clock-output-names = "a9-a5-fsgen";
+		clocks = <&q6afecc LPASS_CLK_ID_VA_CORE_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			<&q6afecc LPASS_HW_DCODEC_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			<&q6afecc LPASS_CLK_ID_VA_CORE_2X_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
+		clock-names = "mclk", "dcodec", "npl";
+		qcom,dmic-sample-rate = <600000>;
+	};
+	a9_a5_swr_rx: soundwire@a610000 {
+		compatible = "hisense,a9-audio-soundwire";
+		reg = <0 0x0a610000 0 0x2000>;
+		interrupt-parent = <&intc>;
+  interrupts = <GIC_SPI 297 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&a9_a5_rxmacro>; clock-names = "iface";
+		resets = <&a9_a5_audiocc LPASS_AUDIO_SWR_RX_CGCR>;
+		reset-names = "swr_audio_cgcr";
+		pinctrl-names = "default";
+		pinctrl-0 = <&a9_a5_rx_clk &a9_a5_rx_data>;
+		label = "RX";
+		/* COMP_PARAMS: build j reports 1 DIN, build k reports 6 DOUT.
+		 * Stock uses ports 1..5; ports 6..7 stay unmapped (0xff). */
+		qcom,din-ports = <1>; qcom,dout-ports = <6>;
+		qcom,ports-sinterval-low = /bits/ 8 <3 31 31 7 0 255 255>;
+		qcom,ports-offset1 = /bits/ 8 <0 0 11 1 0 255 255>;
+		qcom,ports-offset2 = /bits/ 8 <0 0 11 0 0 255 255>;
+		qcom,ports-hstart = /bits/ 8 <255 3 255 255 255 255 255>;
+		qcom,ports-hstop = /bits/ 8 <255 6 255 255 255 255 255>;
+		qcom,ports-word-length = /bits/ 8 <1 7 4 255 255 255 255>;
+		qcom,ports-block-pack-mode = /bits/ 8 <255 0 1 255 255 255 255>;
+		qcom,ports-block-group-count = /bits/ 8 <255 255 255 255 0 255 255>;
+		qcom,ports-lane-control = /bits/ 8 <1 0 0 0 0 255 255>;
+		#sound-dai-cells = <1>; #address-cells = <2>; #size-cells = <0>;
+		a9_a5_rx: codec@0,4 {
+			compatible = "sdw20217010a00"; reg = <0 4>;
+			qcom,rx-port-mapping = <1 2 3 4 5>;
+		};
+	};
+	a9_a5_swr_va: soundwire@a740000 {
+		compatible = "hisense,a9-audio-soundwire";
+		reg = <0 0x0a740000 0 0x2000>;
+		interrupt-parent = <&intc>;
+  interrupts = <GIC_SPI 296 IRQ_TYPE_LEVEL_HIGH>, <GIC_SPI 79 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&a9_a5_vamacro>; clock-names = "iface";
+		resets = <&a9_a5_lpasscc LPASS_SWR_TX_CONFIG_CGCR>;
+		reset-names = "swr_audio_cgcr";
+		pinctrl-names = "default";
+		pinctrl-0 = <&a9_a5_tx_clk &a9_a5_tx_data>;
+		label = "VA";
+		/* Build j COMP_PARAMS: 4 DIN. Stock maps only ports 1..3. */
+		qcom,din-ports = <4>; qcom,dout-ports = <0>;
+		qcom,ports-sinterval-low = /bits/ 8 <3 3 3 255>;
+		qcom,ports-offset1 = /bits/ 8 <1 2 1 255>;
+		qcom,ports-offset2 = /bits/ 8 <0 0 0 255>;
+		qcom,ports-hstart = /bits/ 8 <255 255 255 255>;
+		qcom,ports-hstop = /bits/ 8 <255 255 255 255>;
+		qcom,ports-word-length = /bits/ 8 <255 255 255 255>;
+		qcom,ports-block-pack-mode = /bits/ 8 <255 255 255 255>;
+		qcom,ports-block-group-count = /bits/ 8 <255 255 255 255>;
+		qcom,ports-lane-control = /bits/ 8 <0 0 0 255>;
+		#sound-dai-cells = <1>; #address-cells = <2>; #size-cells = <0>;
+		a9_a5_tx: codec@0,3 {
+			compatible = "sdw20217010a00"; reg = <0 3>;
+			/* Stock codecport ADC1->VA1, ADC23->VA2,
+			 * DMIC03/MBHC and DMIC46->VA3; TX macro owns capture streams. */
+			qcom,tx-port-mapping = <1 2 3 3>;
+		};
+	};
+};

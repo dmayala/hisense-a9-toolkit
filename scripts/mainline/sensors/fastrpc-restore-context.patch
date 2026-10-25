@@ -1,0 +1,66 @@
+--- a/drivers/misc/fastrpc.c
++++ b/drivers/misc/fastrpc.c
+@@ -260,0 +261,2 @@
++	/* Pending caller reference remains owned by fl->pending during restart. */
++	bool a9_interrupted;
+@@ -655,0 +658 @@
++	kfree(ctx->args);
+@@ -761 +764,9 @@
+-		ctx->args = args;
++		/* The ioctl's temporary argument array is freed on -ERESTARTSYS. */
++		ctx->args = kmemdup(args, array_size(ctx->nscalars, sizeof(*args)),
++				    GFP_KERNEL);
++		if (!ctx->args) {
++			kfree(ctx->olaps);
++			kfree(ctx->maps);
++			kfree(ctx);
++			return ERR_PTR(-ENOMEM);
++		}
+@@ -802,0 +814 @@
++	kfree(ctx->args);
+@@ -1325,0 +1338,28 @@
++/* Stock restores the interrupted transaction before considering a new send.
++ * Keep the existing pending-list ownership and disconnect barrier. Compare the
++ * complete request so a different call on a reused FD cannot consume a reply.
++ */
++static struct fastrpc_invoke_ctx *fastrpc_context_restore(
++		struct fastrpc_user *fl, u32 handle, u32 sc,
++		struct fastrpc_invoke_args *args)
++{
++	struct fastrpc_invoke_ctx *ctx, *found = NULL;
++
++	spin_lock(&fl->lock);
++	list_for_each_entry(ctx, &fl->pending, node) {
++		if (!ctx->a9_interrupted || ctx->pid != current->pid)
++			continue;
++		if (ctx->msg.handle != handle || ctx->sc != sc ||
++		    (ctx->nscalars && memcmp(ctx->args, args,
++			array_size(ctx->nscalars, sizeof(*args))))) {
++			found = ERR_PTR(-EINVAL);
++			break;
++		}
++		ctx->a9_interrupted = false;
++		found = ctx;
++		break;
++	}
++	spin_unlock(&fl->lock);
++	return found;
++}
++
+@@ -1348,0 +1389,12 @@
++	}
++
++	if (!kernel) {
++		ctx = fastrpc_context_restore(fl, handle, sc, args);
++		if (IS_ERR(ctx)) {
++			mutex_unlock(&fl->cctx->a9_invoke_lock);
++			return PTR_ERR(ctx);
++		}
++		if (ctx) {
++			mutex_unlock(&fl->cctx->a9_invoke_lock);
++			goto wait_for_response;
++		}
+@@ -1370,0 +1423 @@
++wait_for_response:
+@@ -1408,0 +1462 @@
++		ctx->a9_interrupted = true;

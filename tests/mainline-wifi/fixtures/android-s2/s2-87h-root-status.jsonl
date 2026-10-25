@@ -1,0 +1,3 @@
+{"audit": [], "phase": "root-ready", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "probe", "root_rc": 1, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "framework-cleanup", "root_rc": 0, "timeout": false, "transport_rc": 0}

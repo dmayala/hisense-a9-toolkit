@@ -1,0 +1,2 @@
+#!/bin/sh
+. "$SIM_LIB"; klog 12 "$*"

@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "captures": [
+    {
+      "label": "android-s1b-unassociated",
+      "source": "/home/user/A9-build/mainline/wifi-android/s1-20261018T050037Z-s1/s1b/iw-reg-dev.txt",
+      "source_sha256": "25f19a912743ffcf4d963c0515a3ef1b6353eb5ccfbbc479889ea40777fe047c",
+      "fixture": "s1b-iw-dev-masked.txt",
+      "fixture_sha256": "dd05e6c994980134b62cab26c90c5c61f3041a27e1a696d93715ac37aa0c2623",
+      "method": "exact suffix beginning at Interface wlan0; only addr value replaced with [MASKED]",
+      "masked_addr_lines": 1,
+      "txpower_records": 0
+    },
+    {
+      "label": "trial15-phy",
+      "source": "/home/user/A9-build/mainline/sol-wifi/trial-logs/boot15-evidence/trial-post.tar",
+      "source_sha256": "5ec902f26e2d9d9d77226b3efbe8ed2cb8f6e0618d71258437441dacdf639e05",
+      "member": "./wlan-raw.txt",
+      "member_sha256": "9501d67b17d33ae7a94220a85e2d0b57ecfc6ae8cce040ec6e03c16d70882d8c",
+      "fixture": "trial15-iw-phy.txt",
+      "fixture_sha256": "9501d67b17d33ae7a94220a85e2d0b57ecfc6ae8cce040ec6e03c16d70882d8c",
+      "method": "byte-exact full iw phy listing from the retained post-run archive",
+      "channels_1_to_11_max_dbm": "20.0"
+    }
+  ],
+  "limitation": "S1b proves the real unassociated format, not trial21 raw output. Trial15 phy listing is real; negative cases and post-association replies in tests are explicitly synthetic mutations."
+}

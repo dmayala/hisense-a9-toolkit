@@ -1,0 +1,18 @@
+# Development POC: root configfs access; enforcing policy remains separate B4 work.
+service vendor.usb-gadget /vendor/bin/hw/android.hardware.usb.gadget-service.a9
+    class hal
+    user root
+    group root system shell mtp
+    seclabel u:r:hal_usb_gadget_default:s0
+    disabled
+
+# R4 init binds early ADB with configfs=1. The existing USB helper advances
+# to 2 only after ADB descriptors and host configuration; never start at boot.
+on property:sys.usb.configfs=2
+    start vendor.usb-gadget
+
+on property:sys.usb.config=adb && property:sys.usb.configfs=2
+    start adbd
+
+on property:init.svc.adbd=restarting && property:sys.usb.configfs=2
+    setprop sys.usb.ffs.ready 0

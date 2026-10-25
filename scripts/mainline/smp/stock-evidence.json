@@ -1,0 +1,28 @@
+{
+  "date": "2026-10-15",
+  "status": "MEASURED offline from the phone's own saved stock images and symbolized Image; no capture contents",
+  "source": "golden edl_2026-10-14_110759, lun4/boot_a.bin and dtbo_a.bin (opened read-only)",
+  "base_dtb_sha256": "95e54a3f14e1dcbb4a42b5c090f3b34fd48120000d4ed09e7bb58cff6d5a74df",
+  "embedded_blob1_role": "RTIC metadata, not a second CPU/board device tree",
+  "dtbo_sha256": "74138d6535db5897db0c80ae093dc5840e8c51cf578b5d395499ded185069931",
+  "cpu_mpidr": [0, 1, 2, 3, 256, 257, 258, 259],
+  "enable_method": "psci",
+  "saved_stock_boot": {"log": "kmonlog_2026_0811_105015", "activated_cpus": 8, "secondary_boot_ids_match_dt": true, "psci_version": "1.0", "function_ids": "standard v0.2"},
+  "psci": {"compatible": "arm,psci-1.0", "method": "smc"},
+  "cpufreq": {
+    "compatible": "qcom,cpufreq-hw",
+    "regions_hex": [["0xf521000", "0x1000"], ["0xf523000", "0x1000"]],
+    "stock_freq_domain_cells": 2,
+    "upstream_freq_domain_cells": 1,
+    "stock_offsets_va": "0xffffff8009706c70",
+    "offsets_hex": {"enable": "0x0", "freq_lut": "0x110", "volt_lut": "0x114", "performance_state": "0x920", "cycle_counter": "0x9c0"},
+    "stock_lut_defaults_va": "0xffffff800a071c58",
+    "stock_lut_row_bytes": 32,
+    "stock_lut_max_entries_default": 40,
+    "stock_dt_property": "qcom,max-lut-entries=12",
+    "binary_reads_property": "qcom,lut-max-entries",
+    "note": "DT property spelling differs from the binary's lookup; do not infer a 12-row effective limit from that property"
+  },
+  "stock_lmh": {"control_hex": "0xf550800", "spi": 37, "shared_by_domains": true},
+  "stock_idle": {"cpu_power_collapse_state": 3, "cpu_mode_shift": 0, "cluster_mode_shift": 4, "system_mode_shift": 8}
+}

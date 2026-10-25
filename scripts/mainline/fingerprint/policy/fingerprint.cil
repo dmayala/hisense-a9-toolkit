@@ -1,0 +1,41 @@
+; Stock fingerprint HAL only; retain the base's enforcing/permissive decisions.
+(type a9ml_fingerprint_device)
+(roletype object_r a9ml_fingerprint_device)
+(typeattributeset dev_type (a9ml_fingerprint_device))
+(type a9ml_fingerprint_hwservice)
+(roletype object_r a9ml_fingerprint_hwservice)
+(typeattributeset hwservice_manager_type (a9ml_fingerprint_hwservice))
+(typeattributeset protected_hwservice (a9ml_fingerprint_hwservice))
+; Init-defined legacy LD_LIBRARY_PATH must survive the domain transition.
+(allow init_202504 hal_fingerprint_default (process (noatsecure)))
+(allow hal_fingerprint_default a9ml_fingerprint_device (chr_file (open read write getattr ioctl)))
+(allowx hal_fingerprint_default a9ml_fingerprint_device (ioctl chr_file ((range 0x7300 0x7330))))
+(allow hal_fingerprint_default tee_device_202504 (chr_file (open read write getattr ioctl map)))
+(allowx hal_fingerprint_default tee_device_202504 (ioctl chr_file ((range 0x9700 0x97ff))))
+(allow hal_fingerprint_default ion_device_202504 (chr_file (open read write getattr ioctl map)))
+(allowx hal_fingerprint_default ion_device_202504 (ioctl chr_file ((range 0x4900 0x49ff))))
+(allow hal_fingerprint_default a9ml_fingerprint_hwservice (hwservice_manager (add find)))
+(allow hal_fingerprint_default hal_fingerprint_hwservice_202504 (hwservice_manager (add find)))
+(allow hal_fingerprint_default hal_fingerprint_default (netlink_kobject_uevent_socket (create bind read getattr getopt setopt)))
+(allow hal_fingerprint_default fingerprint_vendor_data_file_202504 (dir (create open read write search getattr add_name remove_name rmdir setattr)))
+(allow hal_fingerprint_default fingerprint_vendor_data_file_202504 (file (create open read write getattr setattr append unlink rename lock map)))
+(allow hal_fingerprint_default vendor_data_file_202504 (dir (search getattr)))
+(allow hal_fingerprint_default mnt_vendor_file_202504 (dir (search getattr)))
+(allow hal_fingerprint_default a9ml_firmware_file (dir (open read search getattr)))
+(allow hal_fingerprint_default a9ml_firmware_file (file (open read getattr map)))
+
+; FP2: vendor init commands execute in vendor_init, not init. Match the
+; shipped module inode's vendor_file label (the observed fp1 AVC).
+(allow vendor_init_202504 vendor_file_202504 (system (module_load)))
+; The legacy framework checks the precreated vendor fpdata directory before
+; passing it to the HAL. Keep template file writes in the HAL domain.
+(allow system_server_202504 fingerprint_vendor_data_file_202504 (dir (search getattr)))
+
+; FP10: native observation after diagnostic-console enforcement. `test -c`
+; needs only inode metadata; the stock HAL retains all device I/O ownership.
+(allow a9ml_rootsh a9ml_fingerprint_device (chr_file (getattr)))
+(allow a9ml_rootsh tee_device_202504 (chr_file (getattr)))
+(allow a9ml_rootsh ion_device_202504 (chr_file (getattr)))
+; pidof/cmdline and /proc/PID/stat for the existing HAL PID/birth checks.
+(allow a9ml_rootsh hal_fingerprint_default (dir (getattr search)))
+(allow a9ml_rootsh hal_fingerprint_default (file (getattr open read)))

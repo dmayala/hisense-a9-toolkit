@@ -1,0 +1,62 @@
+From: A9 project <dmayala@users.noreply.github.com>
+Subject: [PATCH 0059] drm/msm/dpu: observe video flush completion without an IRQ wakeup
+
+A9's frame-progress latch cuts HV after three 85 Hz periods (~35.3 ms).
+The saved AOD failure has zero ring underruns and a 53.97 ms DPU flush-wait
+maximum. A waitqueue-only observation can hide an already-cleared CTL flush
+register until the full 50 ms timeout when its IRQ wakeup is missing/delayed.
+The original triggering event is not retained, so that mechanism is a
+candidate cause of this capture rather than a proven hardware diagnosis.
+
+Poll the identical register-zero completion predicate sleepably at up to
+1 ms intervals, retaining the existing 50 ms DPU timeout. This changes
+observation latency only: no nonzero flush is accepted; all A9 progress,
+neutral, rail and abort interlocks remain unchanged. An actual stuck flush
+still trips the independent A9 deadline and cannot silently recover.
+
+Co-Authored-By: GPT-6.1 Sol <noreply@openai.com>
+---
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
+@@ -11,6 +11,8 @@
+ #include "dpu_trace.h"
+ #include "disp/msm_disp_snapshot.h"
+ #include "msm_dsc_helper.h"
++
++#include <linux/iopoll.h>
+ 
+ #include <drm/display/drm_dsc_helper.h>
+ #include <drm/drm_managed.h>
+@@ -538,17 +540,25 @@
+ 		struct dpu_encoder_phys *phys_enc)
+ {
+ 	struct dpu_hw_ctl *hw_ctl = phys_enc->hw_ctl;
++	u32 flush;
+ 	int ret;
+ 
+ 	if (!hw_ctl)
+ 		return 0;
+ 
+-	ret = wait_event_timeout(phys_enc->pending_kickoff_wq,
+-		(hw_ctl->ops.get_flush_register(hw_ctl) == 0),
+-		msecs_to_jiffies(50));
+-	if (ret <= 0) {
+-		DPU_ERROR("vblank timeout: %x\n", hw_ctl->ops.get_flush_register(hw_ctl));
+-		return -ETIMEDOUT;
++	/*
++	 * A video-mode flush can complete even when the vsync wakeup is late
++	 * or lost. A single wait_event_timeout then hides completed hardware
++	 * progress until its entire 50 ms timeout, exceeding A9's independent
++	 * three-frame drive deadline. Observe the SAME completion predicate
++	 * directly, with sleepable 1 ms polling and the same 50 ms timeout.
++	 * No pending flush is accepted, and the A9 hardirq interlock is unchanged.
++	 */
++	ret = read_poll_timeout(hw_ctl->ops.get_flush_register, flush, !flush,
++				1000, 50000, false, hw_ctl);
++	if (ret) {
++		DPU_ERROR("vblank timeout: %x\n", flush);
++		return ret;
+ 	}
+ 
+ 	return 0;

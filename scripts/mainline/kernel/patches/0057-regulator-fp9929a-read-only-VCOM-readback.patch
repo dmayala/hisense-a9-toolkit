@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: dmayala <dmayala@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 02:47:56 -0700
+Subject: [PATCH 0057] regulator: fp9929a: read-only VCOM readback accessor
+
+Review 89d F6. fp9929a_read_vcom() returns VCOM_SETTING (reg 0x02) and the
+code this driver programs: one plain SMBus read under fp->lock (the lock of
+every power sequence), only while the rails are on (-EAGAIN otherwise). No
+write, no gate lock, no retry. For a9_eink's log-only check after a
+recovered PG dip (did the chip reset?).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/regulator/fp9929a.c       | 37 +++++++++++++++++++++++++++++++
+ include/linux/regulator/fp9929a.h | 11 +++++++++
+ 2 files changed, 48 insertions(+)
+
+diff --git a/drivers/regulator/fp9929a.c b/drivers/regulator/fp9929a.c
+index 1ed4bc846..251fc0a5d 100644
+--- a/drivers/regulator/fp9929a.c
++++ b/drivers/regulator/fp9929a.c
+@@ -1107,6 +1107,43 @@ int fp9929a_get_status(struct device_node *np, struct fp9929a_status *st)
+ }
+ EXPORT_SYMBOL_GPL(fp9929a_get_status);
+ 
++/*
++ * Review 89d F6 (log-only diagnostic for a9_eink): did the chip keep its
++ * programmed VCOM code across a PG dip? One plain SMBus read of VCOM_SETTING
++ * under fp->lock (the lock every power sequence holds), only while the rails
++ * are on. No write, no gate lock, no retry (fp9929a_read_reg() retries with
++ * sleeps; one attempt is enough for a diagnostic).
++ */
++int fp9929a_read_vcom(struct device_node *np, u8 *now, u8 *programmed)
++{
++	struct i2c_client *client = of_find_i2c_device_by_node(np);
++	struct fp9929a *fp;
++	int ret;
++
++	if (!client)
++		return -EPROBE_DEFER;
++	fp = READ_ONCE(client->dev.driver) ? i2c_get_clientdata(client) : NULL;
++	if (!fp) {
++		put_device(&client->dev);
++		return -EPROBE_DEFER;
++	}
++	mutex_lock(&fp->lock);
++	if (!fp->on) {
++		ret = -EAGAIN;
++	} else {
++		ret = i2c_smbus_read_byte_data(fp->client, FP9929A_REG_VCOM);	/* one read, no retry */
++		if (ret >= 0) {
++			*now = ret;
++			*programmed = fp->vcom_code;
++			ret = 0;
++		}
++	}
++	mutex_unlock(&fp->lock);
++	put_device(&client->dev);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(fp9929a_read_vcom);
++
+ static void fp9929a_shutdown(struct i2c_client *client)
+ {
+ 	struct fp9929a *fp = i2c_get_clientdata(client);
+diff --git a/include/linux/regulator/fp9929a.h b/include/linux/regulator/fp9929a.h
+index 28420a231..4c14ba1d4 100644
+--- a/include/linux/regulator/fp9929a.h
++++ b/include/linux/regulator/fp9929a.h
+@@ -46,6 +46,12 @@ int fp9929a_get_status(struct device_node *np, struct fp9929a_status *st);
+  * Any context, including hardirq/hrtimer: no lock, no sleep.
+  */
+ void fp9929a_emergency_off(const char *why);
++/*
++ * Read-only: VCOM_SETTING (reg 0x02) now, and the code this driver programs.
++ * -EAGAIN when the rails are off, -EPROBE_DEFER while unbound. Never writes;
++ * one I2C read, no retry; serialised with power-up/down by the chip's lock.
++ */
++int fp9929a_read_vcom(struct device_node *np, u8 *now, u8 *programmed);
+ #else
+ static inline int fp9929a_get_status(struct device_node *np, struct fp9929a_status *st)
+ {
+@@ -55,6 +61,11 @@ static inline int fp9929a_get_status(struct device_node *np, struct fp9929a_stat
+ static inline void fp9929a_emergency_off(const char *why)
+ {
+ }
++
++static inline int fp9929a_read_vcom(struct device_node *np, u8 *now, u8 *programmed)
++{
++	return -ENODEV;
++}
+ #endif
+ 
+ #endif

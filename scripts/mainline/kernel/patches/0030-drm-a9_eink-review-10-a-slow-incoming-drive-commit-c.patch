@@ -1,0 +1,117 @@
+From 657d0ddf89ce74f87d3e2bb2e435980ea97b7887 Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 12:41:16 -0700
+Subject: [PATCH] drm/a9_eink: review 10: a slow incoming drive commit counts
+ as drive time
+
+0029 attributed a commit interval to drive lateness only if the PREVIOUS
+front frame drove. The incoming buffer can latch while its commit call is
+still running (or its caller is descheduled), so a slow FIRST drive commit
+after idle was counted only in the totals (review 10 host regression: 25 ms
+drive commit after idle, then a normal idle commit -> late 1, late_drive 0).
+
+Now the drive time of an interval is the whole gap if the front drove, else,
+if the incoming frame drives, the commit's own execution (start of
+drm_client_modeset_commit to its return); vblank skips inside that call
+count as vbl_skips_drive. Idle work before submitting stays non-drive.
+Totals unchanged. Host case (16) fails on 0029, passes here.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/a9_eink/a9_eink.h           |  3 +-
+ drivers/gpu/drm/a9_eink/a9_eink_transport.c | 47 ++++++++++++++-------
+ 2 files changed, 33 insertions(+), 17 deletions(-)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index 714a8a6d8..b112f2c1c 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -71,7 +71,8 @@ struct a9x_transport {
+ 	/* stats */
+ 	u64 frames, late, vbl_skips, commits_failed, stalls;
+ 	u32 max_gap_us;
+-	/* the same, only for gaps with a DRIVE frame on the glass (front not null) */
++	/* the same, only for drive time: the whole gap if the front drove, else
++	 * the commit's own execution if the incoming frame drives (review 10) */
+ 	u64 late_drive, vbl_skips_drive;
+ 	u32 max_gap_drive_us;
+ };
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_transport.c b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+index a7ec33a0d..8dd6c5097 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_transport.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+@@ -407,9 +407,9 @@ void a9x_detach(struct a9x_transport *t)
+ static int a9x_commit_locked(struct a9x_transport *t, int idx, bool null)
+ {
+ 	struct drm_crtc *crtc;
+-	ktime_t now;
+-	u64 vbl;
+-	u32 gap;
++	ktime_t now, cstart;
++	u64 vbl, vbl0 = 0;
++	u32 gap, cgap;
+ 	int ret;
+ 
+ 	mutex_lock(&t->client.modeset_mutex);
+@@ -426,6 +426,14 @@ static int a9x_commit_locked(struct a9x_transport *t, int idx, bool null)
+ 	 */
+ 	if (!null && !t->stall_armed)
+ 		a9x_stall_arm(t);
++	/*
++	 * Review 10: the incoming buffer may latch while this call still runs
++	 * (or its caller is descheduled), so a slow commit of a DRIVE frame is
++	 * drive time even when the front was idle: record its start.
++	 */
++	cstart = ktime_get();
++	if (t->on && t->vbl_ref)
++		vbl0 = drm_crtc_vblank_count(t->ms->crtc);
+ 	ret = drm_client_modeset_commit(&t->client);
+ 	if (ret) {
+ 		t->commits_failed++;
+@@ -438,26 +446,33 @@ static int a9x_commit_locked(struct a9x_transport *t, int idx, bool null)
+ 	now = ktime_get();
+ 	crtc = t->ms->crtc;
+ 	if (t->on && t->vbl_ref) {
+-		/* during this gap the front buffer scanned: did it drive? */
+-		bool drive = !t->front_null;
++		/*
++		 * Drive time in this interval: all of it if the front (scanned
++		 * since the last return) drove; else, if the incoming frame
++		 * drives, the commit's own execution (it may have latched at any
++		 * vblank inside it). Idle work before submitting is not drive.
++		 */
++		bool front_drive = !t->front_null, in_drive = !null;
++		u64 skips;
+ 
+ 		vbl = drm_crtc_vblank_count(crtc);
+-		if (vbl > t->last_vbl + 1) {
+-			t->vbl_skips += vbl - t->last_vbl - 1;
+-			if (drive)
+-				t->vbl_skips_drive += vbl - t->last_vbl - 1;
+-		}
++		skips = vbl > t->last_vbl + 1 ? vbl - t->last_vbl - 1 : 0;
++		t->vbl_skips += skips;
++		if (front_drive)
++			t->vbl_skips_drive += skips;
++		else if (in_drive && vbl > vbl0 + 1)
++			t->vbl_skips_drive += vbl - vbl0 - 1;
+ 		t->last_vbl = vbl;
+ 		gap = (u32)ktime_us_delta(now, t->last_commit);
++		cgap = front_drive ? gap : in_drive ? (u32)ktime_us_delta(now, cstart) : 0;
+ 		if (gap > t->max_gap_us)
+ 			t->max_gap_us = gap;
+-		if (drive && gap > t->max_gap_drive_us)
+-			t->max_gap_drive_us = gap;
+-		if (t->period_us && gap > t->period_us + t->period_us / 2) {
++		if (cgap > t->max_gap_drive_us)
++			t->max_gap_drive_us = cgap;
++		if (t->period_us && gap > t->period_us + t->period_us / 2)
+ 			t->late++;
+-			if (drive)
+-				t->late_drive++;
+-		}
++		if (t->period_us && cgap > t->period_us + t->period_us / 2)
++			t->late_drive++;
+ 	}
+ 	t->last_commit = now;
+ 	t->front = idx;

@@ -1,0 +1,5 @@
+68: t+70s adb UP from mainline Android: kernel 7.2.10-a9+ slot _b
+69:    WARN no root shell yet (adbd uid 2000; the loopback shell starts at boot_completed); 'adb root' is the manual next step
+71: t+126s sys.boot_completed=1 surfaceflinger pid=1539
+72: S2_QUIET_READY
+73: outcome: android-mainline boot_completed=1 sf=yes hold-ended after 133 s; NOT restored

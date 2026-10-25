@@ -1,0 +1,382 @@
+--- /dev/null
++++ b/router/a9-router.c
+@@ -0,0 +1,379 @@
++/*
++ * Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
++ * Copyright (c) 2016-2018, Linaro Ltd.
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions are met:
++ *
++ * 1. Redistributions of source code must retain the above copyright notice,
++ * this list of conditions and the following disclaimer.
++ *
++ * 2. Redistributions in binary form must reproduce the above copyright notice,
++ * this list of conditions and the following disclaimer in the documentation
++ * and/or other materials provided with the distribution.
++ *
++ * 3. Neither the name of the copyright holder nor the names of its contributors
++ * may be used to endorse or promote products derived from this software without
++ * specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++ * POSSIBILITY OF SUCH DAMAGE.
++ */
++
++/* A9 modem-only adaptation of peripheral-qrtr.c and diag_cntl.c.
++ * No host diagnostic clients, peripheral filesystem, commands, NV or EFS API.
++ * Fixed memory, bounded little-endian wire decoding; no generic router linked.
++ */
++#include <errno.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <poll.h>
++#include <signal.h>
++#include <sys/socket.h>
++#include <unistd.h>
++#include <libqrtr.h>
++#include <linux/qrtr.h>
++
++#define A9_DIAG_SERVICE 4097
++#define A9_DIAG_MAX_PACKET 16384
++#define A9_DIAG_MAX_IDS 64
++#define A9_DIAG_MAX_NAME 128
++/* Same capabilities as upstream; ID feature masks are length-checked. */
++#define A9_DIAG_FEATURES ((1U<<0)|(1U<<1)|(1U<<4)|(1U<<6)|(1U<<13)|(1U<<15)|(1U<<19))
++struct a9_diag_id { uint32_t id; char name[A9_DIAG_MAX_NAME]; };
++struct a9_diag {
++    struct a9_diag_id ids[A9_DIAG_MAX_IDS];
++    unsigned count;
++    uint32_t features;
++    uint32_t local_node,remote_node,command_port;
++    uint32_t last_mask_len;
++    const char *step;int step_errno,step_emit;
++    int have_remote,handshake;
++};
++typedef int (*a9_emit)(const void *,size_t,void *);
++static uint32_t get32(const unsigned char *p)
++{ return p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24; }
++static void put32(unsigned char *p,uint32_t v)
++{ for(unsigned i=0;i<4;i++)p[i]=(unsigned char)(v>>(8*i)); }
++static int emit_packet(uint32_t cmd,const void *payload,size_t len,a9_emit send,void *ctx)
++{
++    unsigned char out[256];
++    if(len>sizeof(out)-8)return -1;
++    put32(out,cmd);put32(out+4,(uint32_t)len);memcpy(out+8,payload,len);
++    return send(out,len+8,ctx);
++}
++static int features(struct a9_diag *d,const unsigned char *p,size_t n,a9_emit send,void *ctx)
++{
++    unsigned char b[40]={0};
++    /* Real peripherals send mask_len 1..64 (run 11: 3 bytes), not only 4. The
++     * mask is read little-endian, zero-extended from min(mask_len,4) bytes. Bytes
++     * after the mask (padding or an extension) are tolerated and ignored. Every
++     * failure names its step (run 13: an unnamed features() failure kept the
++     * handshake unset). */
++    uint32_t mask_len,mask=0;
++    int emit=0;
++    d->step="-";d->step_errno=0;d->step_emit=0;
++    if(n<5){d->step="features-length";return -1;}
++    mask_len=get32(p);
++    if(mask_len<1||mask_len>64||mask_len>n-4){d->step="features-mask-len";return -1;}
++    for(uint32_t i=0;i<4&&i<mask_len;i++)mask|=(uint32_t)p[4+i]<<(8*i);
++    d->features=mask&A9_DIAG_FEATURES;d->last_mask_len=mask_len;
++#define A9_EMIT(call) do { emit++; errno=0; if(call) { d->step="features-emit";d->step_errno=errno;d->step_emit=emit;return -1; } } while(0)
++    /* Zero the two padding bytes in upstream's feature response. */
++    put32(b,4);put32(b+4,d->features);
++    A9_EMIT(emit_packet(8,b,10,send,ctx));
++    /* Upstream's initial message-mask state is INVALID (0); the A9
++     * no-client sink disables masks explicitly, reducing unsolicited logs.
++     * command11:stream1/statusALL_DISABLED1/mode0/range0,0/count0. */
++    memset(b,0,sizeof(b));b[0]=1;b[1]=1;
++    A9_EMIT(emit_packet(11,b,11,send,ctx));
++    /* No client can enable logs/events: statusALL_DISABLED and emptymask. */
++    A9_EMIT(emit_packet(9,b,11,send,ctx));
++    A9_EMIT(emit_packet(10,b,7,send,ctx));
++    /* Upstream mode1 real-time/sleep vote + streaming buffer policy. */
++    memset(b,0,sizeof(b));put32(b,1);put32(b+4,1);put32(b+8,1);
++    A9_EMIT(emit_packet(3,b,36,send,ctx));
++    memset(b,0,sizeof(b));put32(b,1);
++    A9_EMIT(emit_packet(17,b,6,send,ctx));
++#undef A9_EMIT
++    d->handshake=1;return 0;
++}
++static int diag_id(struct a9_diag *d,const unsigned char *p,size_t n,a9_emit send,void *ctx)
++{
++    size_t off=8;uint32_t ver,id=0;unsigned char out[8+A9_DIAG_MAX_NAME];
++    if(n<9)return -1;
++    ver=get32(p);
++    if(ver<1||ver>3)return -1;
++    if(ver>=2&&(d->features&(1U<<19))) {
++        if(n<13)return -1;
++        uint32_t f=get32(p+8);
++        if(f>64||f>n-13)return -1;
++        off=12+f;
++    }
++    const unsigned char *end=memchr(p+off,0,n-off);
++    if(!end||end!=p+n-1)return -1;
++    size_t size=(size_t)(end-(p+off))+1;
++    if(size<2||size>A9_DIAG_MAX_NAME)return -1;
++    for(unsigned i=0;i<d->count;i++)
++        if(!strcmp(d->ids[i].name,(const char *)p+off))id=d->ids[i].id;
++    if(!id) {
++        if(d->count>=A9_DIAG_MAX_IDS)return -1;
++        if(ver==3)id=get32(p+4);
++        else {
++            for(id=2;id<=255;id++) {
++                unsigned i;for(i=0;i<d->count;i++)if(d->ids[i].id==id)break;
++                if(i==d->count)break;
++            }
++        }
++        if(id<2||id>255)return -1;
++        for(unsigned i=0;i<d->count;i++)if(d->ids[i].id==id)return -1;
++        d->ids[d->count].id=id;memcpy(d->ids[d->count].name,p+off,size);d->count++;
++    }
++    put32(out,1);put32(out+4,id);memcpy(out+8,p+off,size);
++    return emit_packet(33,out,8+size,send,ctx);
++}
++static int control_valid(const unsigned char *p,size_t n)
++{
++    size_t off=0;
++    while(off<n) {
++        if(n-off<8)return 0;
++        uint32_t cmd=get32(p+off),len=get32(p+off+4);
++        if(len>n-off-8)return 0;
++        const unsigned char *v=p+off+8;
++        /* Registration is acknowledged by receipt, never stored/routed. */
++        if(cmd==1&&(len<12||len!=12+((size_t)v[8]|(size_t)v[9]<<8)*8))return 0;
++        if(cmd==27&&(len<10||len!=10+((size_t)v[8]|(size_t)v[9]<<8)*4))return 0;
++        if(cmd==8&&(len<5||get32(v)<1||get32(v)>64||get32(v)>len-4))return 0;
++        if(cmd==33&&len<9)return 0;
++        if(cmd==12&&len!=1&&len!=4)return 0;
++        off+=8+len;
++    }
++    return off==n;
++}
++static int control(struct a9_diag *d,const unsigned char *p,size_t n,a9_emit send,void *ctx)
++{
++    if(!n||n>A9_DIAG_MAX_PACKET||!control_valid(p,n))return -1;
++    for(size_t off=0;off<n;) {
++        uint32_t cmd=get32(p+off),len=get32(p+off+4);int r=0;
++        if(cmd==8)r=features(d,p+off+8,len,send,ctx);
++        if(cmd==33)r=diag_id(d,p+off+8,len,send,ctx);
++        if(r)return -1;
++        off+=8+len;
++    }
++    return 0;
++}
++/* Only trusted local nameserver metadata selects the modem peer. */
++static int command_server(struct a9_diag *d,const unsigned char *p,size_t n,
++                          uint32_t sender_node,uint32_t sender_port)
++{
++    if(sender_node!=d->local_node||sender_port!=QRTR_PORT_CTRL||n!=sizeof(struct qrtr_ctrl_pkt))return 0;
++    if(get32(p)!=QRTR_TYPE_NEW_SERVER||get32(p+4)!=A9_DIAG_SERVICE||get32(p+8)!=1)return 0;
++    uint32_t node=get32(p+12),port=get32(p+16);
++    if(node==d->local_node||node==QRTR_NODE_BCAST||!port||port==QRTR_PORT_CTRL)return -1;
++    if(d->have_remote&&(d->remote_node!=node||d->command_port!=port))return -1;
++    d->remote_node=node;d->command_port=port;d->have_remote=1;
++    return 1;
++}
++/* As upstream: a datagram may carry trailing bytes or several frames. Only the
++ * first frame is checked (start byte, version, a length that fits, end byte). */
++static int frame_valid(const unsigned char *p,size_t n)
++{
++    if(n<5||p[0]!=0x7e||p[1]!=1)return 0;
++    size_t len=p[2]|(size_t)p[3]<<8;
++    return len<=n-5&&p[4+len]==0x7e;
++}
++#ifndef A9_DIAG_TEST
++static int emit_socket(const void *p,size_t n,void *ctx)
++{
++    int fd=*(int *)ctx;ssize_t sent;
++    /* Flags 0: qrtr_sendmsg() rejects every flag but MSG_DONTWAIT with EINVAL (run 14), and
++     * SIGPIPE does not apply to datagram sockets anyway. */
++    do { sent=send(fd,p,n,0); } while(sent<0&&errno==EINTR);
++    return sent==(ssize_t)n?0:-1;
++}
++static int open_socket(void)
++{
++    int fd=qrtr_open(0);
++    struct sockaddr_qrtr q;socklen_t sl=sizeof(q);
++    if(fd<0||getsockname(fd,(void *)&q,&sl)||sl!=sizeof(q)||q.sq_family!=AF_QIPCRTR) { if(fd>=0)close(fd);return -1; }
++    q.sq_port=0;
++    if(bind(fd,(void *)&q,sizeof(q))) { if(fd>=0)close(fd);return -1; }
++    return fd;
++}
++static int service(int fd,unsigned instance,int publish)
++{ return publish?qrtr_publish(fd,A9_DIAG_SERVICE,instance,0):qrtr_new_lookup(fd,A9_DIAG_SERVICE,instance,0); }
++/* Fault metadata (never payload bytes): socket index, sender, length, QRTR
++ * control type or the DIAG command ids (not their contents) of the packet. */
++static struct { int socket; uint32_t node,port; long len; int ctrl; char cmds[48]; } fm={-1,0,0,0,-1,"-"};
++static struct a9_diag *fm_state;
++static void fm_packet(int i,const struct sockaddr_qrtr *q,ssize_t n,const unsigned char *buf)
++{
++    size_t used=0,off=0;unsigned count=0;
++    fm.socket=i;fm.node=q->sq_node;fm.port=q->sq_port;fm.len=(long)n;fm.ctrl=-1;strcpy(fm.cmds,"-");
++    if(n<4||n>A9_DIAG_MAX_PACKET)return;
++    if(q->sq_port==QRTR_PORT_CTRL){fm.ctrl=(int)get32(buf);return;}
++    if(i!=0)return;
++    while(count<8&&(size_t)n-off>=8&&used+12<sizeof(fm.cmds)) {
++        uint32_t cmd=get32(buf+off),len=get32(buf+off+4);
++        used+=(size_t)snprintf(fm.cmds+used,sizeof(fm.cmds)-used,"%s%u",count?",":"",cmd);count++;
++        if(len>(size_t)n-off-8)break;
++        off+=8+len;
++    }
++}
++/* Controller teardown channel: SIGUSR1 before it stops MPSS. Only afterwards may
++ * the modem going away (BYE, CMD DEL_SERVER/DEL_CLIENT, socket error) end the
++ * daemon cleanly; the same events before it remain faults. */
++static int fault(const char *reason);
++static volatile sig_atomic_t teardown;
++static void teardown_handler(int signo){(void)signo;teardown=1;}
++static int teardown_exit(const char *reason)
++{
++    fprintf(stderr,"A9_WIFI_TEARDOWN diag-router reason=%s\n",reason);
++    return 0;
++}
++/* Malformed packets from the ADMITTED node are dropped and counted (upstream
++ * logs and ignores them; nothing is ever routed). 16 in a row is a fault. */
++static unsigned dropped_total,drop_streak,drop_notes;
++static struct a9_diag *drop_state;
++static void drop_note(const char *reason)
++{
++    if(drop_notes>=8)return;
++    drop_notes++;
++    fprintf(stderr,"A9_WIFI_DIAG_NOTE dropped reason=%s socket=%d node=%u port=%u len=%ld ctrl=%d cmds=%s streak=%u total=%u "
++            "step=%s emit=%d errno=%d mask_len=%u\n",
++            reason,fm.socket,fm.node,fm.port,fm.len,fm.ctrl,fm.cmds,drop_streak,dropped_total,
++            drop_state&&drop_state->step?drop_state->step:"-",drop_state?drop_state->step_emit:0,
++            drop_state?drop_state->step_errno:0,drop_state?drop_state->last_mask_len:0);
++}
++/* First command-8 payload preview (feature bits, at most 16 bytes) for the evidence. */
++static int cmd8_done;
++static void cmd8_preview(const unsigned char *p,size_t n)
++{
++    size_t off=0;
++    if(cmd8_done)return;
++    while(n-off>=8) {
++        uint32_t cmd=get32(p+off),len=get32(p+off+4);
++        if(len>n-off-8)return;
++        if(cmd==8) {
++            char hex[40];size_t i,k=len<16?len:16;
++            for(i=0;i<k;i++)snprintf(hex+2*i,sizeof(hex)-2*i,"%02x",p[off+8+i]);
++            if(!k)strcpy(hex,"-");
++            cmd8_done=1;
++            fprintf(stderr,"A9_WIFI_DIAG first-cmd8 len=%u mask_len=%u bytes=%s\n",len,len>=4?get32(p+off+8):0,hex);
++            return;
++        }
++        off+=8+len;
++    }
++}
++/* Brace block, not do/while: `continue` must continue the per-socket loop. */
++#define DROP_PACKET(reason) { dropped_total++;drop_streak++;drop_note(reason); \
++    if(drop_streak>=16) { return fault("invalid-streak"); } \
++    continue; }
++#define FAULT_OR_TEARDOWN(reason) return teardown?teardown_exit(reason):fault(reason)
++static int fault(const char *reason)
++{
++    int e=errno;
++    fprintf(stderr,"A9_WIFI_FAULT diag-router %s\n",reason);
++    fprintf(stderr,"A9_WIFI_DIAG_FAULT reason=%s socket=%d node=%u port=%u len=%ld ctrl=%d cmds=%s "
++            "have_remote=%d remote_node=%u command_port=%u handshake=%d errno=%d\n",
++            reason,fm.socket,fm.node,fm.port,fm.len,fm.ctrl,fm.cmds,
++            fm_state?fm_state->have_remote:0,fm_state?fm_state->remote_node:0,
++            fm_state?fm_state->command_port:0,fm_state?fm_state->handshake:0,e);
++    return 1;
++}
++int main(int argc,char **argv)
++{
++    struct a9_diag d={0};struct pollfd f[4];int instances[4]={0,1,2,4};
++    struct sockaddr_qrtr control_peer={0};int have_control_peer=0;
++    (void)argv;fm_state=&d;drop_state=&d;if(argc!=1)return fault("argv");
++    for(unsigned i=0;i<4;i++) {
++        f[i].fd=open_socket();f[i].events=POLLIN;f[i].revents=0;
++        struct sockaddr_qrtr local;socklen_t sl=sizeof(local);
++        if(f[i].fd<0||getsockname(f[i].fd,(void *)&local,&sl)||sl!=sizeof(local)||local.sq_family!=AF_QIPCRTR)return fault("startup-socket");
++        if(!i)d.local_node=local.sq_node;
++        else if(local.sq_node!=d.local_node)return fault("startup-node-mismatch");
++        if(service(f[i].fd,instances[i],i!=1))return fault("startup-service");
++    }
++    fprintf(stderr,"A9_WIFI_LOCAL_NODE %u\n",d.local_node);
++    /* Constructor checked the jail/UID/cap/seccomp boundary before main.
++     * This is readiness of local publication requests, not remote handshake
++     * proof: coordinator must independently observe the nameserver rows. */
++    fprintf(stderr,"A9_WIFI_READY diag-router\n");
++    {
++        struct sigaction sa={0};sigemptyset(&sa.sa_mask);sa.sa_handler=teardown_handler;
++        if(sigaction(SIGUSR1,&sa,NULL))return fault("startup-sigaction");
++    }
++    for(int teardown_logged=0,first_control=0;;) {
++        if(teardown&&!teardown_logged){teardown_logged=1;fprintf(stderr,"A9_WIFI_DIAG teardown-signalled\n");}
++        for(unsigned i=0;i<4;i++)f[i].events=(d.have_remote||i==1)?POLLIN:0;
++        int r=poll(f,4,1000);
++        if(r<0) { if(errno==EINTR)continue;return fault("poll-error"); }
++        for(unsigned i=0;i<4;i++)if(f[i].revents) {
++            if(f[i].revents&(POLLERR|POLLHUP|POLLNVAL)) { fm.socket=(int)i;FAULT_OR_TEARDOWN("socket-error"); }
++            unsigned char buf[A9_DIAG_MAX_PACKET];struct sockaddr_qrtr q;
++            socklen_t sl=sizeof(q);ssize_t n=recvfrom(f[i].fd,buf,sizeof(buf),MSG_TRUNC,(void *)&q,&sl);
++            if(n<0) { if(errno==EINTR||errno==EAGAIN)continue;fm.socket=(int)i;FAULT_OR_TEARDOWN("recv-error"); }
++            if(sl!=sizeof(q)||q.sq_family!=AF_QIPCRTR||n>(ssize_t)sizeof(buf)) { fm.socket=(int)i;fm.len=(long)n;return fault("recv-sockaddr-or-size"); }
++            fm_packet((int)i,&q,n,buf);
++            if(q.sq_port==QRTR_PORT_CTRL) {
++                if(q.sq_node!=d.local_node)return fault("ctrl-source-not-local");
++                if(n!=(ssize_t)sizeof(struct qrtr_ctrl_pkt))return fault("ctrl-length");
++                uint32_t cmd=get32(buf);
++                if(cmd==QRTR_TYPE_BYE||cmd==QRTR_TYPE_DEL_CLIENT) {
++                    if(d.have_remote&&get32(buf+4)==d.remote_node&&
++                       (cmd==QRTR_TYPE_BYE||get32(buf+8)==d.command_port||
++                        (have_control_peer&&get32(buf+8)==control_peer.sq_port)))FAULT_OR_TEARDOWN(cmd==QRTR_TYPE_BYE?"peer-bye":"peer-del-client");
++                    continue;
++                }
++                if(i==1) {
++                    int found=command_server(&d,buf,(size_t)n,q.sq_node,q.sq_port);
++                    if(found<0)return fault("cmd-server-metadata");
++                    if(found) {
++                        struct sockaddr_qrtr target={.sq_family=AF_QIPCRTR,.sq_node=d.remote_node,.sq_port=d.command_port};
++                        if(connect(f[1].fd,(void *)&target,sizeof(target)))return fault("cmd-connect");
++                        fprintf(stderr,"A9_WIFI_DIAG command-peer-connected\n");
++                    }
++                    if(cmd==QRTR_TYPE_DEL_SERVER&&get32(buf+4)==A9_DIAG_SERVICE&&get32(buf+8)==1&&d.have_remote)FAULT_OR_TEARDOWN("cmd-del-server");
++                }
++                continue;
++            }
++            /* The CMD lookup and first control packet can race; leave
++             * datagrams queued on control/data sockets until metadata pins
++             * the remote. This iteration never guesses a node number. */
++            if(!d.have_remote)return fault("data-before-command-peer");
++            if(q.sq_node!=d.remote_node)return fault("data-wrong-node");
++            if(!i) {
++                if(!control_valid(buf,(size_t)n))DROP_PACKET("control-invalid");
++                if(!have_control_peer) {
++                    if(connect(f[0].fd,(void *)&q,sizeof(q)))return fault("control-connect");
++                    control_peer=q;have_control_peer=1;
++                }
++                if(q.sq_node!=control_peer.sq_node||q.sq_port!=control_peer.sq_port)return fault("control-peer-changed");
++                cmd8_preview(buf,(size_t)n);
++                int before=d.handshake;
++                if(control(&d,buf,(size_t)n,emit_socket,&f[0].fd))DROP_PACKET("control-handler");
++                drop_streak=0;
++                if(!first_control){first_control=1;fprintf(stderr,"A9_WIFI_DIAG first-control cmds=%s len=%ld\n",fm.cmds,fm.len);}
++                if(!before&&d.handshake)fprintf(stderr,"A9_WIFI_DIAG_HANDSHAKE features=0x%x mask_len=%u\n",d.features,d.last_mask_len);
++            } else {
++                /* No clients: consume and discard logs/DCI/commandresponses.
++                 * No payload reaches stdout/files or a command dispatcher. */
++                if(!frame_valid(buf,(size_t)n))DROP_PACKET("frame-invalid");
++                drop_streak=0;
++            }
++        }
++    }
++}
++#endif

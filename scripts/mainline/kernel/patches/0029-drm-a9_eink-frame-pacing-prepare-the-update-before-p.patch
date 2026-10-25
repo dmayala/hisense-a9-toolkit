@@ -1,0 +1,408 @@
+From 0977fd616a60d1e591905ac91b902d1e177c1c79 Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 11:37:12 -0700
+Subject: [PATCH] drm/a9_eink: frame pacing: prepare the update before
+ power-up, drive-gap counters, nice -10
+
+Boot 12 E5c: late +4, vbl_skips +6, max_gap 47.8 ms, after an all-zero
+frame (the interlock never fired). The update's set-up (request builder,
+step arrays, conditioning over 1.36 M pixels, pack) ran between the init
+flash and the update's first frame, with HV on, on the one boot CPU.
+
+- Engine: a9e_begin() split into a9e_prepare() (everything that does not
+  depend on the temperature bin) and a9e_start(bin); a9e_assume_white()
+  and a9e_init_end() let the update be prepared on the levels the init
+  flash leaves, before the flash runs. a9e_begin() == prepare + start;
+  host test: identical frames, levels and previous mode.
+- a9_update: a9e_prepare() now runs BEFORE the pipeline powers up; with HV
+  on only the init flash and the frames remain (a9e_start is a few
+  stores). An update refused after the prepare but before any frame
+  (power-up, temperature, bin) restores the levels it changed (the glass
+  is untouched). Dry runs keep their own save/restore. last.prep_us.
+- Real updates run at nice -10 (dry runs at 0): userspace on the boot CPU
+  (sampler, logger, shells) cannot delay a frame; the worker sleeps in
+  every commit, and the -20 kworkers (fp9929a max_on, emergency PWRUP drop)
+  still preempt it.
+- Transport: late_drive, vbl_skips_drive and max_gap_drive_us count only
+  the gaps during which a drive frame (front not null) was on the glass:
+  the gaps that add drive pulses. The totals stay.
+- status line 2: " late_drive %llu vbl_skips_drive %llu max_gap_drive_us
+  %u"; line 3: " prep_us %u".
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/a9_eink/a9_eink.h           |   6 +-
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c       | 114 ++++++++++++++++----
+ drivers/gpu/drm/a9_eink/a9_eink_engine.c    |  33 +++++-
+ drivers/gpu/drm/a9_eink/a9_eink_engine.h    |  18 ++++
+ drivers/gpu/drm/a9_eink/a9_eink_transport.c |  15 ++-
+ 5 files changed, 159 insertions(+), 27 deletions(-)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index c86c3f9ac..714a8a6d8 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -71,6 +71,9 @@ struct a9x_transport {
+ 	/* stats */
+ 	u64 frames, late, vbl_skips, commits_failed, stalls;
+ 	u32 max_gap_us;
++	/* the same, only for gaps with a DRIVE frame on the glass (front not null) */
++	u64 late_drive, vbl_skips_drive;
++	u32 max_gap_drive_us;
+ };
+ 
+ /*
+@@ -138,6 +141,7 @@ struct a9_eink {
+ 	bool init_pending, force_clear;		/* real pipeline */
+ 	bool dry_init_pending, dry_force_clear;	/* dry-run model */
+ 	u8 *dry_save_old, *dry_levels;
++	u8 *prep_save_old;			/* levels before a9e_prepare (real path) */
+ 	u32 dry_save_pre;
+ 	int dry_save_have_pre;
+ 	bool hv_fault;				/* forced HV off, state unknown */
+@@ -149,7 +153,7 @@ struct a9_eink {
+ 		u32 mode, pre, type, frames, steps;
+ 		int clear, bin, t1, t2, t1_raw, t2_raw, dry, aborted;
+ 		struct a9e_rect rect;
+-		u32 begin_us, total_us;
++		u32 begin_us, total_us, prep_us;
+ 		u8 sha[32];
+ 		bool sha_valid;
+ 	} last;
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index eef09d2c0..9102319fb 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -444,16 +444,19 @@ static ssize_t status_show(struct device *kdev, struct device_attribute *attr, c
+ 
+ 	return sysfs_emit(buf,
+ 		"enable %d waveform %d transport %d hv_on %d stall_fault %d template %d\n"
+-		"updates %llu aborts %llu frames %llu late %llu vbl_skips %llu commit_fail %llu max_gap_us %u\n"
++		"updates %llu aborts %llu frames %llu late %llu vbl_skips %llu commit_fail %llu max_gap_us %u"
++		" late_drive %llu vbl_skips_drive %llu max_gap_drive_us %u\n"
+ 		"last mode %#x pre %#x clear %d type %u bin %d t1 %d t2 %d frames %u steps %u dry %d aborted %d"
+-		" rect %d,%d-%d,%d begin_us %u total_us %u\n",
++		" rect %d,%d-%d,%d begin_us %u total_us %u prep_us %u\n",
+ 		enable, a9->wf_loaded, a9x_attached(t), t->on, atomic_read(&a9x_stall_fault),
+ 		a9->ct_loaded,
+ 		a9->updates, a9->aborts, t->frames, t->late, t->vbl_skips, t->commits_failed,
+-		t->max_gap_us, a9->last.mode, a9->last.pre, a9->last.clear, a9->last.type,
++		t->max_gap_us, t->late_drive, t->vbl_skips_drive, t->max_gap_drive_us,
++		a9->last.mode, a9->last.pre, a9->last.clear, a9->last.type,
+ 		a9->last.bin, a9->last.t1, a9->last.t2, a9->last.frames, a9->last.steps,
+ 		a9->last.dry, a9->last.aborted, a9->last.rect.x1, a9->last.rect.y1,
+-		a9->last.rect.x2, a9->last.rect.y2, a9->last.begin_us, a9->last.total_us);
++		a9->last.rect.x2, a9->last.rect.y2, a9->last.begin_us, a9->last.total_us,
++		a9->last.prep_us);
+ }
+ static DEVICE_ATTR_RO(status);
+ 
+@@ -718,7 +721,22 @@ static int a9_run_frames(struct a9_eink *a9, bool dry, struct sha256_ctx *sc)
+ 	return 0;
+ }
+ 
+-static void a9_update(struct a9_eink *a9, const struct a9_job *job)
++/*
++ * An update refused after its a9e_prepare() but before any frame (power-up
++ * refused, temperature, bin): the glass is untouched, so the levels go back
++ * to what they were (a9e_prepare may have set them to the last step's level,
++ * a9e_assume_white to 15). a9e_prepare changes nothing else that outlives
++ * the update: the previous mode only changes in a9e_end, and the step arrays
++ * it wrote are rewritten by the next prepare that reads them.
++ */
++static void a9_unprepare(struct a9_eink *a9, bool dry)
++{
++	mutex_lock(&a9->eng_lock);
++	memcpy(a9->e.old, dry ? a9->dry_save_old : a9->prep_save_old, A9T_N);
++	mutex_unlock(&a9->eng_lock);
++}
++
++static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ {
+ 	bool dry = job->dry;
+ 	bool hash = dry || READ_ONCE(trace);
+@@ -727,7 +745,9 @@ static void a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 	struct sha256_ctx sc;
+ 	ktime_t t0 = ktime_get();
+ 	unsigned int zt = READ_ONCE(zero_test);
+-	int t1, t2, bin, ret, steps, lo, hi;
++	bool prepared = false, init_white = false;
++	u32 pre = 0;
++	int t1, t2, bin, ret, steps = 0, lo, hi;
+ 
+ 	if (atomic_read(&a9x_stall_fault)) {
+ 		dev_err_ratelimited(a9->dev, "update refused: frame-progress fault latched (write 1 to a9_eink.clear_fault)\n");
+@@ -765,11 +785,47 @@ static void a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 			return;
+ 		}
+ 	}
++	/*
++	 * Frame pacing (boot 12: a 47.8 ms gap between the init flash and the
++	 * update): everything of the update that does not depend on the
++	 * temperature bin (request builder, step arrays, conditioning, pack)
++	 * runs here, BEFORE the pipeline powers up, so nothing heavy runs
++	 * between frames with HV on. The init flash, if pending, uses neither
++	 * the levels nor the arrays, so the update is prepared on the levels
++	 * the flash leaves (white) and the flash then ends without touching
++	 * them (a9e_init_end).
++	 */
++	if (!zt || dry) {
++		ktime_t p0 = ktime_get();
++
++		mutex_lock(&a9->eng_lock);
++		if (dry) {
++			/* a dry run must not change what the real pipeline believes */
++			memcpy(a9->dry_save_old, a9->e.old, A9T_N);
++			a9->dry_save_pre = a9->e.pre_mode;
++			a9->dry_save_have_pre = a9->e.have_pre;
++		} else {
++			memcpy(a9->prep_save_old, a9->e.old, A9T_N);
++		}
++		pre = a9->e.have_pre ? a9->e.pre_mode : job->mode;
++		init_white = *init_pending;
++		if (init_white)
++			a9e_assume_white(&a9->e);
++		/* the levels the update starts from (trace / E5a levels_before) */
++		if (hash)
++			memcpy(a9->trace_old, a9->e.old, A9T_N);
++		steps = a9e_prepare(&a9->e, job->mode, job->clear, &job->rect, job->mask);
++		prepared = true;
++		a9->last.prep_us = (u32)ktime_us_delta(ktime_get(), p0);
++		mutex_unlock(&a9->eng_lock);
++	}
+ 	if (!dry) {
+ 		ret = a9_power_on(a9);
+ 		if (ret) {
+ 			dev_warn_ratelimited(a9->dev, "update dropped: pipeline not available (%d)\n", ret);
+ 			a9->aborts++;
++			if (prepared)
++				a9_unprepare(a9, dry);
+ 			return;
+ 		}
+ 	}
+@@ -781,6 +837,8 @@ static void a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 		a9->aborts++;
+ 		if (!dry)
+ 			a9_power_off(a9);
++		if (prepared)
++			a9_unprepare(a9, dry);
+ 		return;
+ 	}
+ 	/*
+@@ -794,6 +852,8 @@ static void a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 			a9->last.t2_raw == INT_MIN ? "missing" : "ok");
+ 		a9->aborts++;
+ 		a9_power_off(a9);
++		if (prepared)
++			a9_unprepare(a9, dry);
+ 		return;
+ 	}
+ 
+@@ -833,12 +893,6 @@ static void a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 	}
+ 
+ 	mutex_lock(&a9->eng_lock);
+-	if (dry) {
+-		/* a dry run must not change what the real pipeline believes */
+-		memcpy(a9->dry_save_old, a9->e.old, A9T_N);
+-		a9->dry_save_pre = a9->e.pre_mode;
+-		a9->dry_save_have_pre = a9->e.have_pre;
+-	}
+ 	bin = a9t_temp_bin(&a9->e.st, t1, t2);
+ 	/* bin admission with this power-up's samples, before any frame */
+ 	if (!a9_bin_admitted(bin, &lo, &hi)) {
+@@ -851,6 +905,7 @@ static void a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 			a9->last.t2 = t2;
+ 			a9->last.frames = 0;
+ 			a9->last.aborted = 1;
++			memcpy(a9->e.old, a9->prep_save_old, A9T_N);	/* glass untouched */
+ 			mutex_unlock(&a9->eng_lock);
+ 			dev_err(a9->dev, "bin %d outside [%d,%d]: update refused\n", bin, lo, hi);
+ 			a9->aborts++;
+@@ -858,20 +913,19 @@ static void a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 			return;
+ 		}
+ 	}
+-	if (*init_pending) {
++	if (init_white) {
++		/* prepared on old := 15, what the flash leaves (INFERRED: glass white) */
+ 		a9e_begin_init(&a9->e, bin);
+ 		ret = a9_run_frames(a9, dry, NULL);
+-		a9e_end(&a9->e);	/* glass taken as white (INFERRED): old := 15 */
++		a9e_init_end(&a9->e);
+ 		if (ret)
+ 			goto abort;
+ 		*init_pending = false;
+ 	}
+-	if (hash) {
+-		memcpy(a9->trace_old, a9->e.old, A9T_N);
++	if (hash)
+ 		sha256_init(&sc);
+-	}
+-	a9->last.pre = a9->e.have_pre ? a9->e.pre_mode : job->mode;
+-	steps = a9e_begin(&a9->e, job->mode, job->clear, &job->rect, job->mask, bin);
++	a9->last.pre = pre;
++	a9e_start(&a9->e, bin);
+ 	a9->last.begin_us = (u32)ktime_us_delta(ktime_get(), t0);
+ 	ret = a9_run_frames(a9, dry, hash ? &sc : NULL);
+ 	if (ret)
+@@ -922,6 +976,24 @@ static void a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 		a9_power_off(a9);
+ }
+ 
++/*
++ * Frame pacing: a real update runs at nice -10 so that userspace on the one
++ * boot CPU (the sequencer's sampler/logger, shells) cannot delay a frame;
++ * the worker sleeps in every commit, and kworkers at -20 (fp9929a max_on,
++ * emergency PWRUP drop) still preempt it. Dry runs stay at nice 0.
++ */
++#define A9_NICE_DRIVE (-10)
++static void a9_update(struct a9_eink *a9, const struct a9_job *job)
++{
++	if (job->dry) {
++		__a9_update(a9, job);
++		return;
++	}
++	set_user_nice(current, A9_NICE_DRIVE);
++	__a9_update(a9, job);
++	set_user_nice(current, 0);
++}
++
+ /* ---- worker ------------------------------------------------------------------------ */
+ static bool a9_take_job(struct a9_eink *a9, struct a9_job *job)
+ {
+@@ -1226,11 +1298,13 @@ static int a9_probe(struct platform_device *pdev)
+ 	a9->ct = a9_vzalloc(dev, A9T_FRAME_BYTES);
+ 	a9->trace_old = a9_vzalloc(dev, A9T_N);
+ 	a9->dry_save_old = a9_vzalloc(dev, A9T_N);
++	a9->prep_save_old = a9_vzalloc(dev, A9T_N);
+ 	a9->dry_levels = a9_vzalloc(dev, A9T_N);
+ 	if (!a9->tables || !a9->shadow || !a9->e.grey || !a9->e.old || !a9->e.nlv ||
+ 	    !a9->e.pairs || !a9->e.arr[4] || !a9->e.arr[0] || !a9->e.arr[1] ||
+ 	    !a9->e.arr[2] || !a9->e.arr[3] || !a9->e.work || !a9->e.cache ||
+-	    !a9->frame || !a9->ct || !a9->trace_old || !a9->dry_save_old || !a9->dry_levels)
++	    !a9->frame || !a9->ct || !a9->trace_old || !a9->dry_save_old || !a9->dry_levels ||
++	    !a9->prep_save_old)
+ 		return -ENOMEM;
+ 	memset(a9->shadow, 0xff, A9T_N);	/* white, like the levels */
+ 
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_engine.c b/drivers/gpu/drm/a9_eink/a9_eink_engine.c
+index 58067f68e..ab1132ca7 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_engine.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_engine.c
+@@ -211,14 +211,23 @@ void a9e_begin_init(struct a9e_engine *e, int bin)
+ 	e->st.counter = 0;
+ }
+ 
+-int a9e_begin(struct a9e_engine *e, uint32_t mode, int clear, const struct a9e_rect *rect,
+-	      int mask, int bin)
++void a9e_assume_white(struct a9e_engine *e)
++{
++	memset(e->old, 15, A9T_N);	/* what a9e_end() of the init flash sets */
++}
++
++void a9e_init_end(struct a9e_engine *e)
++{
++	e->init = 0;	/* levels untouched: a9e_assume_white() ran before a9e_prepare() */
++}
++
++int a9e_prepare(struct a9e_engine *e, uint32_t mode, int clear, const struct a9e_rect *rect,
++		int mask)
+ {
+ 	uint32_t pre = e->have_pre ? e->pre_mode : mode;
+ 	size_t y;
+ 
+ 	e->init = 0;
+-	e->bin = bin;
+ 	e->clear = clear ? 1 : 0;
+ 	e->rect = *rect;
+ 	e->nframes = 0;
+@@ -246,9 +255,25 @@ int a9e_begin(struct a9e_engine *e, uint32_t mode, int clear, const struct a9e_r
+ 	}
+ 	a9t_pack(e->old, e->nlv, e->mode, e->clear, e->pairs);
+ 	e->type = (uint32_t)a9t_final_type(e->mode, e->clear);
++	return (int)e->req.count;
++}
++
++void a9e_start(struct a9e_engine *e, int bin)
++{
++	e->init = 0;
++	e->bin = bin;
++	e->nframes = 0;
+ 	a9t_update_begin(&e->st);
+ 	e->st.counter = 0;
+-	return (int)e->req.count;
++}
++
++int a9e_begin(struct a9e_engine *e, uint32_t mode, int clear, const struct a9e_rect *rect,
++	      int mask, int bin)
++{
++	int steps = a9e_prepare(e, mode, clear, rect, mask);
++
++	a9e_start(e, bin);
++	return steps;
+ }
+ 
+ static void mask_frame(uint8_t *out, const struct a9e_rect *rc)
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_engine.h b/drivers/gpu/drm/a9_eink/a9_eink_engine.h
+index d00f852e6..9f9765df6 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_engine.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink_engine.h
+@@ -161,6 +161,24 @@ void a9e_begin_init(struct a9e_engine *e, int bin);
+ int a9e_begin(struct a9e_engine *e, uint32_t mode, int clear, const struct a9e_rect *rect,
+ 	      int mask, int bin);
+ 
++/*
++ * The same update in two halves (frame pacing): a9e_prepare() is everything
++ * of a9e_begin() that does not depend on the temperature bin (request
++ * builder, step arrays, conditioning, pack, final type; the heavy part, tens
++ * of ms on the phone), so it can run BEFORE the pipeline powers up;
++ * a9e_start() then only sets the bin and rewinds the frame counters.
++ * a9e_begin() == a9e_prepare() + a9e_start(). Between the two, only the init
++ * flash may run (a9e_begin_init/a9e_frame/a9e_init_end): it uses neither the
++ * levels nor the arrays. An update preceded by the init flash is prepared on
++ * the levels the flash leaves (a9e_assume_white() first), and the flash then
++ * ends with a9e_init_end(), which does not touch the levels.
++ */
++int a9e_prepare(struct a9e_engine *e, uint32_t mode, int clear, const struct a9e_rect *rect,
++		int mask);
++void a9e_start(struct a9e_engine *e, int bin);
++void a9e_assume_white(struct a9e_engine *e);	/* old := 15, as a9e_end() of the flash */
++void a9e_init_end(struct a9e_engine *e);	/* end the flash, levels untouched */
++
+ /* Next drive frame into out (A9T_FRAME_BYTES). Only byte 0 of each word is
+  * written; bytes 1..3 must already hold the control template (a9tcon.h), so
+  * pre-fill out (and e->cache) with it once. Returns 1 = more frames follow,
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_transport.c b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+index 8bb79d508..a7ec33a0d 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_transport.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+@@ -438,15 +438,26 @@ static int a9x_commit_locked(struct a9x_transport *t, int idx, bool null)
+ 	now = ktime_get();
+ 	crtc = t->ms->crtc;
+ 	if (t->on && t->vbl_ref) {
++		/* during this gap the front buffer scanned: did it drive? */
++		bool drive = !t->front_null;
++
+ 		vbl = drm_crtc_vblank_count(crtc);
+-		if (vbl > t->last_vbl + 1)
++		if (vbl > t->last_vbl + 1) {
+ 			t->vbl_skips += vbl - t->last_vbl - 1;
++			if (drive)
++				t->vbl_skips_drive += vbl - t->last_vbl - 1;
++		}
+ 		t->last_vbl = vbl;
+ 		gap = (u32)ktime_us_delta(now, t->last_commit);
+ 		if (gap > t->max_gap_us)
+ 			t->max_gap_us = gap;
+-		if (t->period_us && gap > t->period_us + t->period_us / 2)
++		if (drive && gap > t->max_gap_drive_us)
++			t->max_gap_drive_us = gap;
++		if (t->period_us && gap > t->period_us + t->period_us / 2) {
+ 			t->late++;
++			if (drive)
++				t->late_drive++;
++		}
+ 	}
+ 	t->last_commit = now;
+ 	t->front = idx;

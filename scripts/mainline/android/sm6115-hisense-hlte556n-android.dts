@@ -1,0 +1,283 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
+/*
+ * Hisense A9 (HLTE556N) -- ANDROID variant of the mainline board DT.
+ * 2026-10-15. Status: builds (scripts/mainline/android/build-kernel.sh);
+ * never booted.
+ *
+ * Includes the diskless board DT unchanged (docs/mainline/sm6115-hisense-
+ * hlte556n.dts, copied next to this file in the build tree) and only adds UFS,
+ * so that Android's first-stage init can map super (system_b, vendor_b) and
+ * the other by-name partitions. Every reserved TLMM pin, the memory map, the
+ * USB, PON and E Ink safety settings of the original stay as they are. UFS
+ * uses no TLMM pin: no reset-gpios (as on every upstream SM6115 board), so the
+ * host never toggles the UFS device reset line (TLMM 113 "ufs_reset" stays
+ * reserved). sdhc_2 stays disabled (its cd pin 88 is also ktd3137-3 hwen).
+ * The included board DT supplies gpio-keys' default pinctrl: TLMM84 is a
+ * 2 mA GPIO input with pull-up, and PM6125 GPIO5 is input/pull-up/output-off.
+ *
+ * Rails, all MEASURED from the stock DTBO (golden edl_2026-10-14_110759
+ * dtbo_a, decompiled as ~/A9-build/mainline/sol-pmic/evidence/dtbo_0.dts;
+ * phandles resolved through its __fixups__, lines 2468-2495):
+ *   ufshc  vcc       = L24A  vcc-voltage-level 2950000..2960000, 600000 uA
+ *          vccq2     = L11A  600000 uA, vccq2-pwr-collapse-sup
+ *          vdd-hba   = gcc_ufs_phy_gdsc (upstream: power-domains in sm6115.dtsi)
+ *          vddp-ref-clk = L18A 1232000 uV, 100 uA
+ *   ufsphy vdda-phy  = L4A   51400 uA  (shared with QUSB2 vdd)
+ *          vdda-pll  = L12A  14200 uA
+ * (dtbo_0.dts fragment@34 lines 2214-2225, fragment@35 lines 2227-2245.)
+ * Stock base DTB LDO ranges (sol-pmic/evidence/base_0.dts): L4 488000-1000000
+ * (l.1306), L11 1704000-1952000 (l.1453), L12 1624000-1984000 (l.1474), L18
+ * 1104000-1312000 (l.1600), L24 2704000-3600000 (l.1726).
+ *
+ * Voltages are PINNED (min == max) so that the regulator core applies them
+ * (apply_uV) and the RPM driver sends them on enable; mainline ufshcd and the
+ * QMP PHY only enable and set loads, they never set a voltage. With a range,
+ * nothing would be sent and the rail would keep whatever XBL left (or, if the
+ * core ever picks one, the range minimum, e.g. L24 2.704 V).
+ *   L24 2952000: stock vcc-voltage-level 2950000-2960000, nearest PLDO step
+ *   L11 1800000: stock gives no level; 4.19 ufshcd defaults vccq2 to
+ *                1.65-1.95 V and would land on 1704000 (INFERRED); 1.8 V is the
+ *                UFS 2.x nominal and inside the stock range
+ *   L18 1232000: stock qcom,vddp-ref-clk-min/max-uV. Mainline ufs-qcom has no
+ *                vddp-ref-clk; L18 is attached as vdd-hba-supply instead, as on
+ *                sm6115p-lenovo-j606f / sm4250-oneplus-billie2 / fxtec-pro1x,
+ *                which keeps the ref-clk rail on while UFS is up
+ *   L4, L12:     unchanged from the board DT (928000-968000 for QUSB2, 1800000)
+ */
+
+#include "sm6115-hisense-hlte556n.dts"
+
+/* Upstream SM6115 RPM stats: dynamic offset at 0x04690014, two
+ * 48-byte vlow/vmin records. Keep the upstream 0x04690000 mapping;
+ * 0x045f0000 is the separate SMD message RAM, not these sleep records.
+ */
+&{/soc@0/sram@4690000} {
+	status = "okay";
+};
+
+&pm6125_l11 {
+	regulator-min-microvolt = <1800000>;
+	regulator-max-microvolt = <1800000>;
+};
+
+&pm6125_l18 {
+	regulator-min-microvolt = <1232000>;
+	regulator-max-microvolt = <1232000>;
+};
+
+&pm6125_l24 {
+	regulator-min-microvolt = <2952000>;
+	regulator-max-microvolt = <2952000>;
+};
+
+&ufs_mem_hc {
+	vcc-supply = <&pm6125_l24>;
+	vcc-max-microamp = <600000>;
+	vccq2-supply = <&pm6125_l11>;
+	vccq2-max-microamp = <600000>;
+	vdd-hba-supply = <&pm6125_l18>;
+	status = "okay";
+};
+
+&ufs_mem_phy {
+	vdda-phy-supply = <&pm6125_l4>;		/* stock L4A (board DT had L18 as a TODO) */
+	vdda-pll-supply = <&pm6125_l12>;	/* stock L12A */
+	status = "okay";
+};
+
+/* ---- BEGIN frontlight (verbatim body of scripts/mainline/frontlight/a9-frontlight.dtsi,
+ * sha256 3e86668ee94a7706971dc91873036ce0cbbbfb24fb5cce4680988a38ea2e63f9; Android build only, the diskless E3/E5 image stays as reviewed).
+ * Inlined because kernel/build.sh copies only this file into the tree. Checked by
+ * snapshot-kernel.sh. Reopens TLMM 4/5 (QUP1) and AW HWEN 83/85 relative to the
+ * board; optional KTD nodes stay disabled and GPIO88/101 reserved (2026-10-16). */
+#include <dt-bindings/gpio/gpio.h>
+
+&i2c0 {
+	status = "okay";
+
+	backlight@36 {
+		compatible = "hisense,a9-aw99703-frontlight";
+		reg = <0x36>;
+		enable-gpios = <&tlmm 85 GPIO_ACTIVE_HIGH>;
+		label = "a9:white:center";
+		default-state = "keep";
+		status = "okay";
+	};
+
+	backlight@35 {
+		/* Stock ABL and kernel cannot detect this optional IC on our A9. */
+		compatible = "hisense,a9-ktd3137-frontlight";
+		reg = <0x35>;
+		enable-gpios = <&tlmm 101 GPIO_ACTIVE_HIGH>;
+		label = "a9:white:edge";
+		default-state = "keep";
+		status = "disabled";
+	};
+};
+
+&i2c1 {
+	status = "okay";
+
+	backlight@36 {
+		compatible = "hisense,a9-aw99703-frontlight";
+		reg = <0x36>;
+		enable-gpios = <&tlmm 83 GPIO_ACTIVE_HIGH>;
+		label = "a9:warm:center";
+		default-state = "keep";
+		status = "okay";
+	};
+
+	backlight@35 {
+		/* Stock ABL and kernel cannot detect this optional IC on our A9. */
+		compatible = "hisense,a9-ktd3137-frontlight";
+		reg = <0x35>;
+		enable-gpios = <&tlmm 88 GPIO_ACTIVE_HIGH>;
+		label = "a9:warm:edge";
+		default-state = "keep";
+		status = "disabled";
+	};
+};
+
+&tlmm {
+	/* Reopen AW HWEN 83/85 and QUP1 SDA/SCL 4/5. Keep optional KTD pins shut. */
+	gpio-reserved-ranges = <3 1>, <8 4>, <14 5>, <20 1>, <22 3>, <27 4>, <32 1>,
+			       <35 1>, <37 33>, <72 8>, <87 10>, <98 2>, <101 7>, <109 5>;
+};
+
+/* Keep the stock-disabled SD controller off; GPIO88 remains reserved. */
+&sdhc_2 {
+	status = "disabled";
+};
+/* ---- END frontlight */
+
+/* SE0/SE1 use FIFO/internal SE-DMA with this boot firmware. Remove their
+ * unused external DMA suppliers so a failed GPI probe cannot defer the
+ * FP9929A's early shutdown of bootloader-held HV or the frontlight buses.
+ * SE2 below is GPI-only and keeps its DMA channels.
+ */
+&i2c0 {
+	/delete-property/ dmas;
+	/delete-property/ dma-names;
+};
+
+&i2c1 {
+	/delete-property/ dmas;
+	/delete-property/ dma-names;
+};
+
+/*
+ * ---- Touch (Atmel maXTouch @0x4b on i2c2 = qupv3_se2 = 4a88000), 2026-10-15.
+ * Android build only; the diskless DT (and its out-eink image) stays as is.
+ *
+ * GPI DMA, not FIFO: the board DT deletes dmas on &i2c2 for FIFO mode, but the
+ * SE reports FIFO_IF_DISABLE (QUP firmware loaded GSI-only by the boot chain),
+ * so i2c-qcom-geni takes the GPI path regardless of the DT and, without dmas,
+ * fails with "-ENODEV: Failed to get tx DMA ch" (MEASURED, the deleted dmas
+ * are absent from the run-8 DTB; the -ENODEV code is what dma_request_chan()
+ * returns for a node without dmas). FIFO mode is not selectable from Linux.
+ * Stock (golden base DTB, sol-pmic/evidence/base_0.dts l.10374-10388, 10464-
+ * 10480) drives this SE through the same GPI block: qcom,gpi-dma@4a00000,
+ * gpii-mask 0x0f, gpi-ee-offset 0x10000, SID 0xf6, i2c2 dmas on SE 2 tx/rx.
+ * Mainline sm6115.dtsi gpi_dma0 = the same block, dma-channel-mask 0xf, EE
+ * offset 0x10000 (sm6350 match data), SID 0xf6: no channel stock HLOS did not
+ * already own. CONFIG_QCOM_GPI_DMA=y (a9-android.config), so GPI-only SE2
+ * never waits on a DMA provider module.
+ *
+ * Pins as the stock pmx_ts_*_active states (base_0.dts l.10240-10290): CHG
+ * (TLMM 80, open drain) and RESET (TLMM 71) pulled up, 8 mA. Both pins are
+ * open in gpio-reserved-ranges.
+ */
+&gpi_dma0 {
+	status = "okay";
+};
+
+&i2c2 {
+	dmas = <&gpi_dma0 0 2 QCOM_GPI_I2C>,
+	       <&gpi_dma0 1 2 QCOM_GPI_I2C>;
+	dma-names = "tx", "rx";
+
+	touchscreen@4b {
+		pinctrl-0 = <&ts_int_default>, <&ts_reset_default>;
+		pinctrl-names = "default";
+	};
+};
+
+&tlmm {
+	ts_int_default: ts-int-default-state {
+		pins = "gpio80";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-pull-up;
+	};
+
+	ts_reset_default: ts-reset-default-state {
+		pins = "gpio71";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-pull-up;
+	};
+};
+/* ---- END touch */
+
+/* BEGIN stock Sunwave fingerprint control (scripts/mainline/fingerprint/a9-fingerprint.dtsi). */
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-3-Clause)
+/* Stock /soc/fp_fingerprint@0, adapted to gpiod + mainline pinctrl.
+ * QUP SE5 SPI pins 14..17 stay reserved and its Linux controller stays off.
+ */
+&{/} {
+	fingerprint {
+		compatible = "sunwave,fingerprint";
+		pinctrl-names = "default";
+		pinctrl-0 = <&sf_power_default &sf_reset_default
+			     &sf_irq_default &sf_logic_default>;
+		power-gpios = <&tlmm 100 0>;
+		reset-gpios = <&tlmm 19 0>;
+		irq-gpios = <&tlmm 97 0>;
+		logic-gpios = <&tlmm 70 0>;
+		wakeup-source;
+	};
+};
+
+&tlmm {
+	sf_power_default: sf-power-default-state {
+		pins = "gpio100";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+		output-high;
+	};
+	sf_reset_default: sf-reset-default-state {
+		pins = "gpio19";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+		output-high;
+	};
+	sf_irq_default: sf-irq-default-state {
+		pins = "gpio97";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+		input-enable;
+	};
+	sf_logic_default: sf-logic-default-state {
+		pins = "gpio70";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+		input-enable;
+	};
+};
+
+/* END stock Sunwave fingerprint control. */
+
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-3-Clause)
+/* Stock QSEECOM_CE1_CLK is a voter on RPM CE resource 0 at 192 MHz.
+ * SPI SE5/pins14..17 remain reserved to the sw_fp TA; no Linux SPI claim.
+ */
+&scm {
+	clocks = <&rpmcc 70>; /* RPM_SMD_CE1_CLK in mainline's rpmcc binding */
+	clock-names = "qsee";
+	assigned-clocks = <&rpmcc 70>;
+	assigned-clock-rates = <192000000>;
+};

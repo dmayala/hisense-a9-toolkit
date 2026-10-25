@@ -1,0 +1,8 @@
+; Candidate8: stock init.qcom.rc QCRIL internal IPC parent and label.
+(type vendor_qmuxd_socket)
+(roletype object_r vendor_qmuxd_socket)
+(typeattributeset file_type (vendor_qmuxd_socket))
+(typetransition vendor_init_202504 socket_device_202504 dir "qmux_radio" vendor_qmuxd_socket)
+(allow vendor_init_202504 vendor_qmuxd_socket (dir (read write create getattr setattr open search add_name remove_name rmdir)))
+(allow vendor_stock_rild vendor_qmuxd_socket (dir (read write getattr open search add_name remove_name lock)))
+(allow vendor_stock_rild vendor_qmuxd_socket (sock_file (create read write getattr setattr unlink)))

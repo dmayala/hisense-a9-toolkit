@@ -1,0 +1,3 @@
+; Candidate6: trusted init services retain their image-defined private library path.
+; Without noatsecure, SELinux forces AT_SECURE and bionic drops LD_LIBRARY_PATH.
+(allow init_202504 a9_stock_radio_domain (process (noatsecure)))

@@ -1,0 +1,5 @@
+/dev/sunwave_fp u:object_r:a9ml_fingerprint_device:s0
+/vendor/bin/hw/android\.hardware\.biometrics\.fingerprint@2\.1-service u:object_r:hal_fingerprint_default_exec:s0
+/vendor/lib64/a9-fingerprint(/.*)? u:object_r:vendor_file:s0
+/vendor/firmware/sw_fp\.(mdt|b[0-9][0-9]) u:object_r:a9ml_firmware_file:s0
+/data/vendor_de/0/fpdata(/.*)? u:object_r:fingerprint_vendor_data_file:s0

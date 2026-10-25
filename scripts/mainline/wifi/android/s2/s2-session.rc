@@ -1,0 +1,43 @@
+# Installed ONLY with A9_WIFI=1 A9_WIFI_ANDROID=1 A9_WIFI_SESSION=1 (opt-in image).
+# One attempt per boot: oneshot, no restart, no property persistence. Starting the
+# modem is the pre-authorised, bounded controller session of a9ml-wifi-session.sh,
+# not an init action; the firmware/module preparation and the confined servers
+# stay exactly those of init.a9ml-wifi.rc (prepare is run by the session script).
+# Automatic startup is the direct post-fs-data action in init.a9ml-wifi.rc,
+# immediately after its firmware preparation, before queued framework events.
+# Keep the explicit S2 request route for an already authorised manual request.
+# Neither path bypasses the starter/controller's one-attempt and PRE checks.
+
+on property:vendor.a9ml.wifi.s2.start=1 && property:ro.a9ml.wifi.session=1
+    setprop vendor.a9ml.wifi.session.state armed
+    start a9ml_wifi_session
+
+# Ordered end on a planned shutdown/reboot. The GSI's init.rc documents an `on shutdown`
+# trigger for device-specific actions before shutdown (MEASURED, v8 init.rc line 1321); the
+# exec_start below blocks init's action queue until the session script has seen the session
+# end (<=75 s) or its own timeout_period expires. Whether init's shutdown path waits that
+# long, and what an unplanned power loss does, are measured in S1 (runs/wifi-android-plan.md).
+# `sys.powerctl` only REQUESTS the end (non-blocking) in case the trigger never runs.
+on property:sys.powerctl=*
+    setprop vendor.a9ml.wifi.session.stop 1
+
+on shutdown
+    setprop vendor.a9ml.wifi.session.stop 1
+    exec_start a9ml_wifi_session_stop
+
+service a9ml_wifi_session_stop /system/bin/sh /vendor/bin/a9ml-wifi-session.sh stop
+    user root
+    group root
+    seclabel u:r:a9_wifi_radio:s0
+    disabled
+    oneshot
+    shutdown critical
+    timeout_period 90
+
+service a9ml_wifi_session /system/bin/sh /vendor/bin/a9ml-wifi-session.sh start
+    user root
+    group root
+    seclabel u:r:a9_wifi_radio:s0
+    disabled
+    oneshot
+    shutdown critical

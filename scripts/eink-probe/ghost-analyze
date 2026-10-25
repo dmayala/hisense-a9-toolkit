@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# ghost-analyze wrapper: ghost_ab_analyze.py with numpy+cv2 (system python if it has them, else nix-shell). Host-only.
+D=$(cd "$(dirname "$0")" && pwd)
+if python3 -c 'import numpy, cv2' 2>/dev/null; then exec python3 "$D/ghost_ab_analyze.py" "$@"; fi
+exec nix-shell -p 'python3.withPackages(p:[p.numpy p.opencv4 p.pillow])' \
+  --run "python3 $(printf '%q' "$D/ghost_ab_analyze.py") $(printf '%q ' "$@")"

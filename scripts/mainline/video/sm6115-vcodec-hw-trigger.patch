@@ -1,0 +1,18 @@
+From: Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
+Subject: clk: qcom: gcc-sm6115: Set HW_CTRL_TRIGGER for video GDSC
+
+Backport of the one-line provider change from the SM6115 video series:
+https://www.spinics.net/lists/kernel/msg6190927.html
+The Venus driver switches VCODEC0 between SW and HW control at runtime.
+Stock also declares qcom,support-hw-trigger for this GDSC.
+
+--- a/drivers/clk/qcom/gcc-sm6115.c
++++ b/drivers/clk/qcom/gcc-sm6115.c
+@@ -3218,6 +3218,7 @@ static struct gdsc gcc_vcodec0_gdsc = {
+ 	.pd = {
+ 		.name = "gcc_vcodec0",
+ 	},
++	.flags = HW_CTRL_TRIGGER,
+ 	.pwrsts = PWRSTS_OFF_ON,
+ };
+ 

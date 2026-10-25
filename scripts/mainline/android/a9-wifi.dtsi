@@ -1,0 +1,47 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
+/*
+ * A9 Android Wi-Fi DRAFT. Included only by the opt-in generated Wi-Fi DTS.
+ * Stock phandles: ICNSS L8/L16/L17/L23. L8 640 mV is stock-requested;
+ * L17 1304 mV is the stock shared BT core vote. L16 1800 mV and L23 3304 mV
+ * are candidate operating values within stock constraints, NOT measured live
+ * votes. All are representable 8 mV PM6125 steps. Review all shared consumers
+ * before any device trial; this draft provides no device-start authorization.
+ * MPSS remains stopped: sm6115-mpss-pas has auto_boot=false in this kernel.
+ * No pin, clock or reserved-memory change, and no Bluetooth enablement.
+ */
+&rpm_requests {
+	regulators-0 {
+		pm6125_l8: l8 {
+			regulator-min-microvolt = <640000>;
+			regulator-max-microvolt = <640000>;
+		};
+		pm6125_l16: l16 {
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+		};
+		pm6125_l17: l17 {
+			regulator-min-microvolt = <1304000>;
+			regulator-max-microvolt = <1304000>;
+		};
+		pm6125_l23: l23 {
+			regulator-min-microvolt = <3304000>;
+			regulator-max-microvolt = <3304000>;
+		};
+	};
+};
+
+&remoteproc_mpss {
+	firmware-name = "qcom/sm6115/hisense/hlte556n/modem.mdt";
+	status = "okay";
+};
+
+&wifi {
+	vdd-0.8-cx-mx-supply = <&pm6125_l8>;
+	vdd-1.8-xo-supply = <&pm6125_l16>;
+	vdd-1.3-rfa-supply = <&pm6125_l17>;
+	vdd-3.3-ch0-supply = <&pm6125_l23>;
+	qcom,calibration-variant = "Hisense_HLTE556N";
+	/* ath10k board-data directory, NOT an MPSS/WLAN executable. */
+	firmware-name = "hisense/hlte556n";
+	status = "okay";
+};

@@ -1,0 +1,15 @@
+--- a/v4l2/V4L2Encoder.cpp
++++ b/v4l2/V4L2Encoder.cpp
+@@ -812,8 +812,10 @@
+         ALOG_ASSERT(!planes.empty());
+         // If the input format is single-planar, then we only submit one buffer which contains
+         // all the color planes.
+-        size_t bytesUsed = allocationSize(format, mInputLayout->mCodedSize);
+-
++        // Use negotiated sizeimage, including stride/scanline/tail padding. The coded
++        // picture width can be smaller than bytesperline (e.g. Venus NV12 320 -> 384).
++        size_t bytesUsed = mInputLayout->mPlanes[0].mSize;
++
+         // TODO(crbug.com/901264): The way to pass an offset within a DMA-buf is not defined
+         // in V4L2 specification, so we abuse data_offset for now. Fix it when we have the
+         // right interface, including any necessary validation and potential alignment.

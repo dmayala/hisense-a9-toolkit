@@ -1,0 +1,5 @@
+{"phase": "root-ready", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"phase": "probe", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"phase": "delivery", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"phase": "network", "root_rc": 1, "timeout": false, "transport_rc": 0}
+{"phase": "framework-cleanup", "root_rc": 0, "timeout": false, "transport_rc": 0}

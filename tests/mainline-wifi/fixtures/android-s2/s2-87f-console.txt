@@ -1,0 +1,10 @@
+S2_DRIVER root_response=failed-or-invalid
+S2_DRIVER phase=store-pre result=failed
+S2_DRIVER root_response=failed-or-invalid
+S2_DRIVER cleanup=stop result=failed
+S2_DRIVER cleanup=post result=not-required reason=no-pre-no-start
+S2_DRIVER restore=passed
+S2_DRIVER slot_a=healthy
+S2_DRIVER stores_a=informational comparison=different-or-unavailable
+S2_DRIVER leak_check=2 result=not-delivered
+S2_DRIVER result=failed

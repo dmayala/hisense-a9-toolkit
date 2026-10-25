@@ -1,0 +1,181 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: "Claude Opus 5.5" <noreply@anthropic.com>
+Date: Sat, 17 Oct 2026 14:38:26 -0700
+Subject: [PATCH 0051] drm/a9_eink: convert the plane through a cached bounce
+ band
+
+The plane update converted the framebuffer column by column, one 1-4 byte
+load per pixel with a pitch-sized stride. The SF client-target buffers are
+write-combined (Normal-NC) vkms dumb buffers, so each load was an uncached bus
+read: input_stats measured 220 ms per full-frame commit (1,357,952 pixels,
+162 ns per pixel), inside the commit that gates SF's present fence.
+
+a9e_fb_to_grey_bounce() reads the source in storage order with memcpy (wide,
+back-to-back loads) into a cached 32-row band, then converts and stores
+transposed from that band. Output (grey bytes and the changed box) is
+bit-identical to a9e_fb_to_grey() (test/convert-equiv.c). Runtime parameter
+a9_eink.convert_bounce (default 1) selects the old direct path for A/B; an
+allocation failure of the 103 KiB scratch also selects it. Rail, HV, gate and
+fence logic is untouched.
+
+Applies on 0050 with or without the 0048 candidate.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/a9_eink/a9_eink.h        |  1 +
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c    | 13 ++++-
+ drivers/gpu/drm/a9_eink/a9_eink_engine.c | 69 ++++++++++++++++++++++++
+ drivers/gpu/drm/a9_eink/a9_eink_engine.h | 10 ++++
+ 4 files changed, 91 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index 798824c24..dee642e8f 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -202,6 +202,7 @@ struct a9_eink {
+ 	struct a9_input_stats input; /* shadow_lock, never used by power/drive */
+ 	atomic_t input_reserved, fence_reserved;
+ 	u8 *shadow;			/* landscape grey of the latest commit */
++	u8 *convert_scratch;		/* cached bounce band for the plane conversion (under shadow_lock) */
+ 	struct a9e_rect dirty;
+ 	bool clear_req, manual_clear_req, kick, busy, suspending, parked;
+ 	bool kms_teardown;		/* remove: a disable really disables (unlinks) */
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index 1c629ca21..3ceb109e1 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -98,6 +98,10 @@ static bool clear_shadow = true;
+ module_param(clear_shadow, bool, 0444);
+ MODULE_PARM_DESC(clear_shadow, "Initial Clear UI shadow curve (near-black text -> level 0); 0 = stock-compatible Clear bytes. Runtime: eink/clear_shadow");
+ 
++static bool convert_bounce = true;
++module_param(convert_bounce, bool, 0644);
++MODULE_PARM_DESC(convert_bounce, "Convert the plane through a cached bounce band read in storage order (same output as the direct per-pixel path; the source is write-combined). 0 = direct path, for A/B. Runtime");
++
+ static bool input_diagnostics;
+ module_param(input_diagnostics, bool, 0600);
+ MODULE_PARM_DESC(input_diagnostics, "Opt-in numeric input stats; first 4096 samples per device, no reset");
+@@ -339,8 +343,11 @@ static void a9_plane_atomic_update(struct drm_plane *plane, struct drm_atomic_co
+ 			full |= clip.x1 <= sx && clip.y1 <= sy &&
+ 				clip.x2 >= sx + A9E_FB_W && clip.y2 >= sy + A9E_FB_H;
+ 		}
+-		a9e_fb_to_grey(a9->shadow, src, fb->pitches[0], fmt,
+-			       clip.x1 - sx, clip.y1 - sy, clip.x2 - sx, clip.y2 - sy, &changed);
++		/* Called under shadow_lock, which also serializes convert_scratch.
++		 * No scratch (allocation failed at probe) or the param off: direct path. */
++		a9e_fb_to_grey_bounce(a9->shadow, src, fb->pitches[0], fmt,
++				      clip.x1 - sx, clip.y1 - sy, clip.x2 - sx, clip.y2 - sy, &changed,
++				      READ_ONCE(convert_bounce) ? a9->convert_scratch : NULL);
+ 	}
+ 	if (measure)
+ 		ns[2] = ktime_get_ns() - mark;
+@@ -2285,6 +2292,8 @@ static int a9_probe(struct platform_device *pdev)
+ 
+ 	a9->tables = a9_vzalloc(dev, sizeof(*a9->tables));
+ 	a9->shadow = a9_vzalloc(dev, A9T_N);
++	/* optional: without it the direct conversion path is used */
++	a9->convert_scratch = a9_vzalloc(dev, a9e_fb_scratch_bytes());
+ 	a9->e.grey = a9_vzalloc(dev, A9T_N);
+ 	a9->e.old = a9_vzalloc(dev, A9T_N);
+ 	a9->e.nlv = a9_vzalloc(dev, A9T_N);
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_engine.c b/drivers/gpu/drm/a9_eink/a9_eink_engine.c
+index d6f2b3a5a..ff11f3a8d 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_engine.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_engine.c
+@@ -203,6 +203,75 @@ void a9e_fb_to_grey(uint8_t *grey, const uint8_t *src, uint32_t pitch, enum a9e_
+ 		a9e_rect_union(changed, &ch);
+ }
+ 
++/* ---- framebuffer -> grey through a cached bounce band ----------------------------
++ * a9e_fb_to_grey() above walks the portrait source column by column: one 1-4
++ * byte load per pixel with a pitch-sized stride. On a write-combined (Normal-NC)
++ * dumb buffer every such load is its own uncached bus read (MEASURED on the A9:
++ * 220 ms per full-frame commit = 162 ns per pixel), and the strided walk also
++ * defeats any prefetch. This variant reads the source in storage order, row
++ * segments of the damage columns copied with memcpy (wide, back-to-back loads)
++ * into a small cached band of A9E_BAND_ROWS rows, then does the same per-pixel
++ * conversion and the same transposed store from that band. Output (grey bytes
++ * and *changed) is bit-identical to a9e_fb_to_grey(). scratch must hold
++ * a9e_fb_scratch_bytes(); NULL falls back to a9e_fb_to_grey(). */
++size_t a9e_fb_scratch_bytes(void)
++{
++	return (size_t)A9E_BAND_ROWS * A9E_FB_W * 4;
++}
++
++void a9e_fb_to_grey_bounce(uint8_t *grey, const uint8_t *src, uint32_t pitch, enum a9e_fmt fmt,
++			   int c1, int r1, int c2, int r2, struct a9e_rect *changed,
++			   uint8_t *scratch)
++{
++	int c, r, rb, bpp = fmt == A9E_FMT_R8 ? 1 : 4;
++	int i0 = fmt == A9E_FMT_BGRX ? 2 : 0, i2 = fmt == A9E_FMT_BGRX ? 0 : 2;
++	struct a9e_rect ch = { A9T_W, A9T_H, 0, 0 };
++	size_t bw;
++
++	if (!scratch) {
++		a9e_fb_to_grey(grey, src, pitch, fmt, c1, r1, c2, r2, changed);
++		return;
++	}
++	if (c1 < 0) c1 = 0;
++	if (r1 < 0) r1 = 0;
++	if (c2 > A9E_FB_W) c2 = A9E_FB_W;
++	if (r2 > A9E_FB_H) r2 = A9E_FB_H;
++	if (c1 >= c2 || r1 >= r2)
++		return;	/* the reference merges an empty box: nothing */
++	bw = (size_t)(c2 - c1) * bpp;
++	for (rb = r1; rb < r2; rb += A9E_BAND_ROWS) {
++		int n = r2 - rb < A9E_BAND_ROWS ? r2 - rb : A9E_BAND_ROWS;
++
++		for (r = 0; r < n; r++)
++			memcpy(scratch + (size_t)r * bw,
++			       src + (size_t)(rb + r) * pitch + (size_t)c1 * bpp, bw);
++		for (c = c1; c < c2; c++) {
++			int y = A9E_FB_W - 1 - c, rmin = n, rmax = -1;
++			uint8_t *o = grey + (size_t)y * A9T_W + rb;
++			const uint8_t *p = scratch + (size_t)(c - c1) * bpp;
++
++			for (r = 0; r < n; r++, p += bw) {
++				uint8_t v = bpp == 1 ? p[0] :
++					(uint8_t)((76u * p[i0] + 150u * p[1] + 30u * p[i2]) >> 8);
++
++				if (o[r] != v) {
++					o[r] = v;
++					if (r < rmin) rmin = r;
++					rmax = r;
++				}
++			}
++			if (rmax >= 0) {
++				if (rb + rmin < ch.x1) ch.x1 = rb + rmin;
++				if (rb + rmax + 1 > ch.x2) ch.x2 = rb + rmax + 1;
++				if (y < ch.y1) ch.y1 = y;
++				if (y + 1 > ch.y2) ch.y2 = y + 1;
++			}
++		}
++	}
++	if (changed)
++		a9e_rect_union(changed, &ch);
++}
++
+ /* Complete conditioned target damage, not the source-luma damage hint.
+  * Diffusion can propagate arbitrarily far beyond a one-pixel input change.
+  */
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_engine.h b/drivers/gpu/drm/a9_eink/a9_eink_engine.h
+index 53a288d37..e21a16a06 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_engine.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink_engine.h
+@@ -152,6 +152,16 @@ struct a9e_rect a9e_rect_full(void);
+ void a9e_fb_to_grey(uint8_t *grey, const uint8_t *src, uint32_t pitch, enum a9e_fmt fmt,
+ 		    int c1, int r1, int c2, int r2, struct a9e_rect *changed);
+ 
++/* Same result as a9e_fb_to_grey() (bit-identical grey and *changed), but the
++ * source is read in storage order into a cached band first: use it when src
++ * is write-combined or uncached memory. scratch: a9e_fb_scratch_bytes() bytes
++ * (cached, any alignment); NULL = plain a9e_fb_to_grey(). */
++#define A9E_BAND_ROWS 32
++size_t a9e_fb_scratch_bytes(void);
++void a9e_fb_to_grey_bounce(uint8_t *grey, const uint8_t *src, uint32_t pitch, enum a9e_fmt fmt,
++			   int c1, int r1, int c2, int r2, struct a9e_rect *changed,
++			   uint8_t *scratch);
++
+ /* Start the one-time init flash at bin. Frames via a9e_frame(). */
+ void a9e_begin_init(struct a9e_engine *e, int bin);
+ 

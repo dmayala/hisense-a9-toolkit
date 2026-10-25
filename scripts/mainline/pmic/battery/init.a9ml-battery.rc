@@ -1,0 +1,5 @@
+# B6 POC: DT selects the replacement, so the built-in observe driver stays unbound.
+# DWC3 now depends on a9-usb; bind before the USB gadget's init triggers.
+# /vendor is mounted by first-stage init, before this event is queued.
+on early-init
+    insmod /vendor/lib/modules/pmi632-battery.ko

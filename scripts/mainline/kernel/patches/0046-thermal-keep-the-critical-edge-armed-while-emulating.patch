@@ -1,0 +1,159 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 09:09:36 -0700
+Subject: [PATCH 0046] thermal: keep the critical edge armed while a
+ temperature is emulated (Hisense A9)
+
+Patch 0045 opens the sensor's trip window fully while a temperature is
+emulated. That stops the level-IRQ storm, but a REAL crossing of the
+critical trip then raises no interrupt: on a zone emulated below its
+passive trip nothing polls, so it is seen only at the next emul_temp
+write, at the sensor's own clamp (tsens: 120 C) or by the hardware
+critical/watchdog path.
+
+__thermal_zone_get_temp() substitutes the emulated value only while the
+real one is below the (first) critical trip. Record that trip as the top
+of the window whenever the current sample was emulated, and INT_MAX
+otherwise (every sample starts as real). thermal_zone_set_trips() then
+programs (-INT_MAX, crit) while emulating: it contains the real value by
+construction (no storm), and a real crossing of crit asserts the
+interrupt. That update reads the real value, which is not emulated, so
+the window opens fully and the critical trip is handled as without
+emulation (including 0043's confirmation). A plain high = crit without
+the per-sample record would storm again once real >= crit.
+
+Inert unless emul_temperature != 0. Only the two set_trips callers read
+the record, both in the same tz->lock section as the sample they follow.
+
+KUnit: emulated 50 C (below passive, no polling) with a real excursion to
+111 C: the interrupt is asserted, one update opens the window, the
+critical trip acts once, the zone reports the real 111 C. Fails without
+this patch (no interrupt, rounds 0, critical never acts) and with a stale
+record (rounds 100: the storm).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/thermal/thermal_confirm_kunit.c | 32 ++++++++++++++++++++++++-
+ drivers/thermal/thermal_core.h          |  1 +
+ drivers/thermal/thermal_helpers.c       |  8 ++++++-
+ drivers/thermal/thermal_trip.c          |  9 ++++++-
+ 4 files changed, 47 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/thermal/thermal_confirm_kunit.c b/drivers/thermal/thermal_confirm_kunit.c
+index 9df5de9e8..43c95aece 100644
+--- a/drivers/thermal/thermal_confirm_kunit.c
++++ b/drivers/thermal/thermal_confirm_kunit.c
+@@ -246,7 +246,7 @@ static void ke_passive_no_irq_storm(struct kunit *test)
+ 		thermal_zone_device_update(z->tz, THERMAL_EVENT_UNSPECIFIED);
+ 	KUNIT_EXPECT_EQ(test, storm, 0);
+ 	KUNIT_EXPECT_EQ(test, z->last_low, -INT_MAX);
+-	KUNIT_EXPECT_EQ(test, z->last_high, INT_MAX);
++	KUNIT_EXPECT_EQ(test, z->last_high, 110000);		/* critical edge kept armed */
+ 	KUNIT_EXPECT_EQ(test, z->tz->temperature, 92000);	/* emulation still evaluated */
+ 	ke_emulate(z->tz, 0);					/* clear */
+ 	KUNIT_EXPECT_FALSE(test, ke_irq_asserted(z));
+@@ -273,9 +273,39 @@ static void ke_critical_no_irq_storm(struct kunit *test)
+ 	ke_emulate(z->tz, 0);
+ }
+ 
++/*
++ * Emulating below the passive trip (no polling at all) while the REAL
++ * temperature crosses the critical trip: the interrupt fires, the update
++ * reads the real value, the window opens (one round, no storm) and the
++ * critical trip acts (after 0043's confirmation, by its polling).
++ */
++static void ke_real_critical_seen_while_emulating(struct kunit *test)
++{
++	struct kt_zone *z = test->priv;
++	int i, rounds = 0;
++
++	ke_emulate(z->tz, 50000);
++	KUNIT_EXPECT_FALSE(test, ke_irq_asserted(z));
++	KUNIT_EXPECT_EQ(test, z->last_high, 110000);
++	KUNIT_EXPECT_EQ(test, z->tz->temperature, 50000);
++	WRITE_ONCE(z->temp, 111000);				/* real excursion */
++	KUNIT_EXPECT_TRUE(test, ke_irq_asserted(z));		/* the edge is armed */
++	for (i = 0; i < 100 && ke_irq_asserted(z); i++, rounds++)
++		thermal_zone_device_update(z->tz, THERMAL_EVENT_UNSPECIFIED);
++	KUNIT_EXPECT_EQ(test, rounds, 1);
++	KUNIT_EXPECT_EQ(test, z->last_high, INT_MAX);
++	for (i = 0; i < 30 && !z->crit_calls; i++)
++		msleep(100);
++	KUNIT_EXPECT_EQ(test, z->crit_calls, 1);
++	KUNIT_EXPECT_EQ(test, z->tz->temperature, 111000);	/* the real value, not 50 C */
++	WRITE_ONCE(z->temp, 39000);
++	ke_emulate(z->tz, 0);
++}
++
+ static struct kunit_case ke_cases[] = {
+ 	KUNIT_CASE_SLOW(ke_passive_no_irq_storm),
+ 	KUNIT_CASE_SLOW(ke_critical_no_irq_storm),
++	KUNIT_CASE_SLOW(ke_real_critical_seen_while_emulating),
+ 	{}
+ };
+ 
+diff --git a/drivers/thermal/thermal_core.h b/drivers/thermal/thermal_core.h
+index 9e238d85d..775f3cb40 100644
+--- a/drivers/thermal/thermal_core.h
++++ b/drivers/thermal/thermal_core.h
+@@ -135,6 +135,7 @@ struct thermal_zone_device {
+ 	int temperature;
+ 	int last_temperature;
+ 	int emul_temperature;
++	int emul_trip_high;		/* trip window top while the current sample is emulated */
+ 	int passive;
+ 	int crit_confirm;		/* counted samples, CONFIG_THERMAL_CRITICAL_CONFIRM_SAMPLES */
+ 	unsigned long crit_last;	/* jiffies of the last counted sample */
+diff --git a/drivers/thermal/thermal_helpers.c b/drivers/thermal/thermal_helpers.c
+index b1152ad7a..831f1ded4 100644
+--- a/drivers/thermal/thermal_helpers.c
++++ b/drivers/thermal/thermal_helpers.c
+@@ -87,6 +87,9 @@ int __thermal_zone_get_temp(struct thermal_zone_device *tz, int *temp)
+ 
+ 	lockdep_assert_held(&tz->lock);
+ 
++	/* the sample below is real until proven emulated (thermal_zone_set_trips) */
++	tz->emul_trip_high = INT_MAX;
++
+ 	ret = tz->ops.get_temp(tz, temp);
+ 
+ 	if (IS_ENABLED(CONFIG_THERMAL_EMULATION) && tz->emul_temperature) {
+@@ -104,8 +107,11 @@ int __thermal_zone_get_temp(struct thermal_zone_device *tz, int *temp)
+ 		 * is below the critical temperature so that the emulation code
+ 		 * cannot hide critical conditions.
+ 		 */
+-		if (!ret && *temp < crit_temp)
++		if (!ret && *temp < crit_temp) {
+ 			*temp = tz->emul_temperature;
++			/* the real value is below crit_temp: keep that edge armed */
++			tz->emul_trip_high = crit_temp;
++		}
+ 	}
+ 
+ 	if (ret)
+diff --git a/drivers/thermal/thermal_trip.c b/drivers/thermal/thermal_trip.c
+index f501b1042..473e7c32f 100644
+--- a/drivers/thermal/thermal_trip.c
++++ b/drivers/thermal/thermal_trip.c
+@@ -71,10 +71,17 @@ void thermal_zone_set_trips(struct thermal_zone_device *tz, int low, int high)
+ 	 * then re-evaluated only by the zone's polling (passive polling once a
+ 	 * passive trip is crossed, else only at the emul_temp write); the real
+ 	 * window is programmed again when emulation is cleared.
++	 *
++	 * The top edge stays at the critical trip whenever the current sample
++	 * was emulated: __thermal_zone_get_temp() emulates only while the REAL
++	 * value is below that trip, so the window still contains the real
++	 * value (no storm), and a real crossing of the trip raises the
++	 * interrupt; the update then reads the real value, which is not
++	 * emulated, and the window opens fully (emul_trip_high = INT_MAX).
+ 	 */
+ 	if (IS_ENABLED(CONFIG_THERMAL_EMULATION) && tz->emul_temperature) {
+ 		low = -INT_MAX;
+-		high = INT_MAX;
++		high = tz->emul_trip_high;
+ 	}
+ 
+ 	/* No need to change trip points */
+-- 
+2.51.0
+

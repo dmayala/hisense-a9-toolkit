@@ -1,0 +1,4 @@
+# Included in the shared plain vendor hardware rc. Only Android completion
+# disarms the independent kernel boot deadline; adbd appearing is insufficient.
+on property:sys.boot_completed=1
+    write /sys/module/a9_boot_deadline/parameters/boot_completed 1

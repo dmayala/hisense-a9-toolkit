@@ -1,0 +1,254 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
+/*
+ * Hisense A9 (HLTE556N) -- thermal mitigation for the mainline board DT.
+ * 2026-10-15, sensors worktree. Status: compiles offline (thermal/check-dt.sh);
+ * NOT booted. Opt-in: A9_THERMAL=1 scripts/mainline/kernel/build.sh appends
+ * `#include "a9-thermal.dtsi"` to the build-tree copy of the board DT (the
+ * repository DTS files stay unchanged). docs: runs/sensors.md, section 3.
+ *
+ * What it adds (everything read-only on the hardware except the ADC
+ * conversions the upstream qcom-spmi-adc5 driver already performs for
+ * xo_therm and the E Ink thermistor):
+ *  1. #cooling-cells on cpu0 (silver policy) and cpu4 (gold policy): with
+ *     CPUFREQ_IS_COOLING_DEV (qcom-cpufreq-hw) the policy CPU's node becomes
+ *     a cpufreq cooling device. Only exists when cpufreq runs (the B1 cmdline,
+ *     no cpufreq.off=1); with cpufreq.off=1 the maps below stay unbound and
+ *     only the critical trips act.
+ *  2. cooling-maps on the existing upstream tsens CPU zones (trips unchanged:
+ *     passive 90/95 C, critical 110 C) plus passive polling, so step_wise
+ *     keeps stepping while a zone is above its trip. The stock kernel acts at
+ *     110 C by isolating cores (base DT cpu-1-*-step / cpuss-*-step); cpufreq
+ *     at 90/95 C is the mainline equivalent and acts earlier.
+ *  3. PM6125 ADC channels the stock DT defines and the upstream pm6125.dtsi
+ *     lacks: pa_therm0 (0x4d), quiet_therm (0x4e), camera_flash_therm (0x52),
+ *     emmc_ufs_therm (0x53), all 100k pull-up, ratiometric, 200 us settle,
+ *     as stock (base_0.dts lines 4773-4801). PMI632 0x53 skin_therm as stock
+ *     (base_0.dts 4304; stock zone chg-skin-therm-usr). Read-only.
+ *  4. A skin zone on quiet_therm (generic-adc-thermal, polled): stock's
+ *     quiet-therm-step throttles gold at 40 C, silver at 41 C, GPU at 43 C
+ *     to a frequency FLOOR (downstream relative limits MAX-4/MAX-5, base DT).
+ *     Mainline cannot express "max - n" in DT (the number of cpufreq states
+ *     is not known offline), so the maps are THERMAL_NO_LIMIT with step_wise
+ *     and the trips sit higher than stock: 45 C gold, 48 C silver. PROPOSAL
+ *     values; check the idle and charging quiet_therm readings on the phone
+ *     first (runs/sensors.md).
+ *  5. No PMI632 thermal zone: the PMI632 is the charger PMIC under the
+ *     observe policy (scripts/mainline/pmic) and every extra ADC read there is
+ *     a conversion write; skin_therm (0x53) is only declared, so a manual read
+ *     (in_temp_skin_therm_input) can validate it. The E Ink thermistor (0x54)
+ *     stays read by a9_eink only.
+ */
+
+#include <dt-bindings/iio/qcom,spmi-vadc.h>
+#include <dt-bindings/thermal/thermal.h>
+
+&cpu0 {
+	#cooling-cells = <2>;
+};
+
+&cpu4 {
+	#cooling-cells = <2>;
+};
+
+&pm6125_adc {
+	channel@4d {
+		reg = <ADC5_AMUX_THM1_100K_PU>;
+		qcom,ratiometric;
+		qcom,hw-settle-time = <200>;
+		qcom,pre-scaling = <1 1>;
+		label = "pa_therm0";
+	};
+
+	channel@4e {
+		reg = <ADC5_AMUX_THM2_100K_PU>;
+		qcom,ratiometric;
+		qcom,hw-settle-time = <200>;
+		qcom,pre-scaling = <1 1>;
+		label = "quiet_therm";
+	};
+
+	channel@52 {
+		reg = <ADC5_GPIO1_100K_PU>;
+		qcom,ratiometric;
+		qcom,hw-settle-time = <200>;
+		qcom,pre-scaling = <1 1>;
+		label = "camera_flash_therm";
+	};
+
+	channel@53 {
+		reg = <ADC5_GPIO2_100K_PU>;
+		qcom,ratiometric;
+		qcom,hw-settle-time = <200>;
+		qcom,pre-scaling = <1 1>;
+		label = "emmc_ufs_therm";
+	};
+};
+
+&pmi632_adc {
+	channel@53 {
+		reg = <ADC5_GPIO2_100K_PU>;
+		qcom,ratiometric;
+		qcom,hw-settle-time = <200>;
+		qcom,pre-scaling = <1 1>;
+		label = "skin_therm";
+	};
+};
+
+/ {
+	/* generic-adc-thermal: a polled thermal sensor on an IIO channel (m degC, processed) */
+	a9_quiet_therm: thermal-sensor-quiet-therm {
+		compatible = "generic-adc-thermal";
+		#thermal-sensor-cells = <0>;
+		io-channels = <&pm6125_adc ADC5_AMUX_THM2_100K_PU>;
+		io-channel-names = "sensor-channel";
+	};
+};
+
+&{/thermal-zones} {
+	/* stock name quiet-therm (thermal-engine BATTERY_CHARGING_CTL, quiet-therm-step) */
+	quiet-therm-thermal {
+		polling-delay-passive = <2000>;
+		polling-delay = <10000>;
+		thermal-sensors = <&a9_quiet_therm>;
+
+		trips {
+			quiet_gold: trip-gold {
+				temperature = <45000>;
+				hysteresis = <3000>;
+				type = "passive";
+			};
+
+			quiet_silver: trip-silver {
+				temperature = <48000>;
+				hysteresis = <3000>;
+				type = "passive";
+			};
+		};
+
+		cooling-maps {
+			map0 {
+				trip = <&quiet_gold>;
+				cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+			};
+
+			map1 {
+				trip = <&quiet_silver>;
+				cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+			};
+		};
+	};
+};
+
+/* gold cores, per core and per pair (tsens 6-11): cpufreq cooling of the gold policy */
+&{/thermal-zones/cpu4-thermal} {
+	polling-delay-passive = <250>;
+
+	cooling-maps {
+		map0 {
+			trip = <&cpu4_alert0>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+
+		map1 {
+			trip = <&cpu4_alert1>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+&{/thermal-zones/cpu5-thermal} {
+	polling-delay-passive = <250>;
+
+	cooling-maps {
+		map0 {
+			trip = <&cpu5_alert0>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+
+		map1 {
+			trip = <&cpu5_alert1>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+&{/thermal-zones/cpu6-thermal} {
+	polling-delay-passive = <250>;
+
+	cooling-maps {
+		map0 {
+			trip = <&cpu6_alert0>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+
+		map1 {
+			trip = <&cpu6_alert1>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+&{/thermal-zones/cpu7-thermal} {
+	polling-delay-passive = <250>;
+
+	cooling-maps {
+		map0 {
+			trip = <&cpu7_alert0>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+
+		map1 {
+			trip = <&cpu7_alert1>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+&{/thermal-zones/cpu45-thermal} {
+	polling-delay-passive = <250>;
+
+	cooling-maps {
+		map0 {
+			trip = <&cpu45_alert0>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+
+		map1 {
+			trip = <&cpu45_alert1>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+&{/thermal-zones/cpu67-thermal} {
+	polling-delay-passive = <250>;
+
+	cooling-maps {
+		map0 {
+			trip = <&cpu67_alert0>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+
+		map1 {
+			trip = <&cpu67_alert1>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+/* silver cluster (tsens 12) */
+&{/thermal-zones/cpu0123-thermal} {
+	polling-delay-passive = <250>;
+
+	cooling-maps {
+		map0 {
+			trip = <&cpu0123_alert0>;
+			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+
+		map1 {
+			trip = <&cpu0123_alert1>;
+			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};

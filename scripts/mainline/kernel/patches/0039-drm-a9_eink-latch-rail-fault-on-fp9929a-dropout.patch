@@ -1,0 +1,357 @@
+From e2e5d58d2e364629248f0d22c4026495d3ec11af Mon Sep 17 00:00:00 2001
+From: dmayala <dmayala@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 20:42:33 -0700
+Subject: [PATCH 0039] drm/a9_eink: latch a rail fault when the FP9929A drops
+ out with the pipeline on
+
+Run 11: at an update's start a9_hv_is_on() was false with the transport
+on ("FP9929A dropped out while the pipeline was on"). The pipeline was
+powered down, but the next update re-powered the FP9929A and submitted a
+partial (clear=0) frame before the userspace watcher closed the gates.
+The failed conjunct was not recorded.
+
+Capture the failed sample and the transport state before any shutdown in
+one line and in the eink status (rail_* fields): getter return, the raw
+PG read (1, 0 or -errno; -ENODATA when the lookup failed), FP9929A on,
+energized, forced and emergency state, transport on/gone/front_null/
+interlock armed, power-session age and time since the last waveform run.
+fp9929a_get_status() now reports the single PG read pg_good comes from
+(pg_raw) and the energized state.
+
+Latch a9x_rail_fault synchronously, set enable = 0 and owe a full Clear,
+then run the existing ordered neutral/power-down (emergency HV removal if
+the neutral fails, forced regulator off if DPMS off fails). Any latched
+fault (stall or rail) refuses power-up, real updates, run_ring and every
+drive commit; an enable-only write cannot bypass it. Only writing 1 to
+a9_eink.clear_fault clears it; the first real update afterwards is a full
+Clear (force_clear stays set until a real update completes).
+
+No debounce, retry or automatic recovery. Frame-progress interlock, PMIC
+max_on_ms/min_off_ms, bin admission, starvation latch and prefill K=12
+are unchanged. Apply after 0001-0038.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/a9_eink/a9_eink.h           | 29 ++++++
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c       | 99 ++++++++++++++++++---
+ drivers/gpu/drm/a9_eink/a9_eink_guard.c     |  9 +-
+ drivers/gpu/drm/a9_eink/a9_eink_transport.c |  4 +-
+ drivers/regulator/fp9929a.c                 |  5 +-
+ include/linux/regulator/fp9929a.h           |  3 +
+ 6 files changed, 129 insertions(+), 20 deletions(-)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index a4450e0ee..fbd0b2150 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -134,6 +134,20 @@ void a9r_stop(struct a9_ring *r);
+  * by writing 1 to a9_eink.clear_fault (a9_eink_guard.c).
+  */
+ extern atomic_t a9x_stall_fault;
++/*
++ * Rail fault (patch 0039): FP9929A on/PG not valid at an update's start while
++ * the pipeline was on. Latched before the power-down; refuses every drive
++ * commit, power-up and real update until 1 is written to a9_eink.clear_fault.
++ * There is no automatic recovery; after the clear the next real update is a
++ * full Clear (force_clear stays set until one completes).
++ */
++extern atomic_t a9x_rail_fault;
++
++/* any latched fault: no power-up, no real update, no drive commit */
++static inline bool a9x_fault_latched(void)
++{
++	return atomic_read(&a9x_stall_fault) || atomic_read(&a9x_rail_fault);
++}
+ /* bin admission (a9_eink.bin_min/bin_max): true if bin is in [*lo, *hi] */
+ bool a9_bin_admitted(int bin, int *lo, int *hi);
+ 
+@@ -193,6 +207,21 @@ struct a9_eink {
+ 	u32 dry_save_pre;
+ 	int dry_save_have_pre;
+ 	bool hv_fault;				/* forced HV off, state unknown */
++	/* patch 0039: end of the last real waveform run (0 = none) and its result */
++	ktime_t wf_end;
++	int wf_ret;
++	/* patch 0039: state captured at the last rail fault, BEFORE its power-down */
++	struct {
++		u64 count;			/* rail faults this boot */
++		s64 at_ms;			/* ktime of the capture */
++		int getter;			/* fp9929a_get_status() return */
++		int pg_raw;			/* raw PG read, -errno; -ENODATA: not read */
++		bool on, energized, forced, emergency, pg_valid, pg_good;
++		bool tx_on, tx_gone, front_null, armed;
++		s64 session_ms;			/* since the transport power-up, -1 off */
++		s64 since_wf_ms;		/* since the last waveform run, -1 none */
++		int wf_ret;			/* that run's result */
++	} rail;
+ 	struct notifier_block pm_nb;
+ 	struct task_struct *thread;
+ 
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index 0a1e4c4e4..6a52157a1 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -41,7 +41,9 @@
+  * zero commit at power-down, drops the FP9929A rails from hardirq context
+  * (fp9929a_emergency_off), sets enable = 0 and latches a fault: updates are
+  * refused until 1 is written to a9_eink.clear_fault (and fp9929a.clear_fault
+- * for the PMIC). Real updates also run only inside the temperature-bin
++ * for the PMIC). The same holds for a rail fault (patch 0039): the FP9929A
++ * not on with PG good at an update's start while the pipeline is on latches,
++ * powers down, and the first real update after the clear is a full Clear. Real updates also run only inside the temperature-bin
+  * window a9_eink.bin_min..bin_max (default 0..13), checked before power-up
+  * and again, with the fresh samples, before the first frame.
+  *
+@@ -662,7 +664,11 @@ static ssize_t status_show(struct device *kdev, struct device_attribute *attr, c
+ 		"flip_phases valid %d phase %u age_us %llu prepare_us %llu fences_us %llu"
+ 		" dependencies_us %llu wait_prev_us %llu program_us %llu flip_done_us %llu cleanup_us %llu\n"
+ 		"flip_max prepare_us %u fences_us %u dependencies_us %u wait_prev_us %u"
+-		" program_us %u flip_done_us %u cleanup_us %u total_us %u modeset_us %u flips %llu modesets %llu\n",
++		" program_us %u flip_done_us %u cleanup_us %u total_us %u modeset_us %u flips %llu modesets %llu\n"
++		"rail_fault %d rail_faults %llu rail_at_ms %lld rail_getter %d rail_pg_raw %d rail_on %d"
++		" rail_energized %d rail_forced %d rail_emergency %d rail_pg_valid %d rail_tx_on %d"
++		" rail_gone %d rail_front_null %d rail_armed %d rail_session_ms %lld rail_since_wf_ms %lld"
++		" rail_wf_ret %d force_clear %d\n",
+ 		enable, a9->wf_loaded, a9x_attached(t), t->on, atomic_read(&a9x_stall_fault),
+ 		a9->ct_loaded,
+ 		a9->updates, a9->aborts, t->frames, t->late, t->vbl_skips, t->commits_failed,
+@@ -689,7 +695,12 @@ static ssize_t status_show(struct device *kdev, struct device_attribute *attr, c
+ 		READ_ONCE(t->phase_max_us[DRM_ATOMIC_PROFILE_FLIP_DONE]),
+ 		READ_ONCE(t->phase_max_us[DRM_ATOMIC_PROFILE_CLEANUP]),
+ 		READ_ONCE(t->flip_max_us), READ_ONCE(t->modeset_max_us),
+-		READ_ONCE(t->flips), READ_ONCE(t->modesets));
++		READ_ONCE(t->flips), READ_ONCE(t->modesets),
++		atomic_read(&a9x_rail_fault), a9->rail.count, a9->rail.at_ms, a9->rail.getter,
++		a9->rail.pg_raw, a9->rail.on, a9->rail.energized, a9->rail.forced,
++		a9->rail.emergency, a9->rail.pg_valid, a9->rail.tx_on, a9->rail.tx_gone,
++		a9->rail.front_null, a9->rail.armed, a9->rail.session_ms, a9->rail.since_wf_ms,
++		a9->rail.wf_ret, READ_ONCE(a9->force_clear));
+ }
+ static DEVICE_ATTR_RO(status);
+ 
+@@ -832,13 +843,24 @@ static void a9_temps(struct a9_eink *a9, int *t1, int *t2)
+ /* rails up AND power-good. PG is required: logical 1 (DT active-high) means
+  * the rails settled good (docs/mainline-fp9929a-pg.md; the stock "state=0"
+  * samples were taken at the enable edge, not when settled) */
++static int a9_hv_sample(struct a9_eink *a9, struct fp9929a_status *st)
++{
++	memset(st, 0, sizeof(*st));
++	st->pg_raw = -ENODATA;	/* not read (lookup failed) */
++	return fp9929a_get_status(a9->pmic_np, st);
++}
++
++static bool a9_hv_good(int ret, const struct fp9929a_status *st)
++{
++	return !ret && st->on && st->pg_valid && st->pg_good;
++}
++
+ static bool a9_hv_is_on(struct a9_eink *a9)
+ {
+ 	struct fp9929a_status st;
++	int ret = a9_hv_sample(a9, &st);
+ 
+-	if (fp9929a_get_status(a9->pmic_np, &st))
+-		return false;
+-	return st.on && st.pg_valid && st.pg_good;
++	return a9_hv_good(ret, &st);
+ }
+ 
+ static bool a9_hv_maybe_on(struct a9_eink *a9)
+@@ -882,12 +904,57 @@ static void a9_power_off(struct a9_eink *a9)
+ 		a9->hv_fault = false;
+ }
+ 
++/*
++ * Patch 0039 (run 11): the rails were not valid at an update's start with the
++ * pipeline on. Record why from the failed sample and the transport BEFORE
++ * anything is shut down, latch the rail fault (drive off, full Clear owed),
++ * then let the caller run the ordered neutral/power-down. No retry, no
++ * debounce: a later good PG sample cannot vouch for the previous waveform.
++ */
++static void a9_rail_fault(struct a9_eink *a9, int ret, const struct fp9929a_status *st)
++{
++	struct a9x_transport *t = &a9->tx;
++	ktime_t now = ktime_get();
++
++	mutex_lock(&t->lock);
++	a9->rail.tx_on = t->on;
++	a9->rail.tx_gone = t->gone;
++	a9->rail.front_null = t->front_null;
++	a9->rail.armed = t->stall_armed;
++	a9->rail.session_ms = t->on ? ktime_ms_delta(now, t->on_since) : -1;
++	mutex_unlock(&t->lock);
++	a9->rail.getter = ret;
++	a9->rail.pg_raw = st->pg_raw;
++	a9->rail.on = st->on;
++	a9->rail.energized = st->energized;
++	a9->rail.forced = st->forced_off;
++	a9->rail.emergency = st->emergency;
++	a9->rail.pg_valid = st->pg_valid;
++	a9->rail.pg_good = st->pg_good;
++	a9->rail.since_wf_ms = a9->wf_end ? ktime_ms_delta(now, a9->wf_end) : -1;
++	a9->rail.wf_ret = a9->wf_ret;
++	a9->rail.at_ms = ktime_to_ms(now);
++	a9->rail.count++;
++	/* synchronous containment: nothing drives or powers up until clear_fault */
++	atomic_set(&a9x_rail_fault, 1);
++	WRITE_ONCE(enable, false);
++	a9->force_clear = true;	/* glass state unknown: full Clear first */
++	dev_err(a9->dev, "FP9929A dropped out while the pipeline was on: rail fault latched"
++		" (getter %d pg_raw %d on %d energized %d forced %d emergency %d pg_valid %d"
++		" tx_on %d gone %d front_null %d armed %d session_ms %lld since_wf_ms %lld wf_ret %d);"
++		" write 1 to a9_eink.clear_fault, then a full Clear runs first\n",
++		ret, st->pg_raw, st->on, st->energized, st->forced_off, st->emergency,
++		st->pg_valid, a9->rail.tx_on, a9->rail.tx_gone, a9->rail.front_null,
++		a9->rail.armed, a9->rail.session_ms, a9->rail.since_wf_ms, a9->wf_ret);
++}
++
+ static int a9_power_on(struct a9_eink *a9)
+ {
++	struct fp9929a_status st;
+ 	int ret;
+ 
+-	if (atomic_read(&a9x_stall_fault))
+-		return -EIO;	/* frame-progress fault latched: a9_eink.clear_fault */
++	if (a9x_fault_latched())
++		return -EIO;	/* stall or rail fault latched: a9_eink.clear_fault */
+ 
+ 	if (a9->hv_fault) {
+ 		a9_power_off(a9);
+@@ -896,10 +963,11 @@ static int a9_power_on(struct a9_eink *a9)
+ 	}
+ 	if (a9->tx.on) {
+ 		/* rails must still be up and good for every update, not only at enable */
+-		if (a9_hv_is_on(a9))
++		ret = a9_hv_sample(a9, &st);
++		if (a9_hv_good(ret, &st))
+ 			return 0;
+-		dev_err(a9->dev, "FP9929A dropped out while the pipeline was on\n");
+-		a9_power_off(a9);
++		a9_rail_fault(a9, ret, &st);
++		a9_power_off(a9);	/* ordered neutral; emergency HV off if that fails */
+ 		return -EIO;
+ 	}
+ 	if (!a9x_attached(&a9->tx)) {
+@@ -1058,7 +1126,7 @@ static int a9_run_ring(struct a9_eink *a9, bool init, int bin, struct sha256_ctx
+ 	unsigned int watermark = READ_ONCE(prefill_frames);
+ 	int ret;
+ 
+-	if (atomic_read(&a9x_stall_fault))
++	if (a9x_fault_latched())
+ 		return -EIO;	/* writing enable alone cannot retry a failed trial */
+ 	a9r_reset(&a9->ring);
+ 	a9->ring_init_n = 0;
+@@ -1126,8 +1194,9 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 	u32 pre = 0;
+ 	int t1, t2, bin, ret, steps = 0, lo, hi;
+ 
+-	if (atomic_read(&a9x_stall_fault)) {
+-		dev_err_ratelimited(a9->dev, "update refused: frame-progress fault latched (write 1 to a9_eink.clear_fault)\n");
++	if (a9x_fault_latched()) {
++		dev_err_ratelimited(a9->dev, "update refused: %s fault latched (write 1 to a9_eink.clear_fault)\n",
++				    atomic_read(&a9x_rail_fault) ? "rail" : "frame-progress");
+ 		a9->aborts++;
+ 		return;
+ 	}
+@@ -1299,6 +1368,8 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 			sha256_init(&sc);
+ 		a9->last.begin_us = (u32)ktime_us_delta(ktime_get(), t0);
+ 		ret = a9_run_ring(a9, init_white, bin, hash ? &sc : NULL, &init_shown);
++		a9->wf_end = ktime_get();	/* rail-fault diagnosis (0039) */
++		a9->wf_ret = ret;
+ 		if (init_shown)
+ 			*init_pending = false;
+ 		if (ret)
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_guard.c b/drivers/gpu/drm/a9_eink/a9_eink_guard.c
+index a2fd1e2a6..e5e732ca6 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_guard.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_guard.c
+@@ -1,7 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ /*
+- * a9_eink guards that do not need the DRM side: the frame-progress fault
+- * latch with its clear_fault parameter, and the temperature-bin admission
++ * a9_eink guards that do not need the DRM side: the frame-progress and
++ * rail fault latches with their clear_fault parameter, and the temperature-bin admission
+  * window (bin_min/bin_max). Separate so the host test harness
+  * (tests/mainline-a9eink-stall in the A9 repo) compiles exactly this code.
+  */
+@@ -14,6 +14,7 @@
+ #include "a9_eink.h"
+ 
+ atomic_t a9x_stall_fault = ATOMIC_INIT(0);
++atomic_t a9x_rail_fault = ATOMIC_INIT(0);
+ 
+ static int a9_clear_fault_set(const char *val, const struct kernel_param *kp)
+ {
+@@ -24,6 +25,8 @@ static int a9_clear_fault_set(const char *val, const struct kernel_param *kp)
+ 		return ret;
+ 	if (clear && atomic_xchg(&a9x_stall_fault, 0))
+ 		pr_info("a9_eink: frame-progress fault cleared (clear_fault)\n");
++	if (clear && atomic_xchg(&a9x_rail_fault, 0))
++		pr_info("a9_eink: rail fault cleared (clear_fault): the next real update is a full Clear\n");
+ 	return 0;
+ }
+ 
+@@ -32,7 +35,7 @@ static const struct kernel_param_ops a9_clear_fault_ops = {
+ };
+ module_param_cb(clear_fault, &a9_clear_fault_ops, NULL, 0200);
+ MODULE_PARM_DESC(clear_fault,
+-		 "Write 1 to clear a latched frame-progress fault (write-only); the FP9929A's own fp9929a.clear_fault is separate");
++		 "Write 1 to clear a latched frame-progress or rail fault (write-only); the FP9929A's own fp9929a.clear_fault is separate");
+ 
+ /*
+  * Temperature-bin admission (review 7 finding 2): a real waveform update runs
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_transport.c b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+index 785172177..a741bf0fa 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_transport.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+@@ -555,7 +555,7 @@ static int a9x_commit_locked(struct a9x_transport *t, int idx, bool null)
+ 	u32 gap, cgap;
+ 	int ret;
+ 
+-	if (!null && atomic_read(&a9x_stall_fault))
++	if (!null && a9x_fault_latched())
+ 		return -EIO;
+ 	mutex_lock(&t->client.modeset_mutex);
+ 	t->ms->fb = t->buf[idx]->fb;
+@@ -611,7 +611,7 @@ static int a9x_commit_locked(struct a9x_transport *t, int idx, bool null)
+ 	if (cgap > a9x_period_us(t) + a9x_period_us(t) / 2)
+ 		t->commit_slow++;
+ 	/* A successful DRM return cannot resurrect progress after HV was cut. */
+-	if (!ret && !null && atomic_read(&a9x_stall_fault))
++	if (!ret && !null && a9x_fault_latched())
+ 		ret = -EIO;
+ 	if (ret) {
+ 		t->commits_failed++;
+diff --git a/drivers/regulator/fp9929a.c b/drivers/regulator/fp9929a.c
+index 9d9a6becc..48eb67e48 100644
+--- a/drivers/regulator/fp9929a.c
++++ b/drivers/regulator/fp9929a.c
+@@ -1062,8 +1062,11 @@ int fp9929a_get_status(struct device_node *np, struct fp9929a_status *st)
+ 		st->emergency = atomic_read(&fp9929a_emerg);
+ 		st->temp_valid = fp->have_temp;
+ 		st->temp_c = fp->temp_c;
++		st->energized = READ_ONCE(fp->energized);
+ 		st->pg_valid = !!fp->pg;
+-		st->pg_good = fp->pg && gpiod_get_value_cansleep(fp->pg) == 1;
++		/* one read: pg_good is derived from exactly the value reported */
++		st->pg_raw = fp->pg ? gpiod_get_value_cansleep(fp->pg) : -ENOENT;
++		st->pg_good = st->pg_raw == 1;
+ 		mutex_unlock(&fp->lock);
+ 	}
+ 	put_device(&client->dev);
+diff --git a/include/linux/regulator/fp9929a.h b/include/linux/regulator/fp9929a.h
+index 33793a564..4d4a88478 100644
+--- a/include/linux/regulator/fp9929a.h
++++ b/include/linux/regulator/fp9929a.h
+@@ -15,6 +15,9 @@ struct fp9929a_status {
+ 	bool pg_valid;		/* a PG line is wired */
+ 	bool pg_good;		/* PG logical 1 (DT active-high): rails settled good;
+ 				 * docs/mainline-fp9929a-pg.md */
++	int pg_raw;		/* the one gpiod read pg_good came from: 1, 0 or
++				 * -errno; -ENOENT when no PG line is wired */
++	bool energized;		/* PWRUP may be high (set before it is raised) */
+ 	bool temp_valid;	/* a TMST sample exists */
+ 	int temp_c;		/* TMST byte from the last power-up, unsigned deg C */
+ };

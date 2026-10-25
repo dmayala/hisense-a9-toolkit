@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A9 POC: existing Android16 AIDL primary HAL selects MM1/MM2 by ALSA ID.
+     Output endpoints are selected explicitly with a9ml-audio.sh. There is no
+     automatic analog-jack policy yet; keep the ordinary primary speaker port. -->
+<module name="primary" halVersion="3.0">
+ <attachedDevices><item>Speaker</item><item>Built-In Mic</item></attachedDevices>
+ <defaultOutputDevice>Speaker</defaultOutputDevice>
+ <mixPorts>
+  <mixPort name="primary output" role="source" flags="AUDIO_OUTPUT_FLAG_PRIMARY">
+   <profile name="" format="AUDIO_FORMAT_PCM_16_BIT" samplingRates="48000" channelMasks="AUDIO_CHANNEL_OUT_STEREO"/>
+  </mixPort>
+  <mixPort name="primary input" role="sink">
+   <profile name="" format="AUDIO_FORMAT_PCM_16_BIT" samplingRates="48000" channelMasks="AUDIO_CHANNEL_IN_MONO"/>
+  </mixPort>
+ </mixPorts>
+ <devicePorts>
+  <devicePort tagName="Speaker" type="AUDIO_DEVICE_OUT_SPEAKER" role="sink" address="CARD_0_DEV_0"/>
+  <devicePort tagName="Built-In Mic" type="AUDIO_DEVICE_IN_BUILTIN_MIC" role="source" address="CARD_0_DEV_1"/>
+ </devicePorts>
+ <routes>
+  <route type="mix" sink="Speaker" sources="primary output"/>
+  <route type="mix" sink="primary input" sources="Built-In Mic"/>
+ </routes>
+</module>

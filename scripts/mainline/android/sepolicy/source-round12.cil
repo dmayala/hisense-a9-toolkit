@@ -1,0 +1,25 @@
+; R11 OBS logcat audit48943 at GNSS probe startup: hal_gnss_default denied
+; setattr on its own pipefs fifo_file. Also present in vectors-r11.json.
+; SRC Service::start in gnss-hal/service.cpp checks fchmod(command[0],0600)
+; after creating the nonblocking UTC-command pipe; failure closes descriptors
+; and returns EX_ILLEGAL_STATE before posix_spawn. The LOC child's time-fd
+; check requires root0600. Preserve that check and the pipe's private mode.
+; Round6 already allowed create/read/write/open/getattr/ioctl on this same-SID
+; anonymous pipe. Complete only its missing mode-change permission.
+(allow hal_gnss_default self (fifo_file (setattr)))
+
+; R11 glass regression: old composer xperms admitted GETRESOURCES (64a0)
+; and steady-state import/atomic/vblank/RMFB, but omitted startup discovery.
+; SRC AOSP drm_hwcomposer DrmDevice::Init requires SET_CLIENT_CAP before it
+; accepts a DRM device, then master/capability, connector/CRTC/plane/property
+; discovery and mode blobs. libdrm drmIsMaster uses AUTH_MAGIC with token0.
+; Its initial black modeset buffer also needs dumb-buffer/PRIME/ADDFB2 calls.
+; Complete those DRM operations for the existing composer->graphics_device
+; pair only. No GPU-private ioctl range, new node label, DAC change, gate
+; write or domain permissive. Boot log rings missed the first failing call;
+; the policy/startup mismatch is source-proven, glass qualification pending.
+; VERSION, GEM_CLOSE, GET_CAP, SET_CLIENT_CAP, AUTH_MAGIC, SET/DROP_MASTER,
+; PRIME_HANDLE_TO_FD, GETCRTC, GETENCODER, GETCONNECTOR, GET/SET_PROPERTY,
+; GETPROPBLOB, CREATE/MAP/DESTROY_DUMB, GETPLANERESOURCES/GETPLANE, ADDFB2,
+; OBJ_GET/SET_PROPERTIES, CREATE/DESTROY_PROPBLOB.
+(allowx hal_graphics_composer_default graphics_device_202504 (ioctl chr_file (0x6400 0x6409 0x640c 0x640d 0x6411 0x641e 0x641f 0x642d 0x64a1 0x64a6 0x64a7 0x64aa 0x64ab 0x64ac 0x64b2 0x64b3 0x64b4 0x64b5 0x64b6 0x64b8 0x64b9 0x64ba 0x64bd 0x64be)))

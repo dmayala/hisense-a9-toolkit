@@ -1,0 +1,97 @@
+From 70f7ccd28d43e1d8bcf8765eb8704d7b08210a7f Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 07:51:29 -0700
+Subject: [PATCH] regulator: fp9929a: PG deadline from VCOM-EN, checked before
+ a good read counts
+
+Review 3 of the A9 E3 work found that fp9929a_wait_pg() accepted PG when
+the second good read arrived, before comparing against the deadline: two
+good reads separated by a long preemption succeeded after pg_timeout_ms
+(reproduced on the host with the real driver: second read 150 ms late,
+enable returned 0, 'PG 1 after 151227 us', rails marked on).
+
+Check the deadline after every read and before counting it, so a read
+that completes late can never accept PG, and take the deadline's origin
+at the VCOM-EN assertion (snapshot right after raising the pin, under the
+gate lock) instead of at the start of polling. The settle time reported
+in the 'on:' line is now measured from VCOM-EN as well.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/regulator/fp9929a.c | 26 ++++++++++++++++++--------
+ 1 file changed, 18 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/regulator/fp9929a.c b/drivers/regulator/fp9929a.c
+index d08e542b1..e4289ffcc 100644
+--- a/drivers/regulator/fp9929a.c
++++ b/drivers/regulator/fp9929a.c
+@@ -50,7 +50,8 @@
+  *    unconditionally, also in the middle of a power-up.
+  *  - power-good: after VCOM-EN=1 the PG line (DT GPIO_ACTIVE_HIGH, logical 1
+  *    = rails settled good) must read 1 twice in a row within
+- *    fp9929a.pg_timeout_ms (default 100), or the rails are powered down and
++ *    fp9929a.pg_timeout_ms (default 100) of the VCOM-EN assertion (a read
++ *    that completes later never counts), or the rails are powered down and
+  *    the power-up fails with -ETIMEDOUT. Without a PG line power-up is
+  *    refused (-ENODEV). The wait ends early if the gate closes (or max_on_ms
+  *    expires), and the gate is re-checked under the gate lock once more
+@@ -262,11 +263,18 @@ static void fp9929a_abort_power_up(struct fp9929a *fp)
+  * -ECANCELED as soon as the gate closes or max_on_ms expires (the caller's
+  * locked gate re-check then decides).
+  */
+-static int fp9929a_wait_pg(struct fp9929a *fp, unsigned int timeout_ms,
+-			   unsigned int *settle_us, int *last)
++/*
++ * The deadline counts from @vcom_on, the moment VCOM-EN was raised, and is
++ * checked after every read and BEFORE a good read is counted: a read that
++ * completes after the deadline (the thread was descheduled) can never be
++ * the one that accepts PG.
++ */
++static int fp9929a_wait_pg(struct fp9929a *fp, ktime_t vcom_on,
++			   unsigned int timeout_ms, unsigned int *settle_us,
++			   int *last)
+ {
+-	ktime_t start = ktime_get();
+-	ktime_t deadline = ktime_add_ms(start, timeout_ms);
++	ktime_t deadline = ktime_add_ms(vcom_on, timeout_ms);
++	ktime_t start = vcom_on;
+ 	int good = 0, v;
+ 
+ 	for (;;) {
+@@ -276,13 +284,13 @@ static int fp9929a_wait_pg(struct fp9929a *fp, unsigned int timeout_ms,
+ 		*last = v;
+ 		if (v < 0)
+ 			return v;
++		if (ktime_after(ktime_get(), deadline))
++			return -ETIMEDOUT;
+ 		good = v == 1 ? good + 1 : 0;
+ 		if (good >= 2) {
+ 			*settle_us = ktime_us_delta(ktime_get(), start);
+ 			return 0;
+ 		}
+-		if (ktime_after(ktime_get(), deadline))
+-			return -ETIMEDOUT;
+ 		usleep_range(1000, 1100);
+ 	}
+ }
+@@ -395,6 +403,7 @@ static int __fp9929a_enable(struct fp9929a *fp)
+ {
+ 	unsigned int pg_ms, settle_us = 0;
+ 	int ret, pg_last = -1;
++	ktime_t vcom_on;
+ 
+ 	if (!READ_ONCE(allow_power_on)) {
+ 		dev_warn(fp->dev,
+@@ -469,10 +478,11 @@ static int __fp9929a_enable(struct fp9929a *fp)
+ 		return ret;
+ 	}
+ 	gpiod_set_value_cansleep(fp->vcom_en, 1);
++	vcom_on = ktime_get();		/* origin of the PG deadline */
+ 	mutex_unlock(&fp9929a_gate_lock);
+ 
+ 	pg_ms = READ_ONCE(pg_timeout_ms);
+-	ret = fp9929a_wait_pg(fp, pg_ms, &settle_us, &pg_last);
++	ret = fp9929a_wait_pg(fp, vcom_on, pg_ms, &settle_us, &pg_last);
+ 	if (ret && ret != -ECANCELED) {
+ 		dev_err(fp->dev,
+ 			"PG not asserted within %u ms (last %d): powering down\n",

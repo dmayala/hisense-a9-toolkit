@@ -1,0 +1,36 @@
+{"audit": [], "phase": "root-ready", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": ["S2_AUDIT gate=mpss branch=unbound", "S2_AUDIT gate=session-service state=unpublished", "S2_AUDIT gate=store-read store=modemst1 rc=0", "S2_AUDIT gate=store-read store=modemst2 rc=0", "S2_AUDIT gate=store-read store=fsg rc=0", "S2_AUDIT gate=store-read store=fsc rc=0", "S2_AUDIT gate=store-read store=persist rc=0"], "phase": "store-pre", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "install", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": ["S2_AUDIT gate=session-service state=unpublished"], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "start", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "logd", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "probe", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "delivery", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "network", "root_rc": 1, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "framework-cleanup", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": [], "phase": "stop", "root_rc": 0, "timeout": false, "transport_rc": 0}
+{"audit": ["S2_AUDIT gate=mpss branch=offline", "S2_AUDIT gate=store-read store=modemst1 rc=0", "S2_AUDIT gate=store-read store=modemst2 rc=0", "S2_AUDIT gate=store-read store=fsg rc=0", "S2_AUDIT gate=store-read store=fsc rc=0", "S2_AUDIT gate=store-read store=persist rc=0"], "phase": "post", "root_rc": 0, "timeout": false, "transport_rc": 0}

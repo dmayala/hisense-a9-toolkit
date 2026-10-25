@@ -1,0 +1,5 @@
+# Label the real E Ink DRM subtree, independent of card numbering. genfscon
+# paths are prefixes, not globs; this prefix stays within the E Ink device.
+genfscon sysfs /devices/platform/eink-display/drm u:object_r:vendor_sysfs_a9_eink:s0
+# Give each frontlight LED a similarly narrow real-device brightness label.
+# Do not label the entire I2C controller (it also contains EPD power devices).

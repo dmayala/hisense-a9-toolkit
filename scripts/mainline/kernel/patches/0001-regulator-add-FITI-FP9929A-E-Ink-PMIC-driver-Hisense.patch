@@ -1,0 +1,410 @@
+From fd63d7640cb4c40553f6aa75592410d631850edd Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 19:07:54 -0700
+Subject: [PATCH 1/9] regulator: add FITI FP9929A E Ink PMIC driver (Hisense
+ A9)
+
+Power-up/down sequence and VCOM encoding taken from the Hisense A9 vendor
+kernel (4.19 fp9929a_active_mode/fp9929a_sleep_mode). Power-up is refused
+unless fp9929a.allow_power_on=1; probe only powers the rails down if the
+bootloader left them up. Modelled on fp9931.c.
+---
+ drivers/regulator/Kconfig   |   9 +
+ drivers/regulator/Makefile  |   1 +
+ drivers/regulator/fp9929a.c | 355 ++++++++++++++++++++++++++++++++++++
+ 3 files changed, 365 insertions(+)
+ create mode 100644 drivers/regulator/fp9929a.c
+
+diff --git a/drivers/regulator/Kconfig b/drivers/regulator/Kconfig
+index a54a54919..e4599d37c 100644
+--- a/drivers/regulator/Kconfig
++++ b/drivers/regulator/Kconfig
+@@ -510,6 +510,15 @@ config REGULATOR_FP9931
+ 	  so it is found in E-Book readers.
+ 	  If HWMON is enabled, it also provides temperature measurement.
+ 
++config REGULATOR_FP9929A
++	tristate "FITI FP9929A E Ink PMIC (Hisense A9)"
++	depends on I2C && GPIOLIB && OF
++	help
++	  Power sequencing and VCOM for the FITI FP9929A E Ink power IC
++	  used in the Hisense A9 (HLTE556N). The high-voltage rails are only
++	  switched on when fp9929a.allow_power_on=1; by default the driver
++	  only powers them down.
++
+ config REGULATOR_LM363X
+ 	tristate "TI LM363X voltage regulators"
+ 	depends on MFD_TI_LMU
+diff --git a/drivers/regulator/Makefile b/drivers/regulator/Makefile
+index 134eee274..7da4e270d 100644
+--- a/drivers/regulator/Makefile
++++ b/drivers/regulator/Makefile
+@@ -60,6 +60,7 @@ obj-$(CONFIG_REGULATOR_HI655X) += hi655x-regulator.o
+ obj-$(CONFIG_REGULATOR_ISL6271A) += isl6271a-regulator.o
+ obj-$(CONFIG_REGULATOR_ISL9305) += isl9305.o
+ obj-$(CONFIG_REGULATOR_FP9931) += fp9931.o
++obj-$(CONFIG_REGULATOR_FP9929A) += fp9929a.o
+ obj-$(CONFIG_REGULATOR_LM363X) += lm363x-regulator.o
+ obj-$(CONFIG_REGULATOR_LOCHNAGAR) += lochnagar-regulator.o
+ obj-$(CONFIG_REGULATOR_LP3971) += lp3971.o
+diff --git a/drivers/regulator/fp9929a.c b/drivers/regulator/fp9929a.c
+new file mode 100644
+index 000000000..8a4ab24bc
+--- /dev/null
++++ b/drivers/regulator/fp9929a.c
+@@ -0,0 +1,355 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * FITI FP9929A E Ink power management IC (Hisense A9 / HLTE556N).
++ *
++ * The FP9929A generates the E Ink source/gate rails (VPOS/VNEG/VGH/VGL) and
++ * VCOM. On the A9 the host controls it with two GPIOs and two I2C registers;
++ * this driver reproduces the vendor kernel's sequence (4.19 fp9929a_active_mode
++ * / fp9929a_sleep_mode, extracted in docs/mainline-plan.md section 2.2 of the
++ * A9 work repo) and exposes it as ONE switchable regulator ("vpanel") for the
++ * E Ink panel driver, plus a hwmon temperature input.
++ *
++ *   power-up:   PWRUP=1, 5 ms, I2C reg 0x02 = VCOM code, I2C read reg 0x00
++ *               (temperature, deg C), 20 ms, VCOM-EN=1
++ *   power-down: 1 ms, VCOM-EN=0, 50 ms, PWRUP=0
++ *   VCOM code = 0x74 + trunc((mV - 2500) / 22), mV in [605, 5002), else 2650
++ *
++ * The vendor driver also toggles a GPIO field it never parses from the DT
++ * (it ends up as global GPIO 0); that is a vendor bug and is deliberately left
++ * out.
++ *
++ * SAFETY: a wrong sequence or VCOM may damage the panel (inferred, not
++ * measured). Therefore:
++ *  - power-up is REFUSED (-EPERM) unless fp9929a.allow_power_on=1 is given on
++ *    the kernel command line or written to
++ *    /sys/module/fp9929a/parameters/allow_power_on;
++ *  - probe never talks I2C; it only takes the GPIOs and, if the bootloader left
++ *    the rails up, runs the power-DOWN sequence above;
++ *  - shutdown/remove always power down.
++ *
++ * Modelled on drivers/regulator/fp9931.c (Andreas Kemnade), which drives the
++ * related FP9931 with a different register map.
++ */
++
++#include <linux/delay.h>
++#include <linux/gpio/consumer.h>
++#include <linux/hwmon.h>
++#include <linux/i2c.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/regulator/driver.h>
++#include <linux/regulator/of_regulator.h>
++#include <linux/string.h>
++
++#define FP9929A_REG_TMST	0x00	/* temperature, unsigned deg C */
++#define FP9929A_REG_VCOM	0x02	/* VCOM code */
++
++#define FP9929A_VCOM_DEFAULT_MV	2650
++#define FP9929A_VCOM_MIN_MV	605
++#define FP9929A_VCOM_MAX_MV	5002	/* exclusive, as in the vendor driver */
++#define FP9929A_I2C_TRIES	5
++
++static bool allow_power_on;
++module_param(allow_power_on, bool, 0644);
++MODULE_PARM_DESC(allow_power_on,
++		 "Allow the E Ink high-voltage rails to be switched on (default: no)");
++
++struct fp9929a {
++	struct device *dev;
++	struct i2c_client *client;
++	struct gpio_desc *pwrup;
++	struct gpio_desc *vcom_en;
++	struct gpio_desc *pg;		/* optional, input */
++	struct mutex lock;
++	unsigned int vcom_mv;
++	u8 vcom_code;
++	bool on;
++	bool have_temp;
++	int temp_c;
++};
++
++static u8 fp9929a_vcom_code(unsigned int mv)
++{
++	if (mv < FP9929A_VCOM_MIN_MV || mv >= FP9929A_VCOM_MAX_MV)
++		mv = FP9929A_VCOM_DEFAULT_MV;
++	/* C division truncates toward zero, as the vendor's code does */
++	return 0x74 + ((int)mv - 2500) / 22;
++}
++
++/*
++ * The A9 bootloader passes the panel's factory VCOM as
++ * androidboot.eink_vcom=NNNN (mV, from the diag partition). Prefer it over the
++ * DT value, exactly like the vendor kernel.
++ */
++static unsigned int fp9929a_vcom_from_cmdline(void)
++{
++	const char *bootargs, *p;
++	unsigned int mv = 0;
++
++	if (!of_chosen ||
++	    of_property_read_string(of_chosen, "bootargs", &bootargs))
++		return 0;
++	p = strstr(bootargs, "androidboot.eink_vcom=");
++	if (!p)
++		return 0;
++	p += strlen("androidboot.eink_vcom=");
++	while (*p >= '0' && *p <= '9' && mv < 100000)
++		mv = mv * 10 + (*p++ - '0');
++	return mv;
++}
++
++/* called with lock held */
++static void fp9929a_power_down(struct fp9929a *fp)
++{
++	usleep_range(1000, 1100);
++	gpiod_set_value_cansleep(fp->vcom_en, 0);
++	usleep_range(50000, 50100);
++	gpiod_set_value_cansleep(fp->pwrup, 0);
++	fp->on = false;
++}
++
++static int fp9929a_write_vcom(struct fp9929a *fp)
++{
++	int i, ret = -EIO;
++
++	for (i = 0; i < FP9929A_I2C_TRIES; i++) {
++		ret = i2c_smbus_write_byte_data(fp->client, FP9929A_REG_VCOM,
++						fp->vcom_code);
++		if (!ret)
++			return 0;
++		usleep_range(1000, 1100);
++	}
++	return ret;
++}
++
++static int fp9929a_enable(struct regulator_dev *rdev)
++{
++	struct fp9929a *fp = rdev_get_drvdata(rdev);
++	int ret;
++
++	if (!allow_power_on) {
++		dev_warn(fp->dev,
++			 "power-up refused: boot with fp9929a.allow_power_on=1 to allow it\n");
++		return -EPERM;
++	}
++
++	mutex_lock(&fp->lock);
++	if (fp->on) {
++		mutex_unlock(&fp->lock);
++		return 0;
++	}
++
++	gpiod_set_value_cansleep(fp->pwrup, 1);
++	usleep_range(5000, 5100);
++
++	ret = fp9929a_write_vcom(fp);
++	if (ret) {
++		/* never leave the rails up with an unknown VCOM */
++		dev_err(fp->dev, "VCOM write failed (%d), powering down\n", ret);
++		fp9929a_power_down(fp);
++		mutex_unlock(&fp->lock);
++		return ret;
++	}
++
++	ret = i2c_smbus_read_byte_data(fp->client, FP9929A_REG_TMST);
++	if (ret >= 0) {
++		fp->temp_c = ret;	/* unsigned in the vendor driver */
++		fp->have_temp = true;
++	}
++	usleep_range(20000, 20100);
++
++	gpiod_set_value_cansleep(fp->vcom_en, 1);
++	fp->on = true;
++	dev_info(fp->dev, "on: VCOM %u mV (code 0x%02x), temp %d C, PG %d\n",
++		 fp->vcom_mv, fp->vcom_code, fp->have_temp ? fp->temp_c : -1,
++		 fp->pg ? gpiod_get_value_cansleep(fp->pg) : -1);
++	mutex_unlock(&fp->lock);
++	return 0;
++}
++
++static int fp9929a_disable(struct regulator_dev *rdev)
++{
++	struct fp9929a *fp = rdev_get_drvdata(rdev);
++
++	mutex_lock(&fp->lock);
++	if (fp->on)
++		fp9929a_power_down(fp);
++	mutex_unlock(&fp->lock);
++	return 0;
++}
++
++static int fp9929a_is_enabled(struct regulator_dev *rdev)
++{
++	struct fp9929a *fp = rdev_get_drvdata(rdev);
++
++	return fp->on;
++}
++
++static const struct regulator_ops fp9929a_ops = {
++	.enable = fp9929a_enable,
++	.disable = fp9929a_disable,
++	.is_enabled = fp9929a_is_enabled,
++};
++
++static const struct regulator_desc fp9929a_desc = {
++	.name = "vpanel",
++	.type = REGULATOR_VOLTAGE,
++	.owner = THIS_MODULE,
++	.ops = &fp9929a_ops,
++	/* VPOS/VNEG are set by the chip; nothing to select */
++	.n_voltages = 0,
++};
++
++/*
++ * Temperature: only the value sampled during the last power-up. Unlike the
++ * vendor sysfs attribute, reading it never powers the chip.
++ */
++static int fp9929a_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
++			      u32 attr, int channel, long *val)
++{
++	struct fp9929a *fp = dev_get_drvdata(dev);
++
++	if (!fp->have_temp)
++		return -ENODATA;
++	*val = fp->temp_c * 1000;
++	return 0;
++}
++
++static umode_t fp9929a_hwmon_visible(const void *data,
++				     enum hwmon_sensor_types type, u32 attr,
++				     int channel)
++{
++	return 0444;
++}
++
++static const struct hwmon_channel_info *const fp9929a_hwmon_info[] = {
++	HWMON_CHANNEL_INFO(temp, HWMON_T_INPUT),
++	NULL
++};
++
++static const struct hwmon_ops fp9929a_hwmon_ops = {
++	.is_visible = fp9929a_hwmon_visible,
++	.read = fp9929a_hwmon_read,
++};
++
++static const struct hwmon_chip_info fp9929a_chip_info = {
++	.ops = &fp9929a_hwmon_ops,
++	.info = fp9929a_hwmon_info,
++};
++
++static int fp9929a_probe(struct i2c_client *client)
++{
++	struct device *dev = &client->dev;
++	struct regulator_config config = { };
++	struct regulator_dev *rdev;
++	struct fp9929a *fp;
++	unsigned int mv = 0;
++	int up, com;
++
++	fp = devm_kzalloc(dev, sizeof(*fp), GFP_KERNEL);
++	if (!fp)
++		return -ENOMEM;
++	fp->dev = dev;
++	fp->client = client;
++	mutex_init(&fp->lock);
++
++	/* ASIS: look at what the bootloader left before changing anything */
++	fp->pwrup = devm_gpiod_get(dev, "pwrup", GPIOD_ASIS);
++	if (IS_ERR(fp->pwrup))
++		return dev_err_probe(dev, PTR_ERR(fp->pwrup), "pwrup gpio\n");
++	fp->vcom_en = devm_gpiod_get(dev, "vcom-en", GPIOD_ASIS);
++	if (IS_ERR(fp->vcom_en))
++		return dev_err_probe(dev, PTR_ERR(fp->vcom_en), "vcom-en gpio\n");
++	fp->pg = devm_gpiod_get_optional(dev, "pg", GPIOD_IN);
++	if (IS_ERR(fp->pg))
++		return dev_err_probe(dev, PTR_ERR(fp->pg), "pg gpio\n");
++
++	up = gpiod_get_value_cansleep(fp->pwrup);
++	com = gpiod_get_value_cansleep(fp->vcom_en);
++	dev_info(dev, "at probe: PWRUP=%d VCOM_EN=%d PG=%d\n", up, com,
++		 fp->pg ? gpiod_get_value_cansleep(fp->pg) : -1);
++
++	/*
++	 * Own both lines, driven low, with the vendor power-down order and
++	 * delays. If the rails were up this is the stock sleep sequence; if
++	 * they were down it changes nothing on the panel.
++	 */
++	usleep_range(1000, 1100);
++	gpiod_direction_output(fp->vcom_en, 0);
++	if (up > 0 || com > 0) {
++		dev_info(dev, "bootloader left the E Ink rails up: powering down\n");
++		usleep_range(50000, 50100);
++	}
++	gpiod_direction_output(fp->pwrup, 0);
++	fp->on = false;
++
++	mv = fp9929a_vcom_from_cmdline();
++	if (!mv)
++		of_property_read_u32(dev->of_node, "fitipower,vcom-millivolt", &mv);
++	if (mv < FP9929A_VCOM_MIN_MV || mv >= FP9929A_VCOM_MAX_MV)
++		mv = FP9929A_VCOM_DEFAULT_MV;
++	fp->vcom_mv = mv;
++	fp->vcom_code = fp9929a_vcom_code(mv);
++	dev_info(dev, "VCOM %u mV -> code 0x%02x; power-up %s\n", mv,
++		 fp->vcom_code, allow_power_on ? "ALLOWED" : "refused (safe default)");
++
++	i2c_set_clientdata(client, fp);
++
++	config.dev = dev;
++	config.driver_data = fp;
++	config.of_node = dev->of_node;
++	config.init_data = of_get_regulator_init_data(dev, dev->of_node,
++						      &fp9929a_desc);
++	rdev = devm_regulator_register(dev, &fp9929a_desc, &config);
++	if (IS_ERR(rdev))
++		return dev_err_probe(dev, PTR_ERR(rdev), "register regulator\n");
++
++	if (IS_REACHABLE(CONFIG_HWMON)) {
++		struct device *hw;
++
++		hw = devm_hwmon_device_register_with_info(dev, "fp9929a", fp,
++							  &fp9929a_chip_info,
++							  NULL);
++		if (IS_ERR(hw))
++			dev_notice(dev, "no hwmon\n");
++	}
++	return 0;
++}
++
++static void fp9929a_shutdown(struct i2c_client *client)
++{
++	struct fp9929a *fp = i2c_get_clientdata(client);
++
++	if (!fp)
++		return;
++	mutex_lock(&fp->lock);
++	if (fp->on)
++		fp9929a_power_down(fp);
++	mutex_unlock(&fp->lock);
++}
++
++static void fp9929a_remove(struct i2c_client *client)
++{
++	fp9929a_shutdown(client);
++}
++
++static const struct of_device_id fp9929a_of_match[] = {
++	{ .compatible = "fitipower,fp9929a" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, fp9929a_of_match);
++
++static struct i2c_driver fp9929a_driver = {
++	.driver = {
++		.name = "fp9929a",
++		.of_match_table = fp9929a_of_match,
++	},
++	.probe = fp9929a_probe,
++	.remove = fp9929a_remove,
++	.shutdown = fp9929a_shutdown,
++};
++module_i2c_driver(fp9929a_driver);
++
++MODULE_DESCRIPTION("FITI FP9929A E Ink PMIC (Hisense A9)");
++MODULE_LICENSE("GPL");

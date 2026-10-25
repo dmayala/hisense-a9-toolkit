@@ -1,0 +1,519 @@
+--- a/drivers/misc/fastrpc.c
++++ b/drivers/misc/fastrpc.c
+@@ -2,6 +2,7 @@
+ // Copyright (c) 2011-2018, The Linux Foundation. All rights reserved.
+ // Copyright (c) 2018, Linaro Limited
+ 
++#include <linux/atomic.h>
+ #include <linux/completion.h>
+ #include <linux/device.h>
+ #include <linux/dma-buf.h>
+@@ -11,6 +12,7 @@
+ #include <linux/list.h>
+ #include <linux/miscdevice.h>
+ #include <linux/module.h>
++#include <linux/mutex.h>
+ #include <linux/of_address.h>
+ #include <linux/of.h>
+ #include <linux/platform_device.h>
+@@ -23,6 +25,30 @@
+ #include <uapi/misc/fastrpc.h>
+ #include <linux/of_reserved_mem.h>
+ #include <linux/bits.h>
++
++/* A9 S1: private sidecar gate, immutable for this module lifetime.
++ * Loading with the default registers neither driver and claims no context bank.
++ * Only the reviewed, explicit one-attempt loader may supply =1. */
++static bool a9_sensor_fastrpc;
++module_param(a9_sensor_fastrpc, bool, 0444);
++MODULE_PARM_DESC(a9_sensor_fastrpc,
++                 "A9 S1 admitted ADSP sensor FastRPC driver registration (default off)");
++
++/* Count channels whose DMA/CB teardown has not actually completed. */
++static atomic_t a9_sensor_draining = ATOMIC_INIT(0);
++
++static int a9_sensor_drain_get(char *buffer, const struct kernel_param *kp)
++{
++	return scnprintf(buffer, PAGE_SIZE, "%c\n",
++			 atomic_read(&a9_sensor_draining) ? 'Y' : 'N');
++}
++
++static const struct kernel_param_ops a9_sensor_drain_ops = {
++	.get = a9_sensor_drain_get,
++};
++module_param_cb(a9_sensor_drain_pending, &a9_sensor_drain_ops, NULL, 0444);
++MODULE_PARM_DESC(a9_sensor_drain_pending,
++                 "A9 S1 DMA/CB teardown pending; OFFLINE proof requires N");
+ 
+ #define ADSP_DOMAIN_ID (0)
+ #define MDSP_DOMAIN_ID (1)
+@@ -240,6 +266,8 @@
+ 	struct list_head node; /* list of ctxs */
+ 	struct completion work;
+ 	struct work_struct put_work;
++	/* Exactly one owner may release the send/remote completion reference. */
++	atomic_t a9_remote_ref;
+ 	struct fastrpc_msg msg;
+ 	struct fastrpc_user *fl;
+ 	union fastrpc_remote_arg *rpra;
+@@ -252,6 +280,8 @@
+ 
+ struct fastrpc_session_ctx {
+ 	struct device *dev;
++	/* Parent drvdata is cleared before deferred CB removal can run. */
++	struct fastrpc_channel_ctx *a9_cctx;
+ 	int sid;
+ 	bool used;
+ 	bool valid;
+@@ -269,6 +299,13 @@
+ 	int vmcount;
+ 	struct qcom_scm_vmperm vmperms[FASTRPC_MAX_VMIDS];
+ 	struct rpmsg_device *rpdev;
++	/* A9 S1: prepare/publish/send is atomic against disconnect, never wait. */
++	struct mutex a9_invoke_lock;
++	struct device *a9_channel_dev;
++	atomic_t a9_dma_buffers;
++	bool a9_removed;
++	bool a9_depopulate_queued;
++	struct work_struct a9_depopulate_work;
+ 	struct fastrpc_session_ctx session[FASTRPC_MAX_SESSIONS];
+ 	spinlock_t lock;
+ 	struct idr ctx_idr;
+@@ -420,11 +457,19 @@
+ 	return ret;
+ }
+ 
++static void fastrpc_a9_maybe_depopulate(struct fastrpc_channel_ctx *cctx);
++
+ static void fastrpc_buf_free(struct fastrpc_buf *buf)
+ {
++	struct fastrpc_channel_ctx *cctx = buf->fl->cctx;
++
++	/* The CB's IOMMU attachment must outlive this final DMA free. */
+ 	dma_free_coherent(buf->dev, buf->size, buf->virt,
+-			  fastrpc_ipa_to_dma_addr(buf->fl->cctx, buf->dma_addr));
++			  fastrpc_ipa_to_dma_addr(cctx, buf->dma_addr));
++	put_device(buf->dev);
+ 	kfree(buf);
++	if (atomic_dec_and_test(&cctx->a9_dma_buffers))
++		fastrpc_a9_maybe_depopulate(cctx);
+ }
+ 
+ static int __fastrpc_buf_alloc(struct fastrpc_user *fl, struct device *dev,
+@@ -444,17 +489,19 @@
+ 	buf->virt = NULL;
+ 	buf->dma_addr = 0;
+ 	buf->size = size;
+-	buf->dev = dev;
++	buf->dev = get_device(dev);
+ 	buf->raddr = 0;
+ 
+ 	buf->virt = dma_alloc_coherent(dev, buf->size, &buf->dma_addr,
+ 				       GFP_KERNEL);
+ 	if (!buf->virt) {
+ 		mutex_destroy(&buf->lock);
++		put_device(buf->dev);
+ 		kfree(buf);
+ 		return -ENOMEM;
+ 	}
+ 
++	atomic_inc(&fl->cctx->a9_dma_buffers);
+ 	*obuf = buf;
+ 
+ 	return 0;
+@@ -493,6 +540,7 @@
+ 	cctx = container_of(ref, struct fastrpc_channel_ctx, refcount);
+ 
+ 	idr_destroy(&cctx->ctx_idr);
++	mutex_destroy(&cctx->a9_invoke_lock);
+ 	kfree(cctx);
+ }
+ 
+@@ -504,6 +552,41 @@
+ static void fastrpc_channel_ctx_put(struct fastrpc_channel_ctx *cctx)
+ {
+ 	kref_put(&cctx->refcount, fastrpc_channel_ctx_free);
++}
++
++/* A9 S1: callback removal never waits for a remote RPC or userspace join.
++ * Keep CB devices/IOMMU mappings registered until all admitted bounce buffers
++ * have really completed dma_free_coherent(). A lost remote response may retain
++ * a buffer/context until reboot; retaining its CB is safer than unmapping live
++ * DMA allocations. Recovery is disabled and this tuple permits one attempt.
++ */
++static void fastrpc_a9_depopulate(struct work_struct *work)
++{
++	struct fastrpc_channel_ctx *cctx = container_of(work,
++		struct fastrpc_channel_ctx, a9_depopulate_work);
++
++	of_platform_depopulate(cctx->a9_channel_dev);
++	put_device(cctx->a9_channel_dev);
++	/* N is exposed only after the last real CB teardown has returned. */
++	atomic_dec(&a9_sensor_draining);
++	fastrpc_channel_ctx_put(cctx);
++}
++
++static void fastrpc_a9_maybe_depopulate(struct fastrpc_channel_ctx *cctx)
++{
++	unsigned long flags;
++	bool queue = false;
++
++	spin_lock_irqsave(&cctx->lock, flags);
++	if (cctx->a9_removed && !atomic_read(&cctx->a9_dma_buffers) &&
++	    !cctx->a9_depopulate_queued) {
++		cctx->a9_depopulate_queued = true;
++		fastrpc_channel_ctx_get(cctx);
++		queue = true;
++	}
++	spin_unlock_irqrestore(&cctx->lock, flags);
++	if (queue)
++		schedule_work(&cctx->a9_depopulate_work);
+ }
+ 
+ static void fastrpc_context_put(struct fastrpc_invoke_ctx *ctx);
+@@ -1229,10 +1312,11 @@
+ 	msg->addr = ctx->buf ? ctx->buf->dma_addr : 0;
+ 	msg->size = roundup(ctx->msg_sz, PAGE_SIZE);
+ 	fastrpc_context_get(ctx);
++	atomic_set(&ctx->a9_remote_ref, 1);
+ 
+ 	ret = rpmsg_send(cctx->rpdev->ept, (void *)msg, sizeof(*msg));
+ 
+-	if (ret)
++	if (ret && atomic_xchg(&ctx->a9_remote_ref, 0))
+ 		fastrpc_context_put(ctx);
+ 
+ 	return ret;
+@@ -1251,26 +1335,36 @@
+ 	if (!fl->sctx)
+ 		return -EINVAL;
+ 
+-	if (!fl->cctx->rpdev)
++	/* Close both send/remove and late-context/missed-notify races. */
++	mutex_lock(&fl->cctx->a9_invoke_lock);
++	if (!fl->cctx->rpdev) {
++		mutex_unlock(&fl->cctx->a9_invoke_lock);
+ 		return -EPIPE;
++	}
+ 
+ 	if (handle == FASTRPC_INIT_HANDLE && !kernel) {
+ 		dev_warn_ratelimited(fl->sctx->dev, "user app trying to send a kernel RPC message (%d)\n",  handle);
++		mutex_unlock(&fl->cctx->a9_invoke_lock);
+ 		return -EPERM;
+ 	}
+ 
+ 	ctx = fastrpc_context_alloc(fl, kernel, sc, args);
+-	if (IS_ERR(ctx))
++	if (IS_ERR(ctx)) {
++		mutex_unlock(&fl->cctx->a9_invoke_lock);
+ 		return PTR_ERR(ctx);
++	}
+ 
+ 	err = fastrpc_get_args(kernel, ctx);
+-	if (err)
++	if (err) {
++		mutex_unlock(&fl->cctx->a9_invoke_lock);
+ 		goto bail;
++	}
+ 
+ 	/* make sure that all CPU memory writes are seen by DSP */
+ 	dma_wmb();
+ 	/* Send invoke buffer to remote dsp */
+ 	err = fastrpc_invoke_send(fl->sctx, ctx, kernel, handle);
++	mutex_unlock(&fl->cctx->a9_invoke_lock);
+ 	if (err)
+ 		goto bail;
+ 
+@@ -1281,6 +1375,11 @@
+ 		err = wait_for_completion_interruptible(&ctx->work);
+ 	}
+ 
++	if (err)
++		goto bail;
++
++	/* Never copy remote outputs for a locally cancelled/disconnected call. */
++	err = ctx->retval;
+ 	if (err)
+ 		goto bail;
+ 
+@@ -1588,6 +1687,7 @@
+ 		if (!cctx->session[i].used && cctx->session[i].valid) {
+ 			cctx->session[i].used = true;
+ 			session = &cctx->session[i];
++			get_device(session->dev);
+ 			/* any non-zero ID will work, session_idx + 1 is the simplest one */
+ 			fl->client_id = i + 1;
+ 			break;
+@@ -1606,6 +1706,7 @@
+ 	spin_lock_irqsave(&cctx->lock, flags);
+ 	session->used = false;
+ 	spin_unlock_irqrestore(&cctx->lock, flags);
++	put_device(session->dev);
+ }
+ 
+ static int fastrpc_release_current_dsp_process(struct fastrpc_user *fl)
+@@ -1671,9 +1772,18 @@
+ 	fl->cctx = cctx;
+ 	fl->is_secure_dev = fdevice->secure;
+ 
++	mutex_lock(&cctx->a9_invoke_lock);
++	if (!cctx->rpdev) {
++		mutex_unlock(&cctx->a9_invoke_lock);
++		mutex_destroy(&fl->mutex);
++		kfree(fl);
++		fastrpc_channel_ctx_put(cctx);
++		return -EPIPE;
++	}
+ 	fl->sctx = fastrpc_session_alloc(fl);
+ 	if (!fl->sctx) {
+ 		dev_err(&cctx->rpdev->dev, "No session available\n");
++		mutex_unlock(&cctx->a9_invoke_lock);
+ 		mutex_destroy(&fl->mutex);
+ 		kfree(fl);
+ 		fastrpc_channel_ctx_put(cctx);
+@@ -1684,6 +1794,7 @@
+ 	list_add_tail(&fl->user, &cctx->users);
+ 	spin_unlock_irqrestore(&cctx->lock, flags);
+ 	kref_init(&fl->refcount);
++	mutex_unlock(&cctx->a9_invoke_lock);
+ 
+ 	return 0;
+ }
+@@ -1767,6 +1878,13 @@
+ 			kfree(args);
+ 			return -EFAULT;
+ 		}
++		/* S1 uses kernel-owned bounce buffers only, no DMA-BUF mappings. */
++		for (u32 i = 0; i < nscalars; i++) {
++			if (args[i].fd != -1) {
++				kfree(args);
++				return -EPERM;
++			}
++		}
+ 	}
+ 
+ 	err = fastrpc_internal_invoke(fl, false, inv.handle, inv.sc, args);
+@@ -2171,6 +2289,10 @@
+ 	struct fastrpc_user *fl = (struct fastrpc_user *)file->private_data;
+ 	char __user *argp = (char __user *)arg;
+ 	int err;
++
++	/* Private S1 transport: no static heap, root attach, mmap or DSP loading. */
++	if (cmd != FASTRPC_IOCTL_INIT_ATTACH_SNS && cmd != FASTRPC_IOCTL_INVOKE)
++		return -EPERM;
+ 
+ 	switch (cmd) {
+ 	case FASTRPC_IOCTL_INVOKE:
+@@ -2248,6 +2370,7 @@
+ 	sess->used = false;
+ 	sess->valid = true;
+ 	sess->dev = dev;
++	sess->a9_cctx = cctx;
+ 	dev_set_drvdata(dev, sess);
+ 
+ 	if (cctx->domain_id == CDSP_DOMAIN_ID)
+@@ -2278,8 +2401,8 @@
+ 
+ static void fastrpc_cb_remove(struct platform_device *pdev)
+ {
+-	struct fastrpc_channel_ctx *cctx = dev_get_drvdata(pdev->dev.parent);
+ 	struct fastrpc_session_ctx *sess = dev_get_drvdata(&pdev->dev);
++	struct fastrpc_channel_ctx *cctx = sess->a9_cctx;
+ 	unsigned long flags;
+ 	int i;
+ 
+@@ -2384,6 +2507,10 @@
+ 		return err;
+ 	}
+ 
++	/* This private module may never bind another DSP's channel. */
++	if (strcmp(domain, "adsp"))
++		return -EPERM;
++
+ 	domain_id = fastrpc_get_domain_id(domain);
+ 
+ 	if (domain_id < 0) {
+@@ -2432,36 +2559,11 @@
+ 	secure_dsp = !(of_property_read_bool(rdev->of_node, "qcom,non-secure-domain"));
+ 	data->secure = secure_dsp;
+ 	data->soc_data = soc_data;
+-
+-	switch (domain_id) {
+-	case ADSP_DOMAIN_ID:
+-	case MDSP_DOMAIN_ID:
+-	case SDSP_DOMAIN_ID:
+-		/* Unsigned PD offloading is only supported on CDSP and GDSP */
+-		data->unsigned_support = false;
+-		err = fastrpc_device_register(rdev, data, secure_dsp, domain);
+-		if (err)
+-			goto err_free_data;
+-		break;
+-	case CDSP_DOMAIN_ID:
+-	case GDSP_DOMAIN_ID:
+-		data->unsigned_support = true;
+-		/* Create both device nodes so that we can allow both Signed and Unsigned PD */
+-		err = fastrpc_device_register(rdev, data, true, domain);
+-		if (err)
+-			goto err_free_data;
+-
+-		err = fastrpc_device_register(rdev, data, false, domain);
+-		if (err)
+-			goto err_deregister_fdev;
+-		break;
+-	default:
+-		err = -EINVAL;
+-		goto err_free_data;
+-	}
+-
+ 	kref_init(&data->refcount);
+-
++	mutex_init(&data->a9_invoke_lock);
++	atomic_set(&data->a9_dma_buffers, 0);
++	INIT_WORK(&data->a9_depopulate_work, fastrpc_a9_depopulate);
++	data->a9_channel_dev = get_device(rdev);
+ 	rdev->dma_mask = &data->dma_mask;
+ 	dma_set_mask_and_coherent(rdev, DMA_BIT_MASK(32));
+ 	INIT_LIST_HEAD(&data->users);
+@@ -2472,9 +2574,38 @@
+ 	data->rpdev = rpdev;
+ 	dev_set_drvdata(&rpdev->dev, data);
+ 
++	/* Finish CB creation before exposing a file that userspace can open. */
+ 	err = of_platform_populate(rdev->of_node, NULL, NULL, rdev);
+ 	if (err)
+-		goto err_deregister_fdev;
++		goto err_a9_depopulate;
++
++	switch (domain_id) {
++	case ADSP_DOMAIN_ID:
++	case MDSP_DOMAIN_ID:
++	case SDSP_DOMAIN_ID:
++		/* Unsigned PD offloading is only supported on CDSP and GDSP */
++		data->unsigned_support = false;
++		err = fastrpc_device_register(rdev, data, secure_dsp, domain);
++		if (err)
++			goto err_a9_depopulate;
++		break;
++	case CDSP_DOMAIN_ID:
++	case GDSP_DOMAIN_ID:
++		data->unsigned_support = true;
++		/* Create both device nodes so that we can allow both Signed and Unsigned PD */
++		err = fastrpc_device_register(rdev, data, true, domain);
++		if (err)
++			goto err_a9_depopulate;
++
++		err = fastrpc_device_register(rdev, data, false, domain);
++		if (err)
++			goto err_deregister_fdev;
++		break;
++	default:
++		err = -EINVAL;
++		goto err_a9_depopulate;
++	}
++
+ 
+ 	return 0;
+ 
+@@ -2484,6 +2615,11 @@
+ 	if (data->secure_fdevice)
+ 		misc_deregister(&data->secure_fdevice->miscdev);
+ 
++err_a9_depopulate:
++	of_platform_depopulate(rdev);
++	put_device(data->a9_channel_dev);
++	idr_destroy(&data->ctx_idr);
++	mutex_destroy(&data->a9_invoke_lock);
+ err_free_data:
+ 	kfree(data);
+ 	return err;
+@@ -2497,6 +2633,9 @@
+ 	list_for_each_entry(ctx, &user->pending, node) {
+ 		ctx->retval = -EPIPE;
+ 		complete(&ctx->work);
++		/* Cancel a response that can no longer arrive after disconnect. */
++		if (atomic_xchg(&ctx->a9_remote_ref, 0))
++			schedule_work(&ctx->put_work);
+ 	}
+ 	spin_unlock(&user->lock);
+ }
+@@ -2508,12 +2647,16 @@
+ 	struct fastrpc_user *user;
+ 	unsigned long flags;
+ 
+-	/* No invocations past this point */
++	/* No new context publication/send may cross this disconnect barrier. */
++	mutex_lock(&cctx->a9_invoke_lock);
+ 	spin_lock_irqsave(&cctx->lock, flags);
+ 	cctx->rpdev = NULL;
++	cctx->a9_removed = true;
++	atomic_inc(&a9_sensor_draining);
+ 	list_for_each_entry(user, &cctx->users, user)
+ 		fastrpc_notify_users(user);
+ 	spin_unlock_irqrestore(&cctx->lock, flags);
++	mutex_unlock(&cctx->a9_invoke_lock);
+ 
+ 	if (cctx->fdevice)
+ 		misc_deregister(&cctx->fdevice->miscdev);
+@@ -2527,7 +2670,8 @@
+ 	if (cctx->remote_heap)
+ 		fastrpc_buf_free(cctx->remote_heap);
+ 
+-	of_platform_depopulate(&rpdev->dev);
++	/* Final bounce-buffer free, not FD/PID disappearance, owns CB teardown. */
++	fastrpc_a9_maybe_depopulate(cctx);
+ 
+ 	fastrpc_channel_ctx_put(cctx);
+ }
+@@ -2551,15 +2695,19 @@
+ 
+ 	spin_lock_irqsave(&cctx->lock, flags);
+ 	ctx = idr_find(&cctx->ctx_idr, ctxid);
+-	spin_unlock_irqrestore(&cctx->lock, flags);
+-
+ 	if (!ctx) {
++		spin_unlock_irqrestore(&cctx->lock, flags);
+ 		dev_err(&rpdev->dev, "No context ID matches response\n");
+ 		return -ENOENT;
+ 	}
+-
++	if (!atomic_xchg(&ctx->a9_remote_ref, 0)) {
++		spin_unlock_irqrestore(&cctx->lock, flags);
++		return 0;
++	}
++	/* Claim and publish completion under the same lock as disconnect. */
+ 	ctx->retval = rsp->retval;
+ 	complete(&ctx->work);
++	spin_unlock_irqrestore(&cctx->lock, flags);
+ 
+ 	/*
+ 	 * The DMA buffer associated with the context cannot be freed in
+@@ -2592,6 +2740,11 @@
+ {
+ 	int ret;
+ 
++	if (!a9_sensor_fastrpc) {
++		pr_info("A9 sensor FastRPC: gate closed, no drivers registered\n");
++		return 0;
++	}
++
+ 	ret = platform_driver_register(&fastrpc_cb_driver);
+ 	if (ret < 0) {
+ 		pr_err("fastrpc: failed to register cb driver\n");
+@@ -2605,12 +2758,17 @@
+ 		return ret;
+ 	}
+ 
++	/* S1 is one attempt until reboot. Never permit module text/CB drivers to
++	 * disappear while a deferred teardown or orphan context can still exist. */
++	__module_get(THIS_MODULE);
+ 	return 0;
+ }
+ module_init(fastrpc_init);
+ 
+ static void fastrpc_exit(void)
+ {
++	if (!a9_sensor_fastrpc)
++		return;
+ 	platform_driver_unregister(&fastrpc_cb_driver);
+ 	unregister_rpmsg_driver(&fastrpc_driver);
+ }

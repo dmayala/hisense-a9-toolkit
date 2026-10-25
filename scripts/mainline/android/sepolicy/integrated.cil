@@ -1,0 +1,64 @@
+
+; ---- Integrated stage1 narrow additions, 2026-10-19 ----
+; OBS stage0: GPU probe enumerates DRM nodes and reads the E Ink uevent;
+; qualification appends its private log. Never allow creation in sysfs:
+; map_wc is absent on some kernels, so setup now tests existence first.
+(allow a9ml_gpu graphics_device_202504 (chr_file (getattr)))
+(allow a9ml_gpu a9ml_sysfs_eink_uevent (file (read open getattr)))
+(allow a9ml_gpu vendor_data_file_202504 (file (append)))
+; OBS stage0: /sys/class/leds traversal; do not grant settings_service find
+; or system tool execution to the vendor shim (optional theme operation).
+(allow a9ml_compat sysfs_leds_202504 (dir (search)))
+; OBS BT runs: kernel direct-loads vendor-labelled QCA/Adreno/ADSP firmware.
+(allow kernel_202504 a9ml_firmware_file (system (firmware_load)))
+; OBS S2c2: sensors HAL SSC discovery and receive socket. No net_admin.
+(allow hal_sensors_default self (qipcrtr_socket (create read write getattr getopt setopt)))
+; SRC: firmware-only bridge owns no modem control, stores or radio socket.
+(type a9ml_fw) (roletype r a9ml_fw) (roletype object_r a9ml_fw)
+(type a9ml_fw_exec) (roletype object_r a9ml_fw_exec)
+(typeattributeset domain (a9ml_fw))
+(typeattributeset file_type (a9ml_fw_exec))
+(typeattributeset exec_type (a9ml_fw_exec))
+(typeattributeset vendor_file_type (a9ml_fw_exec))
+(typeattributeset a9ml_domain (a9ml_fw))
+(typetransition init_202504 a9ml_fw_exec process a9ml_fw)
+(allow init_202504 a9ml_fw_exec (file (read open getattr map execute)))
+(allow init_202504 a9ml_fw (process (transition siginh rlimitinh)))
+(dontaudit init_202504 a9ml_fw (process (noatsecure)))
+(allow a9ml_fw a9ml_fw_exec (file (entrypoint read open getattr map execute)))
+(allow a9ml_fw a9_wifi_ram_file (dir (search read open getattr write add_name)))
+(allow a9ml_fw a9_wifi_ram_file (lnk_file (create read getattr)))
+(allow a9ml_fw rootfs_202504 (dir (search getattr)))
+(allow a9ml_gpu a9_wifi_ram_file (dir (search getattr)))
+(allow a9ml_gpu a9_wifi_ram_file (lnk_file (read getattr)))
+(allow kernel_202504 a9_wifi_ram_file (dir (search)))
+(allow kernel_202504 a9_wifi_ram_file (lnk_file (read)))
+; The bridge has no write permission on firmware payload files.
+
+; SRC init creates/restores only the fixed RAM bridge directories.
+(allow vendor_init_202504 a9_wifi_ram_file (dir (create read search open getattr write add_name setattr relabelfrom relabelto)))
+(allow vendor_init_202504 a9_wifi_ram_file (lnk_file (read getattr relabelto)))
+(allow hal_sensors_default a9ml_prop (file (read open getattr map)))
+
+; Read-only firmware type scoped to /vendor/firmware, rather than all vendor files.
+(type a9ml_firmware_file) (roletype object_r a9ml_firmware_file)
+(typeattributeset file_type (a9ml_firmware_file))
+(typeattributeset vendor_file_type (a9ml_firmware_file))
+(allow kernel_202504 a9ml_firmware_file (dir (search)))
+(allow kernel_202504 a9ml_firmware_file (file (open read getattr)))
+(allow a9ml_domain a9ml_firmware_file (dir (read open search getattr)))
+(allow a9ml_domain a9ml_firmware_file (file (read open getattr map)))
+(allow a9ml_domain a9ml_firmware_file (lnk_file (read getattr)))
+
+; Firmware-only helper gets shell execution without the module-loader
+; capability inherited by the other three shell helpers.
+(allow a9ml_fw vendor_shell_exec_202504 (file (read open getattr execute map)))
+(allow a9ml_fw vendor_toolbox_exec_202504 (file (read open getattr execute map execute_no_trans)))
+(allow a9ml_fw vendor_file_202504 (file (read open getattr execute map execute_no_trans)))
+(allow a9ml_fw vendor_file_202504 (lnk_file (read getattr)))
+(allow a9ml_fw sysfs_202504 (file (read open getattr)))
+(allow a9ml_fw a9ml_sysfs_param (dir (search read open getattr)))
+(allow a9ml_fw a9ml_sysfs_param (file (read open getattr)))
+(allow a9ml_fw self (fifo_file (read write open getattr ioctl)))
+(allow a9ml_fw system_data_root_file_202504 (dir (search getattr)))
+(allow a9ml_fw vendor_data_file_202504 (dir (search getattr)))

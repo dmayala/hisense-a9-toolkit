@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module name="primary" halVersion="3.0">
+  <attachedDevices>
+    <item>Speaker</item>
+    <item>Earpiece</item>
+    <item>Built-In Mic</item>
+  </attachedDevices>
+  <defaultOutputDevice>Speaker</defaultOutputDevice>
+  <mixPorts>
+    <mixPort name="primary output" role="source" flags="AUDIO_OUTPUT_FLAG_PRIMARY">
+      <profile name="" format="AUDIO_FORMAT_PCM_16_BIT" samplingRates="48000" channelMasks="AUDIO_CHANNEL_OUT_STEREO" />
+    </mixPort>
+    <mixPort name="primary input" role="sink">
+      <profile name="" format="AUDIO_FORMAT_PCM_16_BIT" samplingRates="48000" channelMasks="AUDIO_CHANNEL_IN_MONO" />
+    </mixPort>
+    <mixPort name="sco output" role="source">
+      <profile name="" format="AUDIO_FORMAT_PCM_16_BIT" samplingRates="8000 16000" channelMasks="AUDIO_CHANNEL_OUT_MONO" />
+    </mixPort>
+    <mixPort name="sco input" role="sink">
+      <profile name="" format="AUDIO_FORMAT_PCM_16_BIT" samplingRates="8000 16000" channelMasks="AUDIO_CHANNEL_IN_MONO" />
+    </mixPort>
+  </mixPorts>
+  <devicePorts>
+    <devicePort tagName="Speaker" type="AUDIO_DEVICE_OUT_SPEAKER" role="sink" address="CARD_0_DEV_0">
+      <profile name="" format="AUDIO_FORMAT_PCM_16_BIT" samplingRates="48000" channelMasks="AUDIO_CHANNEL_OUT_STEREO" />
+    </devicePort>
+    <devicePort tagName="Earpiece" type="AUDIO_DEVICE_OUT_EARPIECE" role="sink" address="CARD_0_DEV_24">
+      <profile name="" format="AUDIO_FORMAT_PCM_16_BIT" samplingRates="48000" channelMasks="AUDIO_CHANNEL_OUT_STEREO" />
+    </devicePort>
+    <devicePort tagName="Built-In Mic" type="AUDIO_DEVICE_IN_BUILTIN_MIC" role="source" address="CARD_0_DEV_1">
+      <profile name="" format="AUDIO_FORMAT_PCM_16_BIT" samplingRates="48000" channelMasks="AUDIO_CHANNEL_IN_MONO" />
+    </devicePort>
+    <!-- External analog jack: availability follows MBHC input switches. -->
+    <devicePort tagName="Wired Headphones" type="AUDIO_DEVICE_OUT_WIRED_HEADPHONE" role="sink">
+      <profile name="" format="AUDIO_FORMAT_PCM_16_BIT" samplingRates="48000" channelMasks="AUDIO_CHANNEL_OUT_STEREO" />
+    </devicePort>
+    <devicePort tagName="Wired Headset" type="AUDIO_DEVICE_OUT_WIRED_HEADSET" role="sink">
+      <profile name="" format="AUDIO_FORMAT_PCM_16_BIT" samplingRates="48000" channelMasks="AUDIO_CHANNEL_OUT_STEREO" />
+    </devicePort>
+    <!-- Unconnected Bluetooth templates use no address. ALSA aliases fail
+         the GSI's legacy round-trip conversion, which expects Bluetooth MACs. -->
+    <devicePort tagName="BT SCO" type="AUDIO_DEVICE_OUT_BLUETOOTH_SCO" role="sink">
+      <profile name="" format="AUDIO_FORMAT_PCM_16_BIT" samplingRates="8000 16000" channelMasks="AUDIO_CHANNEL_OUT_MONO" />
+    </devicePort>
+    <devicePort tagName="BT SCO Headset" type="AUDIO_DEVICE_OUT_BLUETOOTH_SCO_HEADSET" role="sink">
+      <profile name="" format="AUDIO_FORMAT_PCM_16_BIT" samplingRates="8000 16000" channelMasks="AUDIO_CHANNEL_OUT_MONO" />
+    </devicePort>
+    <devicePort tagName="BT SCO Carkit" type="AUDIO_DEVICE_OUT_BLUETOOTH_SCO_CARKIT" role="sink">
+      <profile name="" format="AUDIO_FORMAT_PCM_16_BIT" samplingRates="8000 16000" channelMasks="AUDIO_CHANNEL_OUT_MONO" />
+    </devicePort>
+    <devicePort tagName="BT SCO Mic" type="AUDIO_DEVICE_IN_BLUETOOTH_SCO_HEADSET" role="source">
+      <profile name="" format="AUDIO_FORMAT_PCM_16_BIT" samplingRates="8000 16000" channelMasks="AUDIO_CHANNEL_IN_MONO" />
+    </devicePort>
+  </devicePorts>
+  <routes>
+    <route type="mix" sink="Speaker" sources="primary output" />
+    <route type="mix" sink="Earpiece" sources="primary output" />
+    <route type="mix" sink="Wired Headphones" sources="primary output" />
+    <route type="mix" sink="Wired Headset" sources="primary output" />
+    <route type="mix" sink="primary input" sources="Built-In Mic" />
+    <route type="mix" sink="BT SCO" sources="sco output" />
+    <route type="mix" sink="BT SCO Headset" sources="sco output" />
+    <route type="mix" sink="BT SCO Carkit" sources="sco output" />
+    <route type="mix" sink="sco input" sources="BT SCO Mic" />
+  </routes>
+</module>

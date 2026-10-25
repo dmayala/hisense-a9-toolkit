@@ -1,0 +1,3 @@
+[  39.3] STOP: source did not resume the requested launcher/viewer activity
+[  40.2] home restored: yes
+[  40.2] pending HOME/file recovery: complete

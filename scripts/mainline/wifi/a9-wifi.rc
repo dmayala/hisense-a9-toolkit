@@ -1,0 +1,89 @@
+# Installed only with A9_WIFI=1. Build inclusion is not modem-start permission.
+# No persistent default, auto remoteproc start or restart-on-failure.
+on post-fs-data && property:ro.a9ml.wifi=1
+    mkdir /mnt/a9-wifi 0700 root root
+    mkdir /mnt/a9-wifi/firmware 0755 root root
+    mkdir /mnt/a9-wifi/rmtfs 0700 root root
+    mkdir /mnt/a9-wifi/tqftpserv 0700 root root
+    mkdir /mnt/a9-wifi/pd-mapper 0700 root root
+    mkdir /mnt/a9-wifi/diag-router 0700 root root
+    restorecon_recursive /mnt/a9-wifi
+    # Firmware-only preparation is synchronous and precedes early-boot E Ink
+    # setup. It starts no module, radio server or remote processor.
+    exec_start a9ml_wifi_firmware
+
+# Start the pre-authorised one-shot owner in this event, after the preceding
+# firmware preparation. A setprop -> on-property hop is queued behind the
+# already queued zygote-start/boot events; it is not an early service start.
+# Keep this next to preparation so RC filename/import ordering cannot start
+# the owner before /mnt/a9-wifi exists. The starter still enforces every opt-in,
+# B-slot, one-attempt, tool/store/companion and controller check.
+on post-fs-data && property:ro.a9ml.wifi=1 && property:ro.a9ml.wifi.session=1
+    setprop vendor.a9ml.wifi.session.state armed
+    start a9ml_wifi_session
+
+# Prepare the ordinary radio runtime data before queued zygote-start. Stock
+# starts both QCRIL instances in class main, irrespective of WLAN or SIM state.
+# exec_start failure is NOT a release: clients below still require ready=1.
+on post-fs-data && property:ro.a9ml.wifi=1 && property:ro.a9ml.wifi.session=1 && property:ro.vendor.a9ml.cellular=1
+    setprop vendor.a9ml.cellular.stock.ready 0
+    setprop vendor.a9ml.cellular.stock.state requested
+    setprop vendor.a9ml.cellular.stock.phase modules
+    setprop vendor.a9ml.cellular.stock.count 0
+    setprop vendor.a9ml.cellular.owner_released 0
+    setprop vendor.a9ml.cellular 1
+    exec_start a9ml-cellular-prepare
+    exec_start a9ml-stock-radio-prepare
+
+service a9ml_wifi_firmware /system/bin/sh /vendor/bin/a9ml-wifi-firmware.sh
+    user root
+    group root
+    seclabel u:r:a9_wifi_radio:s0
+    disabled
+    oneshot
+    timeout_period 10
+
+# Companion startup belongs to the traced, one-shot coordinator only.
+# There is no persistent property trigger or automatic module/service start.
+service a9ml_wifi_modules /system/bin/sh /vendor/bin/a9ml-wifi-modules.sh
+    user root
+    group root
+    seclabel u:r:a9_wifi_radio:s0
+    disabled
+    oneshot
+
+# The native helper copies verified private vendor seeds into its own fresh
+# noswap tmpfs, preopens exact FDs, detaches its old root, drops every
+# capability/UID/group and applies default-deny seccomp before static exec.
+service vendor.rmtfs /vendor/bin/a9-wifi-sandbox rmtfs
+    user root
+    group root
+    seclabel u:r:a9_wifi_radio:s0
+    disabled
+    oneshot
+
+service vendor.tqftpserv /vendor/bin/a9-wifi-sandbox tqftpserv
+    user root
+    group root
+    seclabel u:r:a9_wifi_radio:s0
+    disabled
+    oneshot
+
+service vendor.pd_mapper /vendor/bin/a9-wifi-sandbox pd-mapper
+    user root
+    group root
+    seclabel u:r:a9_wifi_radio:s0
+    disabled
+    oneshot
+
+# No init stop trigger tears down storage underneath a running modem. The
+# one-shot coordinator stops MPSS and proves offline before companion teardown.
+# MPSS startup remains an explicit coordinator step after all confined-server checks.
+
+# Conservative A6L parity: confined DIAG listener is live before coordinator MPSS start.
+service vendor.diag_router /vendor/bin/a9-wifi-sandbox diag-router
+    user root
+    group root
+    seclabel u:r:a9_wifi_radio:s0
+    disabled
+    oneshot

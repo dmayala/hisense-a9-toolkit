@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-3-Clause)
+/* Stock QSEECOM_CE1_CLK is a voter on RPM CE resource 0 at 192 MHz.
+ * SPI SE5/pins14..17 remain reserved to the sw_fp TA; no Linux SPI claim.
+ */
+&scm {
+	clocks = <&rpmcc 70>; /* RPM_SMD_CE1_CLK in mainline's rpmcc binding */
+	clock-names = "qsee";
+	assigned-clocks = <&rpmcc 70>;
+	assigned-clock-rates = <192000000>;
+};

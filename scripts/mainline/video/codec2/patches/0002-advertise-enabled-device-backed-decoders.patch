@@ -1,0 +1,67 @@
+diff --git a/v4l2/V4L2ComponentStore.cpp b/v4l2/V4L2ComponentStore.cpp
+index 927a4c0..245b4b9 100644
+--- a/v4l2/V4L2ComponentStore.cpp
++++ b/v4l2/V4L2ComponentStore.cpp
+@@ -15,11 +15,13 @@
+ #include <C2.h>
+ #include <C2Config.h>
+ #include <log/log.h>
++#include <cutils/properties.h>
+ #include <media/stagefright/foundation/MediaDefs.h>
+ 
+ #include <v4l2_codec2/components/ComponentStore.h>
+ #include <v4l2_codec2/v4l2/V4L2ComponentCommon.h>
+ #include <v4l2_codec2/v4l2/V4L2ComponentFactory.h>
++#include <v4l2_codec2/v4l2/V4L2Device.h>
+ 
+ namespace android {
+ 
+@@ -36,26 +38,28 @@ std::shared_ptr<C2ComponentStore> V4L2ComponentStore::Create() {
+ 
+     auto builder = ComponentStore::Builder("android.componentStore.v4l2");
+ 
+-    builder.encoder(V4L2ComponentName::kH264Encoder, VideoCodec::H264,
+-                    &V4L2ComponentFactory::create);
+-    builder.encoder(V4L2ComponentName::kVP8Encoder, VideoCodec::VP8, &V4L2ComponentFactory::create);
+-    builder.encoder(V4L2ComponentName::kVP9Encoder, VideoCodec::VP9, &V4L2ComponentFactory::create);
+-
+-    builder.decoder(V4L2ComponentName::kH264Decoder, VideoCodec::H264,
+-                    &V4L2ComponentFactory::create);
+-    builder.decoder(V4L2ComponentName::kVP8Decoder, VideoCodec::VP8, &V4L2ComponentFactory::create);
+-    builder.decoder(V4L2ComponentName::kVP9Decoder, VideoCodec::VP9, &V4L2ComponentFactory::create);
+-    builder.decoder(V4L2ComponentName::kHEVCDecoder, VideoCodec::HEVC,
+-                    &V4L2ComponentFactory::create);
+-
+-    builder.decoder(V4L2ComponentName::kH264SecureDecoder, VideoCodec::H264,
+-                    &V4L2ComponentFactory::create);
+-    builder.decoder(V4L2ComponentName::kVP8SecureDecoder, VideoCodec::VP8,
+-                    &V4L2ComponentFactory::create);
+-    builder.decoder(V4L2ComponentName::kVP9SecureDecoder, VideoCodec::VP9,
+-                    &V4L2ComponentFactory::create);
+-    builder.decoder(V4L2ComponentName::kHEVCSecureDecoder, VideoCodec::HEVC,
+-                    &V4L2ComponentFactory::create);
++    // Venus POC: expose only enabled, nonsecure decoders backed by a real device.
++    // This mainline path has no protected-content allocator/session support.
++    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.h264", false) &&
++        !V4L2Device::queryDecodingCapabilities(VideoCodec::H264).supportedProfiles.empty()) {
++        builder.decoder(V4L2ComponentName::kH264Decoder, VideoCodec::H264,
++                        &V4L2ComponentFactory::create);
++    }
++    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.vp8", false) &&
++        !V4L2Device::queryDecodingCapabilities(VideoCodec::VP8).supportedProfiles.empty()) {
++        builder.decoder(V4L2ComponentName::kVP8Decoder, VideoCodec::VP8,
++                        &V4L2ComponentFactory::create);
++    }
++    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.vp9", false) &&
++        !V4L2Device::queryDecodingCapabilities(VideoCodec::VP9).supportedProfiles.empty()) {
++        builder.decoder(V4L2ComponentName::kVP9Decoder, VideoCodec::VP9,
++                        &V4L2ComponentFactory::create);
++    }
++    if (property_get_bool("ro.vendor.v4l2_codec2.decoder.supported.hevc", false) &&
++        !V4L2Device::queryDecodingCapabilities(VideoCodec::HEVC).supportedProfiles.empty()) {
++        builder.decoder(V4L2ComponentName::kHEVCDecoder, VideoCodec::HEVC,
++                        &V4L2ComponentFactory::create);
++    }
+ 
+     store = std::shared_ptr<C2ComponentStore>(std::move(builder).build());
+     platformStore = store;

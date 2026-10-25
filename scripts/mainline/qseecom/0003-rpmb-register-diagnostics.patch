@@ -1,0 +1,81 @@
+--- a/drivers/firmware/qcom/qcom_scm.c
++++ b/drivers/firmware/qcom/qcom_scm.c
+@@ -326,6 +326,9 @@
+ 		return scm_legacy_call(dev, desc, res);
+ 	default:
+ 		pr_err("Unknown current SCM calling convention.\n");
++		if (desc->owner == 50 && desc->svc == 2 &&
++		    (desc->cmd == 6 || desc->cmd == 1) && desc->args[0] == 0x2000)
++			pr_info("A9_RPMB_SCM check=unknown_convention rc=-22\n");
+ 		return -EINVAL;
+ 	}
+ }
+@@ -2229,6 +2232,9 @@
+ int qcom_scm_qseecom_android_call(const struct qcom_scm_desc *desc,
+ 				struct qcom_scm_res *res)
+ {
++	bool rpmb = desc->owner == QSEECOM_TZ_OWNER_QSEE_OS &&
++		desc->svc == 2 && (desc->cmd == 6 || desc->cmd == 1) &&
++		desc->args[0] == 0x2000;
+ 	int ret;
+ 
+ 	if (!__scm)
+@@ -2240,12 +2246,18 @@
+ 	if (desc->owner == QSEECOM_TZ_OWNER_QSEE_OS ||
+ 	    desc->owner == QSEECOM_TZ_OWNER_TZ_APPS) {
+ 		ret = clk_prepare_enable(__scm->qsee_clk);
++		if (rpmb)
++			pr_info("A9_RPMB_SCM check=ce_clock rc=%d\n", ret);
+ 		if (ret)
+ 			goto unlock;
+ 		ret = qcom_scm_bw_enable();
++		if (rpmb)
++			pr_info("A9_RPMB_SCM check=bandwidth rc=%d\n", ret);
+ 		if (ret)
+ 			goto disable_clk;
+ 		ret = qcom_scm_call(__scm->dev, desc, res);
++		if (rpmb)
++			pr_info("A9_RPMB_SCM check=transport_return rc=%d\n", ret);
+ 		qcom_scm_bw_disable();
+  disable_clk:
+ 		clk_disable_unprepare(__scm->qsee_clk);
+--- a/drivers/firmware/qcom/qcom_scm-smc.c
++++ b/drivers/firmware/qcom/qcom_scm-smc.c
+@@ -159,6 +159,8 @@
+ 		   enum qcom_scm_convention qcom_convention,
+ 		   struct qcom_scm_res *res, bool atomic)
+ {
++	bool rpmb = desc->owner == 50 && desc->svc == 2 &&
++		(desc->cmd == 6 || desc->cmd == 1) && desc->args[0] == 0x2000;
+ 	int arglen = desc->arginfo & 0xf;
+ 	int i, ret;
+ 	void *args_virt __free(qcom_tzmem) = NULL;
+@@ -181,8 +183,11 @@
+ 	if (unlikely(arglen > SCM_SMC_N_REG_ARGS)) {
+ 		struct qcom_tzmem_pool *mempool = qcom_scm_get_tzmem_pool();
+ 
+-		if (!mempool)
++		if (!mempool) {
++			if (rpmb)
++				pr_info("A9_RPMB_SCM check=missing_ext_pool nargs=%d rc=-22\n", arglen);
+ 			return -EINVAL;
++		}
+ 
+ 		args_virt = qcom_tzmem_alloc(mempool,
+ 					     SCM_SMC_N_EXT_ARGS * sizeof(u64),
+@@ -207,7 +212,15 @@
+ 		smc.args[SCM_SMC_LAST_REG_IDX] = qcom_tzmem_to_phys(args_virt);
+ 	}
+ 
++	if (rpmb)
++		pr_info("A9_RPMB_SCM check=invoke fn=%#lx arginfo=%#x nargs=%d size=%llu buf_page_aligned=%u len_page_aligned=%u\n",
++			smc.args[0], desc->arginfo, arglen, desc->args[2],
++			IS_ALIGNED(desc->args[1], PAGE_SIZE), IS_ALIGNED(desc->args[2], PAGE_SIZE));
+ 	ret = __scm_smc_do(dev, &smc, &smc_res, atomic);
++	if (rpmb)
++		pr_info("A9_RPMB_SCM check=smc_return transport=%d status_valid=%u secure_status=%ld mapped_rc=%d\n",
++			ret, !ret, ret ? 0L : (long)smc_res.a0,
++			ret ? ret : (smc_res.a0 ? qcom_scm_remap_error(smc_res.a0) : 0));
+ 
+ 	trace_scm_smc_done(ret, smc.args[0], &smc_res);
+ 

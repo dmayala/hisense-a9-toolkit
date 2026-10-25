@@ -1,0 +1,147 @@
+From 2bdb20c13223c4eea5ab7ce69db7e21caa3c6f0f Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 08:19:55 -0700
+Subject: [PATCH] regulator: fp9929a: max_on_ms as a validated per-session cap;
+ PG origin before VCOM-EN; highpri timer
+
+Review 4 of the A9 E3 work: the per-session HV limit must be enforced in
+the kernel, not by a userspace poll that is blind while it waits for the
+test client, I2C reads or its own cleanup. The existing max_on_ms timer
+already starts at energize (before PWRUP), drops the pins in the stock
+order (also while another path holds the regulator lock, 0021) and
+latches a fault. Make it usable as that cap:
+
+- max_on_ms is now module_param_cb: 1..20000 accepted, 0 (no limit) and
+  larger values refused with -EINVAL; a write while the rails are
+  energized is refused with -EBUSY (checked under the gate lock, the same
+  lock energize reads the value under), so a new value only ever applies
+  to the next power-up and can never extend a running one;
+- the timer runs on system_highpri_wq (nice -20 kworker);
+- the PG deadline origin is taken BEFORE the VCOM-EN write: a task switch
+  after the write can then only shorten the PG window, never hand a late
+  observer a fresh 100 ms (reproduced on the host with 0023: a 150 ms
+  stall after the write still succeeded).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/regulator/fp9929a.c | 70 +++++++++++++++++++++++++++++++++----
+ 1 file changed, 63 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/regulator/fp9929a.c b/drivers/regulator/fp9929a.c
+index e4289ffcc..86f1b814f 100644
+--- a/drivers/regulator/fp9929a.c
++++ b/drivers/regulator/fp9929a.c
+@@ -27,7 +27,7 @@
+  *  - probe never talks I2C; it only takes the GPIOs and, if the bootloader left
+  *    the rails up, runs the power-DOWN sequence above;
+  *  - shutdown/remove always power down;
+- *  - hard on-time limit: fp9929a.max_on_ms (default 20000, 0 = off), counted
++ *  - hard on-time limit: fp9929a.max_on_ms (1..20000, default 20000), counted
+  *    from the moment PWRUP is first raised (so it also covers a power-up
+  *    that stalls, e.g. in I2C). If the rails are still energized that long
+  *    afterwards, the work below runs the stock power-down and LATCHES a
+@@ -153,10 +153,15 @@ module_param(pg_timeout_ms, uint, 0644);
+ MODULE_PARM_DESC(pg_timeout_ms,
+ 		 "Power-up fails unless PG reads good within this long after VCOM-EN (ms, default 100; read at each power-up)");
+ 
+-static unsigned int max_on_ms = 20000;
+-module_param(max_on_ms, uint, 0644);
+-MODULE_PARM_DESC(max_on_ms,
+-		 "Force the E Ink rails down and latch a fault if they stay on longer than this (ms, 0 = no limit; read at each power-up)");
++/*
++ * max_on_ms: the per-power-up HV limit, counted from energize (before PWRUP).
++ * 1..FP9929A_MAX_ON_CEIL ms; 0 (no limit) and larger values are refused, and
++ * so is any change while the rails are energized: a new value only ever
++ * applies to the NEXT power-up. The E3/E5 sequencer lowers it per session
++ * and restores the default afterwards. Setter below (needs struct fp9929a).
++ */
++#define FP9929A_MAX_ON_CEIL	20000
++static unsigned int max_on_ms = FP9929A_MAX_ON_CEIL;
+ 
+ /* bumped by every write of 1 to clear_fault; a latch older than it is void */
+ static atomic_t fp9929a_clear_gen = ATOMIC_INIT(0);
+@@ -204,6 +209,47 @@ struct fp9929a {
+ 	int temp_c;
+ };
+ 
++/* the one FP9929A of the A9: lets the max_on_ms setter see "energized" */
++static struct fp9929a *fp9929a_inst;
++
++static void fp9929a_forget_inst(void *data)
++{
++	mutex_lock(&fp9929a_gate_lock);
++	if (READ_ONCE(fp9929a_inst) == data)
++		WRITE_ONCE(fp9929a_inst, NULL);
++	mutex_unlock(&fp9929a_gate_lock);
++}
++
++static int fp9929a_max_on_set(const char *val, const struct kernel_param *kp)
++{
++	struct fp9929a *fp;
++	unsigned int v;
++	int ret;
++
++	ret = kstrtouint(val, 0, &v);
++	if (ret)
++		return ret;
++	if (!v || v > FP9929A_MAX_ON_CEIL)
++		return -EINVAL;
++	/* energize sets "energized" and reads max_on_ms under the gate lock */
++	mutex_lock(&fp9929a_gate_lock);
++	fp = READ_ONCE(fp9929a_inst);
++	if (fp && READ_ONCE(fp->energized))
++		ret = -EBUSY;
++	else
++		WRITE_ONCE(max_on_ms, v);
++	mutex_unlock(&fp9929a_gate_lock);
++	return ret;
++}
++
++static const struct kernel_param_ops fp9929a_max_on_ops = {
++	.set = fp9929a_max_on_set,
++	.get = param_get_uint,
++};
++module_param_cb(max_on_ms, &fp9929a_max_on_ops, &max_on_ms, 0644);
++MODULE_PARM_DESC(max_on_ms,
++		 "Force the E Ink rails down and latch a fault this long after a power-up starts (ms, 1..20000, default 20000; read at each power-up, refused while energized)");
++
+ static u8 fp9929a_vcom_code(unsigned int mv)
+ {
+ 	if (mv < FP9929A_VCOM_MIN_MV || mv >= FP9929A_VCOM_MAX_MV)
+@@ -449,8 +495,9 @@ static int __fp9929a_enable(struct fp9929a *fp)
+ 	WRITE_ONCE(fp->deadline, jiffies + (fp->max_on_ms ?
+ 			msecs_to_jiffies(fp->max_on_ms) : MAX_JIFFY_OFFSET));
+ 	WRITE_ONCE(fp->energized, true);
++	/* highpri: a kworker at nice -20, not behind ordinary work */
+ 	if (fp->max_on_ms)
+-		mod_delayed_work(system_wq, &fp->max_on_work,
++		mod_delayed_work(system_highpri_wq, &fp->max_on_work,
+ 				 msecs_to_jiffies(fp->max_on_ms));
+ 	gpiod_set_value_cansleep(fp->pwrup, 1);
+ 	mutex_unlock(&fp9929a_gate_lock);
+@@ -477,8 +524,13 @@ static int __fp9929a_enable(struct fp9929a *fp)
+ 		mutex_unlock(&fp->lock);
+ 		return ret;
+ 	}
++	/*
++	 * origin of the PG deadline, taken BEFORE the pin rises (review 4): a
++	 * task switch after the GPIO write can then only shorten the PG window,
++	 * never give a late observer a fresh one
++	 */
++	vcom_on = ktime_get();
+ 	gpiod_set_value_cansleep(fp->vcom_en, 1);
+-	vcom_on = ktime_get();		/* origin of the PG deadline */
+ 	mutex_unlock(&fp9929a_gate_lock);
+ 
+ 	pg_ms = READ_ONCE(pg_timeout_ms);
+@@ -729,6 +781,10 @@ static int fp9929a_probe(struct i2c_client *client)
+ 	fp->panic_nb.priority = INT_MAX;	/* before anything that may hang */
+ 	atomic_notifier_chain_register(&panic_notifier_list, &fp->panic_nb);
+ 	ret = devm_add_action_or_reset(dev, fp9929a_unregister_panic, fp);
++	if (ret)
++		return ret;
++	WRITE_ONCE(fp9929a_inst, fp);
++	ret = devm_add_action_or_reset(dev, fp9929a_forget_inst, fp);
+ 	if (ret)
+ 		return ret;
+ 

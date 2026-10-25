@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config DRM_A9_EINK
+	tristate "Hisense A9 (HLTE556N) E Ink display with in-kernel software TCON"
+	depends on DRM && OF && ARM64 && MMU
+	depends on REGULATOR_FP9929A && IIO
+	# msm's fbdev client would scan console contents out to the E Ink transport
+	depends on !DRM_FBDEV_EMULATION
+	select DRM_CLIENT
+	select DRM_KMS_HELPER
+	select DRM_GEM_SHMEM_HELPER
+	select FW_LOADER
+	select CRYPTO_LIB_SHA256
+	help
+	  An 824x1648 KMS device for the Hisense A9 E Ink panel. The kernel
+	  runs the software TCON (a port of the stock composer's frame
+	  generation) and scans the 448x829 drive frames out through the msm
+	  DSI output and the TC358767 bridge. Waveform tables are loaded with
+	  request_firmware from hisense/a9-waveform.bin, extracted by the
+	  user from their own composer binary. Sends nothing to the panel
+	  unless a9_eink.enable=1.
+
+config DRM_A9_EINK_KUNIT_TEST
+	bool "KUnit tests for the a9_eink KMS state" if !KUNIT_ALL_TESTS
+	depends on DRM_A9_EINK=y && KUNIT=y
+	select DRM_KUNIT_TEST_HELPERS
+	default KUNIT_ALL_TESTS
+	help
+	  Atomic-check tests of the fixed-mode CRTC (ACTIVE-only commits,
+	  disable commits keeping the mode, framebuffer sizes). No hardware.

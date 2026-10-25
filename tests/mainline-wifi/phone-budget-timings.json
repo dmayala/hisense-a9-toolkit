@@ -1,0 +1,116 @@
+{
+  "provenance": "2026-10-17 boot7/8/9-evidence trial-post.tar and capture3-191859, capture8-203253, capture9-233128 ctl-stdout.txt. All available A9_WIFI_TIMING marks and calibration only; missing phases are explicitly censored/substituted, not zero. No private stores or identifiers.",
+  "trials": [
+    {
+      "trial": 3,
+      "offline_proof_seconds": 110.02,
+      "audit_cost": 1,
+      "store_cost": 3,
+      "cleanup_estimate": 14,
+      "stop_to_offline_seconds": 0.37,
+      "offline_to_helpers_stopped_seconds": 2.31,
+      "helpers_stopped_to_complete_seconds": 0.26,
+      "timings": {
+        "offline-audit-begin": 349.88,
+        "offline-audit-end": 459.9,
+        "guards-arm": 463.21,
+        "stop-request": 479.49,
+        "modem-offline": 479.86,
+        "helpers-stopped": 482.17,
+        "stop-evidence-complete": 482.43
+      },
+      "capture": "capture3-191859",
+      "guarded_replay": {
+        "guard_launch": 1,
+        "gate": 7,
+        "diag": 1,
+        "gate_after": 7,
+        "admission": 1
+      },
+      "guarded_replay_basis": "17 s stress envelope rounded above the measured 16.28 s guard-arm to stop-request interval; activation was censored at its old 15 s wrapper, so internal gate durations are unknown."
+    },
+    {
+      "trial": 4,
+      "offline_proof_seconds": 15.59,
+      "audit_cost": 2,
+      "store_cost": 3,
+      "cleanup_estimate": 16,
+      "stop_to_offline_seconds": 0.38,
+      "offline_to_helpers_stopped_seconds": 2.91,
+      "helpers_stopped_to_complete_seconds": 0.14,
+      "timings": {
+        "offline-audit-begin": 202.17,
+        "offline-audit-end": 217.76,
+        "stop-request": 221.76,
+        "modem-offline": 222.14,
+        "helpers-stopped": 225.05,
+        "stop-evidence-complete": 225.19
+      },
+      "capture": "capture8-203253",
+      "guarded_replay": {
+        "guard_launch": 2.53,
+        "gate": 3.44,
+        "diag": 0.17,
+        "gate_after": 3.82,
+        "admission": 1
+      },
+      "guarded_replay_basis": "Trial 5 measured guarded phases, plus 1 s for uninstrumented gaps and final checks. Trial 4 never armed; these are substituted costs, not measurements of trial 4."
+    },
+    {
+      "trial": 5,
+      "offline_proof_seconds": 14.71,
+      "audit_cost": 2,
+      "store_cost": 4,
+      "cleanup_estimate": 18,
+      "stop_to_offline_seconds": 0.24,
+      "offline_to_helpers_stopped_seconds": 2.7,
+      "helpers_stopped_to_complete_seconds": 0.27,
+      "timings": {
+        "offline-audit-begin": 195.34,
+        "calibration-audit-begin": 208.88,
+        "calibration-audit-end": 209.45,
+        "offline-audit-end": 210.05,
+        "stores-pre-begin": 210.59,
+        "stores-pre-end": 213.19,
+        "guards-arm": 213.61,
+        "start-gate-before-begin": 216.14,
+        "start-gate-before-end": 219.58,
+        "start-diag-begin": 219.63,
+        "start-diag-end": 219.8,
+        "start-gate-after-begin": 219.87,
+        "start-gate-after-end": 223.69,
+        "start-freshness-end": 223.72,
+        "stop-request": 224.88,
+        "modem-offline": 225.12,
+        "stop-audit-begin": 225.85,
+        "stop-audit-end": 226.32,
+        "helpers-stop-begin": 226.38,
+        "helpers-stopped": 227.82,
+        "stop-evidence-complete": 228.09
+      },
+      "capture": "capture9-233128",
+      "guarded_replay": {
+        "guard_launch": 2.53,
+        "gate": 3.44,
+        "diag": 0.17,
+        "gate_after": 3.82,
+        "admission": 1
+      },
+      "guarded_replay_basis": "Measured trial 5 guarded phases, plus 1 s for uninstrumented gaps and final checks."
+    }
+  ],
+  "run8_release": {
+    "provenance": "2026-10-17 run 8 (trial8.log, capture8-082304 dmesg, boot8-evidence trial-post.tar). Uptime seconds; measured, not modeled.",
+    "mpss_up": 230.897,
+    "old_post_start_proof_end": 233.37,
+    "old_post_start_proof_seconds": 2.47,
+    "modem_fatal": 233.319,
+    "modem_request_tolerance_ms_seen": [
+      56,
+      68,
+      78
+    ],
+    "critical_path_limit_seconds": 0.05,
+    "basis": "The old release ran a full forking census (2.47 s) before the gate byte. The fixed path releases on a fork-free minimal check and runs the census afterwards; a future change must not put it back before the gate."
+  }
+}

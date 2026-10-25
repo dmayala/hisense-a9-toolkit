@@ -1,0 +1,24 @@
+# Stock GPIO control module; QSEECom/qseecomd/keymaster come from integ5.
+on post-fs-data
+    insmod /vendor/lib/modules/a9-sunwave.ko
+    mkdir /data/vendor_de/0 0771 system system
+    restorecon /data/vendor_de/0
+    mkdir /data/vendor_de/0/fpdata 0700 system system
+    restorecon_recursive /data/vendor_de/0/fpdata
+
+service vendor.fps_hal /vendor/bin/hw/android.hardware.biometrics.fingerprint@2.1-service
+    class hal
+    user system
+    group system input uhid drmrpc
+    seclabel u:r:hal_fingerprint_default:s0
+    setenv LD_LIBRARY_PATH /vendor/lib64/a9-fingerprint:/vendor/lib64:/system/lib64
+    interface android.hardware.biometrics.fingerprint@2.1::IBiometricsFingerprint default
+    disabled
+
+# Allow hwservicemanager to resolve the declared default instance to this service.
+# Keep actual stock listener readiness; do not replace qseecomd or its workers.
+on property:vendor.sys.listeners.registered=true && property:vendor.a9.fingerprint.enable=1
+    start vendor.fps_hal
+
+on property:vendor.a9.fingerprint.enable=0
+    stop vendor.fps_hal

@@ -1,0 +1,4 @@
+# UsbService is constructed by system_server after post-fs-data. Publish its
+# legacy discovery path before then; do not disturb R4 early ADB binding.
+on post-fs-data
+    insmod /vendor/lib/modules/a9-usb-compat.ko

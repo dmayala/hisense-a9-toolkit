@@ -1,0 +1,92 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
+/*
+ * Hisense A9 (HLTE556N) -- ADSP + FastRPC for the sensors PD (SEE).
+ * 2026-10-15, sensors worktree, runs/sensors.md section 1. PREPARATION ONLY:
+ * wired into NO build (no flag); compile-checked by sensors/check-adsp-dt.sh.
+ * Starting a remoteproc is a new class of risk on this phone (TZ PAS
+ * authentication, memory-region/XPU mismatch = instant reset): main must
+ * review it, and the first boot needs the usual fail-safe (PON beacon 2).
+ *
+ * MEASURED in the stock base DT (golden dump, sol-pmic/evidence/base_0.dts):
+ *  - ADSP PIL: qcom,pas-id 1, region pil_adsp_region@53800000 size 0x1e00000
+ *    (l.375); mainline sm6115.dtsi reserves 0x2800000 there.
+ *  - adsprpc-smd context banks: apps SMMU SIDs 0x1c3..0x1c7, mask 0
+ *    (l.3760-3800); qcom,fastrpc-adsp-sensors-pdr (l.3702): the sensors
+ *    protection domain lives on the ADSP ("sensor_pd", image/adsps.jsn).
+ *  - adsp.mdt+b00..b35 in modem_a image/ (dated 2022-12-28); squashed with
+ *    pil-squash.py: 15,192,064 bytes, segments 0x53400000..0x55000000
+ *    (0x1c00000, fits the stock 0x1e00000 region).
+ * No AP-side sensor node exists in the stock DT/DTBO: KXTJ3 accel, AK0991x
+ * mag and STK3B6X ALS/proximity are driven by the ADSP over its own buses
+ * (TLMM 32/35/113 stay reserved in the board DT).
+ */
+
+&pil_adsp_mem {
+	reg = <0x0 0x53800000 0x0 0x1e00000>;	/* stock size */
+};
+
+/*
+ * Keep the rest of the old upstream ADSP window reserved: stock puts IPA FW,
+ * IPA GSI and the GPU zap region at 0x55600000-0x55617000 (base_0.dts
+ * reserved-memory), which upstream's 0x2800000 ADSP window covered. The set
+ * of no-map memory is therefore exactly what it was before this fragment.
+ */
+/ {
+	reserved-memory {
+		a9_adsp_tail_mem: memory@55600000 {
+			reg = <0x0 0x55600000 0x0 0xa00000>;
+			no-map;
+		};
+	};
+};
+
+&remoteproc_adsp {
+	/* firmware-name = qcom/sm6115/hisense/hlte556n/adsp.mbn (board DT) */
+	status = "okay";
+
+	glink-edge {
+		/* sensors only: no audio services (q6core/afe/asm/adm) on this edge yet */
+		apr {
+			status = "disabled";
+		};
+
+		fastrpc {
+			compatible = "qcom,fastrpc";
+			qcom,glink-channels = "fastrpcglink-apps-dsp";
+			label = "adsp";
+			qcom,non-secure-domain;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			compute-cb@3 {
+				compatible = "qcom,fastrpc-compute-cb";
+				reg = <3>;
+				iommus = <&apps_smmu 0x01c3 0x0>;
+			};
+
+			compute-cb@4 {
+				compatible = "qcom,fastrpc-compute-cb";
+				reg = <4>;
+				iommus = <&apps_smmu 0x01c4 0x0>;
+			};
+
+			compute-cb@5 {
+				compatible = "qcom,fastrpc-compute-cb";
+				reg = <5>;
+				iommus = <&apps_smmu 0x01c5 0x0>;
+			};
+
+			compute-cb@6 {
+				compatible = "qcom,fastrpc-compute-cb";
+				reg = <6>;
+				iommus = <&apps_smmu 0x01c6 0x0>;
+			};
+
+			compute-cb@7 {
+				compatible = "qcom,fastrpc-compute-cb";
+				reg = <7>;
+				iommus = <&apps_smmu 0x01c7 0x0>;
+			};
+		};
+	};
+};

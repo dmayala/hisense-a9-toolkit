@@ -1,0 +1,53 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
+/*
+ * Hisense A9 (HLTE556N) -- ADSP stage D0: firmware boot only (runs/adsp-plan.md).
+ * #included LAST, after the integ-1 board DT
+ * (sm6115-hisense-hlte556n-android-gpu-thermal.dts), by
+ * scripts/mainline/adsp/build-adsp-dtb.sh. Wired into no default build.
+ *
+ * What it changes, and nothing else (build-adsp-dtb.sh checks the exact
+ * node/property delta against the integ-1 DTB):
+ *  - remoteproc@a400000: status okay, firmware-name = the stock split image.
+ *  - its glink-edge APR and FastRPC nodes: disabled.
+ *  - LPASS LPI pinctrl: disabled (no LPASS register access in D0).
+ *
+ * Reserved memory is NOT touched here: the GPU board DT already shrinks
+ * pil_adsp_mem to the stock pil_adsp_region@53800000 size 0x1e00000 and keeps
+ * 0x55600000-0x56000000 no-map (stock IPA fw/GSI, GPU zap, tail). MEASURED in
+ * the stock base DT (sol-pmic/evidence/base_0.dts and sol-audio/stock/merged.dts
+ * l.375): qcom,lpass@ab00000 pas-id 1, memory-region = that 0x1e00000 region.
+ * The stock adsp.mdt load segments span 0x53400000-0x55000000 (0x1c00000) and
+ * are relocatable; the mainline loader offsets them from the region base.
+ * Stock runtime relocation/signature acceptance are not verified by this DT.
+ *
+ * FastRPC context-bank contents are preserved; D0 disables their parent.
+ * lpass_tlmm's clock provider q6afecc lives under the disabled APR node.
+ * An eventual D0 bundle must ALSO exclude FastRPC, APR and LPI modules;
+ * no bundle or runtime loader is delivered by this offline scaffolding.
+ *
+ * PAS auto-boots ADSP (adsp_resource_init.auto_boot = true) as soon as
+ * qcom_q6v5_pas binds. THIS OVERLAY DOES NOT DEFUSE AUTO-BOOT. Withholding
+ * firmware is not a proven start gate: lookup has other search paths and
+ * remoteproc's asynchronous callback calls rproc_boot again. A future reviewed
+ * PAS manual-start gate before rproc_add, runtime recovery=disabled readback,
+ * and a bounded once-per-boot harness are required before a D0 phone trial.
+ * This file is wired into no default build and is NOT a phone-trial GO.
+ */
+
+&remoteproc_adsp {
+	firmware-name = "qcom/sm6115/hisense/hlte556n/adsp.mdt";
+	status = "okay";
+
+	glink-edge {
+		apr {
+			status = "disabled";
+		};
+		fastrpc {
+			status = "disabled";
+		};
+	};
+};
+
+&lpass_tlmm {
+	status = "disabled";
+};

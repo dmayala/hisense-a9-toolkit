@@ -1,0 +1,54 @@
+; Round 4: curated enforcing-round3 capture, not generated audit2allow output.
+; Camera's module loader is a vendor_init shell script. Its first tr command
+; uses vendor toybox; set -e previously exited before loading sensor/CAMSS.
+(allow vendor_init_202504 vendor_toolbox_exec_202504 (file (read open getattr map execute execute_no_trans)))
+
+; init logs show camera/logd already running. Normal shell could not read the
+; private init status properties, making getprop report an empty value.
+(allow shell_202504 init_service_status_private_prop (file (read open getattr map)))
+; Targeted lshal diagnostics for the already registered camera/Codec2 HALs.
+(allow shell_202504 hal_camera_hwservice_202504 (hwservice_manager (find)))
+(allow shell_202504 hal_codec2_hwservice_202504 (hwservice_manager (find)))
+(allow shell_202504 hidl_base_hwservice_202504 (hwservice_manager (find)))
+(allow shell_202504 hal_camera_default (binder (call transfer)))
+(allow shell_202504 mediacodec (binder (call transfer)))
+
+; Launcher/GMS render-thread crashes: Mesa enumerates DRM device uevent files.
+; Keep app reads scoped to static DRM metadata, not all generic sysfs files.
+; vkms_create registers DEFAULT_DEVICE_NAME "vkms" on the faux bus in 7.2.
+(genfscon sysfs "/devices/faux/vkms/uevent" (u object_r a9ml_sysfs_eink_uevent ((s0) (s0))))
+(genfscon sysfs "/devices/platform/soc@0/5900000.gpu/uevent" (u object_r a9ml_sysfs_eink_uevent ((s0) (s0))))
+(typeattribute a9ml_drm_metadata_reader)
+(typeattributeset a9ml_drm_metadata_reader (appdomain system_server_202504 surfaceflinger_202504 hal_graphics_composer_default hal_graphics_allocator_default mediacodec mediaswcodec_202504))
+(allow a9ml_drm_metadata_reader a9ml_sysfs_eink_uevent (file (read open getattr)))
+(allow hal_graphics_composer_default graphics_device_202504 (chr_file (ioctl)))
+(allowx hal_graphics_composer_default graphics_device_202504 (ioctl chr_file (0x64a0)))
+
+; Read-only mount setup and toybox mount's cleanup probe on the source block
+; device. LOOP_CLR_FD (0x4c01) is not a disk data-write ioctl; on a non-loop
+; source the kernel rejects it with ENOTTY. No generic block write granted.
+(allow a9_wifi_radio mnt_vendor_file_202504 (dir (read open search getattr mounton)))
+(allowx a9_wifi_radio block_device_202504 (ioctl blk_file (0x4c01)))
+
+; Existing sensor registry atomically replaces its private RAM temporary file.
+(allow a9ml_sensors tmpfs_202504 (file (rename)))
+(allow a9ml_sensors a9ml_sysfs_mpss (dir (read open search getattr)))
+(allow hal_gnss_default tmpfs_202504 (file (read append setattr)))
+(allow system_suspend a9ml_sysfs_mpss (dir (read open search getattr)))
+(allow system_suspend a9ml_sysfs_mpss (file (read open getattr)))
+(allow system_suspend a9ml_sysfs_adsp (dir (read open search getattr)))
+(allow system_suspend a9ml_sysfs_adsp (file (read open getattr)))
+
+; Preserve current E Ink qualification/fault-log and GPU DRM-master checks.
+; Capability sys_ptrace lets the existing comm enumeration pass ptrace-mode
+; proc metadata checks; no cross-domain process ptrace allow is added.
+(allow a9ml_eink self (capability (dac_override sys_ptrace)))
+(allow a9ml_eink proc_type (file (getattr)))
+(allow a9ml_eink config_gz (file (getattr)))
+(allow a9ml_eink kmsg_device_202504 (chr_file (read open getattr)))
+(allow a9ml_gpu self (capability (sys_admin)))
+(allow a9ml_gpu shell_data_file_202504 (dir (remove_name)))
+(allow a9ml_gpu shell_data_file_202504 (file (unlink)))
+; Root permissive diagnostics and failed sysfs creates need no new allow.
+; Physical phhsu block ROSET/discard and unrelated hwservice probes are not
+; granted from this capture without a functional source requirement.

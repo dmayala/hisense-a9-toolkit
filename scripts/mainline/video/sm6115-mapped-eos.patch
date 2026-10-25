@@ -1,0 +1,113 @@
+--- a/drivers/media/platform/qcom/venus/venc.c
++++ b/drivers/media/platform/qcom/venus/venc.c
+@@ -4,6 +4,9 @@
+  * Copyright (C) 2017 Linaro Ltd.
+  */
+ #include <linux/clk.h>
++#include <linux/dma-mapping.h>
++#include <linux/of.h>
++#include <linux/sizes.h>
+ #include <linux/module.h>
+ #include <linux/platform_device.h>
+ #include <linux/pm_runtime.h>
+@@ -23,6 +26,19 @@
+ #include "pm_helpers.h"
+ 
+ #define NUM_B_FRAMES_MAX	4
++
++/* Default-off stock encoder EOS experiment; sampled for each new instance. */
++static bool a9_mapped_eos;
++module_param(a9_mapped_eos, bool, 0644);
++MODULE_PARM_DESC(a9_mapped_eos, "Use mapped EOS on SM6115 FW 6.0.39 (new instances)");
++
++/* Keep exported venus_inst and its module ABI unchanged. */
++struct a9_venc_inst {
++	struct venus_inst inst;
++	void *eos_cpu;
++	dma_addr_t eos_dma;
++	bool mapped_eos;
++};
+ 
+ /*
+  * Three resons to keep MPLANE formats (despite that the number of planes
+@@ -525,6 +541,38 @@
+ 	}
+ }
+ 
++/* inst->lock serializes drains; retain the mapping through session teardown. */
++static int a9_venc_prepare_eos(struct venus_inst *inst, struct hfi_frame_data *fdata)
++{
++	struct a9_venc_inst *priv = container_of(inst, struct a9_venc_inst, inst);
++	struct venus_core *core = inst->core;
++
++	if (!priv->mapped_eos || !IS_V4(core) || !IS_AR50_LITE(core) ||
++	    !of_device_is_compatible(core->dev->of_node, "qcom,sm6115-venus") ||
++	    core->venus_ver.major != 6 || core->venus_ver.minor != 0 ||
++	    core->venus_ver.rev != 39)
++		return 0;
++
++	if (!priv->eos_cpu) {
++		priv->eos_cpu = dma_alloc_coherent(core->dev, SZ_4K,
++						 &priv->eos_dma, GFP_KERNEL);
++		if (!priv->eos_cpu)
++			return -ENOMEM;
++		if (!priv->eos_dma || upper_32_bits(priv->eos_dma)) {
++			dma_free_coherent(core->dev, SZ_4K, priv->eos_cpu, priv->eos_dma);
++			priv->eos_cpu = NULL;
++			return -EOVERFLOW;
++		}
++		memset(priv->eos_cpu, 0, SZ_4K);
++	}
++
++	fdata->device_addr = priv->eos_dma;
++	fdata->alloc_len = SZ_4K;
++	/* Opaque HFI tag: a dummy EBD must never dequeue real vb2 input 0. */
++	fdata->clnt_data = U32_MAX;
++	return 0;
++}
++
+ static int
+ venc_encoder_cmd(struct file *file, void *fh, struct v4l2_encoder_cmd *cmd)
+ {
+@@ -556,6 +604,10 @@
+ 		if (IS_AR50_LITE(inst->core) &&
+ 		    is_fw_rev_or_older(inst->core, 6, 0, 53))
+ 			fdata.alloc_len = 1;
++
++		ret = a9_venc_prepare_eos(inst, &fdata);
++		if (ret)
++			goto unlock;
+ 
+ 		ret = hfi_session_process_buf(inst, &fdata);
+ 
+@@ -1489,12 +1541,15 @@
+ static int venc_open(struct file *file)
+ {
+ 	struct venus_core *core = video_drvdata(file);
++	struct a9_venc_inst *priv;
+ 	struct venus_inst *inst;
+ 	int ret;
+ 
+-	inst = kzalloc_obj(*inst);
+-	if (!inst)
++	priv = kzalloc_obj(*priv);
++	if (!priv)
+ 		return -ENOMEM;
++	inst = &priv->inst;
++	priv->mapped_eos = READ_ONCE(a9_mapped_eos);
+ 
+ 	INIT_LIST_HEAD(&inst->dpbbufs);
+ 	INIT_LIST_HEAD(&inst->registeredbufs);
+@@ -1562,9 +1617,12 @@
+ static int venc_close(struct file *file)
+ {
+ 	struct venus_inst *inst = to_inst(file);
++	struct a9_venc_inst *priv = container_of(inst, struct a9_venc_inst, inst);
+ 
+ 	venc_pm_get(inst);
+ 	venus_close_common(inst, file);
++	if (priv->eos_cpu)
++		dma_free_coherent(inst->core->dev, SZ_4K, priv->eos_cpu, priv->eos_dma);
+ 	inst->enc_state = VENUS_ENC_STATE_DEINIT;
+ 	venc_pm_put(inst, false);
+ 

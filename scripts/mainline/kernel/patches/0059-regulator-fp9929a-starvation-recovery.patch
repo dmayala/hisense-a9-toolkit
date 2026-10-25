@@ -1,0 +1,110 @@
+From: A9 development <dmayala@users.noreply.github.com>
+Subject: [PATCH] regulator: fp9929a: separate recoverable starvation shutdown
+
+Keep manual max_on and electrical emergency latches. Only the tagged
+starvation emergency may clear with all rails/gates off and PG low.
+
+--- a/drivers/regulator/fp9929a.c
++++ b/drivers/regulator/fp9929a.c
+@@ -790,10 +790,8 @@
+ 	if (fp->on || fp->energized)
+ 		fp9929a_power_down(fp);
+ 	WRITE_ONCE(fp->expired, false);
+-	/* a normal disable is the consumer acknowledging the fault */
+-	if (fp->forced_off)
+-		dev_info(fp->dev, "max_on_ms fault cleared (disable)\n");
+-	fp->forced_off = false;
++	/* A normal shutdown cannot acknowledge an electrical/max-on fault.
++	 * Only the explicit manual clear generation may clear it. */
+ 	mutex_unlock(&fp->lock);
+ 	return 0;
+ }
+@@ -922,11 +920,15 @@
+  * to clear_fault), drives VCOM-EN low immediately and queues the PWRUP drop
+  * 50 ms later on system_highpri_wq. Repeated calls do not postpone it.
+  */
+-void fp9929a_emergency_off(const char *why)
++static void fp9929a_do_emergency_off(const char *why, bool starvation)
+ {
+ 	struct fp9929a *fp = READ_ONCE(fp9929a_inst);
+ 
+-	atomic_set(&fp9929a_emerg, 1);
++	/* Hard emergency (1) dominates starvation (2), including racing calls. */
++	if (starvation)
++		atomic_cmpxchg(&fp9929a_emerg, 0, 2);
++	else
++		atomic_set(&fp9929a_emerg, 1);
+ 	WRITE_ONCE(allow_power_on, false);
+ 	if (!fp) {
+ 		pr_crit("fp9929a: emergency off (%s): no device bound, gate closed\n", why);
+@@ -944,7 +946,47 @@
+ 	pr_crit_ratelimited("fp9929a: emergency off (%s): VCOM-EN dropped, PWRUP in 50 ms\n",
+ 			    why);
+ }
++void fp9929a_emergency_off(const char *why)
++{
++	fp9929a_do_emergency_off(why, false);
++}
+ EXPORT_SYMBOL_GPL(fp9929a_emergency_off);
++
++void fp9929a_starvation_off(const char *why)
++{
++	fp9929a_do_emergency_off(why, true);
++}
++EXPORT_SYMBOL_GPL(fp9929a_starvation_off);
++
++/* Process context, rails and all gates already down. Never advances the
++ * manual clear generation: max_on and other hard latches stay in force. */
++int fp9929a_recover_starvation(struct device_node *np)
++{
++	struct i2c_client *client = of_find_i2c_device_by_node(np);
++	struct fp9929a *fp;
++	int ret = -EPERM;
++
++	if (!client)
++		return -ENODEV;
++	fp = READ_ONCE(client->dev.driver) ? i2c_get_clientdata(client) : NULL;
++	if (!fp)
++		goto put;
++	mutex_lock(&fp->lock);
++	mutex_lock(&fp9929a_gate_lock);
++	if (!READ_ONCE(allow_power_on) && !fp->on && !fp->energized &&
++	    !fp9929a_fault_latched(fp) && !atomic_read(&fp9929a_emerg_busy) &&
++	    fp->pg && gpiod_get_value_cansleep(fp->pg) == 0 &&
++	    gpiod_get_value_cansleep(fp->vcom_en) == 0 &&
++	    gpiod_get_value_cansleep(fp->pwrup) == 0 &&
++	    atomic_cmpxchg(&fp9929a_emerg, 2, 0) == 2)
++		ret = 0;
++	mutex_unlock(&fp9929a_gate_lock);
++	mutex_unlock(&fp->lock);
++put:
++	put_device(&client->dev);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(fp9929a_recover_starvation);
+ 
+ static void fp9929a_unregister_panic(void *data)
+ {
+--- a/include/linux/regulator/fp9929a.h
++++ b/include/linux/regulator/fp9929a.h
+@@ -46,6 +46,10 @@
+  * Any context, including hardirq/hrtimer: no lock, no sleep.
+  */
+ void fp9929a_emergency_off(const char *why);
++/* Same emergency shutdown; a hard latch always dominates this reason. */
++void fp9929a_starvation_off(const char *why);
++/* Clears ONLY reason=starvation, never max_on/hard emergency; no power-up. */
++int fp9929a_recover_starvation(struct device_node *np);
+ /*
+  * Read-only: VCOM_SETTING (reg 0x02) now, and the code this driver programs.
+  * -EAGAIN when the rails are off, -EPROBE_DEFER while unbound. Never writes;
+@@ -62,6 +66,9 @@
+ {
+ }
+ 
++static inline void fp9929a_starvation_off(const char *why) {}
++static inline int fp9929a_recover_starvation(struct device_node *np) { return -ENODEV; }
++
+ static inline int fp9929a_read_vcom(struct device_node *np, u8 *now, u8 *programmed)
+ {
+ 	return -ENODEV;

@@ -1,0 +1,17 @@
+
+# Candidate2: exact stock radio executables/runtime trees only.
+/(vendor|system/vendor)/bin/hw/qcrild u:object_r:vendor_stock_rild_exec:s0
+/(vendor|system/vendor)/bin/imsqmidaemon u:object_r:vendor_ims_exec:s0
+/(vendor|system/vendor)/bin/imsdatadaemon u:object_r:vendor_ims_exec:s0
+/(vendor|system/vendor)/bin/ims_rtp_daemon u:object_r:vendor_hal_imsrtp_exec:s0
+/(vendor|system/vendor)/bin/imsrcsd u:object_r:vendor_hal_rcsservice_exec:s0
+/(vendor|system/vendor)/bin/netmgrd u:object_r:vendor_netmgrd_exec:s0
+/data/vendor/radio(/.*)? u:object_r:vendor_radio_vendor_data_file:s0
+/data/vendor/modem_config(/.*)? u:object_r:vendor_mbn_data_file:s0
+/data/vendor/netmgr(/.*)? u:object_r:vendor_netmgr_data_file:s0
+/dev/socket/qcrild(/.*)? u:object_r:vendor_rild_socket:s0
+/dev/socket/ims_(qmid|datad) u:object_r:vendor_ims_socket:s0
+/dev/socket/netmgr(/.*)? u:object_r:vendor_netmgrd_socket:s0
+
+# Stock QCRIL internal IPC, not a modem-storage service.
+/dev/socket/qmux_radio(/.*)? u:object_r:vendor_qmuxd_socket:s0

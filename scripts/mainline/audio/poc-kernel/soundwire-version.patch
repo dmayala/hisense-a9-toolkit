@@ -1,0 +1,174 @@
+--- a/drivers/soundwire/qcom.c
++++ b/drivers/soundwire/qcom.c
+@@ -1419,7 +1419,9 @@
+ 	struct qcom_swrm_port_config *pcfg;
+ 	int i, ret, val;
+ 
+-	ctrl->reg_read(ctrl, SWRM_COMP_PARAMS, &val);
++	ret = ctrl->reg_read(ctrl, SWRM_COMP_PARAMS, &val);
++	if (ret)
++		return ret;
+ 
+ 	ctrl->num_dout_ports = FIELD_GET(SWRM_COMP_PARAMS_DOUT_PORTS_MASK, val);
+ 	ctrl->num_din_ports = FIELD_GET(SWRM_COMP_PARAMS_DIN_PORTS_MASK, val);
+@@ -1429,6 +1431,8 @@
+ 		if (val != ctrl->num_din_ports) {
+ 			dev_err(ctrl->dev, "din-ports (%d) mismatch with controller (%d)",
+ 				val, ctrl->num_din_ports);
++			if (of_device_is_compatible(np, "hisense,a9-audio-soundwire"))
++				return -EINVAL;
+ 		}
+ 
+ 		ctrl->num_din_ports = val;
+@@ -1439,6 +1443,8 @@
+ 		if (val != ctrl->num_dout_ports) {
+ 			dev_err(ctrl->dev, "dout-ports (%d) mismatch with controller (%d)",
+ 				val, ctrl->num_dout_ports);
++			if (of_device_is_compatible(np, "hisense,a9-audio-soundwire"))
++				return -EINVAL;
+ 		}
+ 
+ 		ctrl->num_dout_ports = val;
+@@ -1545,10 +1551,6 @@
+ 		return -ENOMEM;
+ 
+ 	data = of_device_get_match_data(dev);
+-	ctrl->max_reg = data->max_reg;
+-	ctrl->reg_layout = data->reg_layout;
+-	ctrl->rows_index = sdw_find_row_index(data->default_rows);
+-	ctrl->cols_index = sdw_find_col_index(data->default_cols);
+ #if IS_REACHABLE(CONFIG_SLIMBUS)
+ 	if (dev->parent->bus == &slimbus_bus) {
+ #else
+@@ -1567,28 +1569,56 @@
+ 			return PTR_ERR(ctrl->mmio);
+ 	}
+ 
++
++	ctrl->irq = of_irq_get(dev->of_node, 0);
++	if (ctrl->irq < 0) {
++		ret = ctrl->irq;
++		goto err_init;
++	}
++
++	ctrl->hclk = devm_clk_get(dev, "iface");
++	if (IS_ERR(ctrl->hclk)) {
++		ret = dev_err_probe(dev, PTR_ERR(ctrl->hclk), "unable to get iface clock\n");
++		goto err_init;
++	}
++
++	ret = clk_prepare_enable(ctrl->hclk);
++	if (ret)
++		goto err_init;
++
++	/* A9 stock uses a generic multi-version controller and reads HW0.
++	 * Select only existing, explicitly supported records; never guess DT IP.
++	 */
++	ret = ctrl->reg_read(ctrl, SWRM_COMP_HW_VERSION, &ctrl->version);
++	if (ret)
++		goto err_clk;
++	if (of_device_is_compatible(dev->of_node, "hisense,a9-audio-soundwire")) {
++		switch (ctrl->version) {
++		case SWRM_VERSION_1_3_0: data = &swrm_v1_3_data; break;
++		case SWRM_VERSION_1_5_1:
++			data = &swrm_v1_5_data; break;
++		case 0x01060000: data = &swrm_v1_6_data; break;
++		case SWRM_VERSION_1_7_0: data = &swrm_v1_5_data; break;
++		default:
++			dev_err(dev, "A9 audio unsupported SoundWire HW0=%08x\n", ctrl->version);
++			ret = -ENODEV;
++			goto err_clk;
++		}
++		dev_info(dev, "A9 audio SoundWire HW0=%08x\n", ctrl->version);
++	}
++	ctrl->max_reg = data->max_reg;
++	ctrl->reg_layout = data->reg_layout;
++	ctrl->rows_index = sdw_find_row_index(data->default_rows);
++	ctrl->cols_index = sdw_find_col_index(data->default_cols);
+ 	if (data->sw_clk_gate_required) {
+ 		ctrl->audio_cgcr = devm_reset_control_get_optional_exclusive(dev, "swr_audio_cgcr");
+ 		if (IS_ERR(ctrl->audio_cgcr)) {
+ 			dev_err(dev, "Failed to get cgcr reset ctrl required for SW gating\n");
+ 			ret = PTR_ERR(ctrl->audio_cgcr);
+-			goto err_init;
+-		}
+-	}
+-
+-	ctrl->irq = of_irq_get(dev->of_node, 0);
+-	if (ctrl->irq < 0) {
+-		ret = ctrl->irq;
+-		goto err_init;
+-	}
+-
+-	ctrl->hclk = devm_clk_get(dev, "iface");
+-	if (IS_ERR(ctrl->hclk)) {
+-		ret = dev_err_probe(dev, PTR_ERR(ctrl->hclk), "unable to get iface clock\n");
+-		goto err_init;
+-	}
+-
+-	clk_prepare_enable(ctrl->hclk);
++			goto err_clk;
++		}
++	}
++
+ 
+ 	ctrl->dev = dev;
+ 	dev_set_drvdata(&pdev->dev, ctrl);
+@@ -1621,8 +1651,6 @@
+ 	prop->clk_freq = &qcom_swrm_freq_tbl[0];
+ 	prop->default_col = data->default_cols;
+ 	prop->default_row = data->default_rows;
+-
+-	ctrl->reg_read(ctrl, SWRM_COMP_HW_VERSION, &ctrl->version);
+ 
+ 	ret = devm_request_threaded_irq(dev, ctrl->irq, NULL,
+ 					qcom_swrm_irq_handler,
+@@ -1649,7 +1677,9 @@
+ 	ctrl->bus.controller_id = -1;
+ 
+ 	if (ctrl->version > SWRM_VERSION_1_3_0) {
+-		ctrl->reg_read(ctrl, SWRM_COMP_MASTER_ID, &val);
++		ret = ctrl->reg_read(ctrl, SWRM_COMP_MASTER_ID, &val);
++		if (ret)
++			goto err_clk;
+ 		ctrl->bus.controller_id = val;
+ 	}
+ 
+@@ -1660,9 +1690,15 @@
+ 		goto err_clk;
+ 	}
+ 
+-	qcom_swrm_init(ctrl);
+-	wait_for_completion_timeout(&ctrl->enumeration,
+-				    msecs_to_jiffies(TIMEOUT_MS));
++	ret = qcom_swrm_init(ctrl);
++	if (ret)
++		goto err_master_add;
++	if (!wait_for_completion_timeout(&ctrl->enumeration,
++				    msecs_to_jiffies(TIMEOUT_MS)) &&
++	    of_device_is_compatible(dev->of_node, "hisense,a9-audio-soundwire")) {
++		ret = -ETIMEDOUT;
++		goto err_master_add;
++	}
+ 	ret = qcom_swrm_register_dais(ctrl);
+ 	if (ret)
+ 		goto err_master_add;
+@@ -1711,7 +1747,9 @@
+ 			disable_irq_nosync(ctrl->wake_irq);
+ 	}
+ 
+-	clk_prepare_enable(ctrl->hclk);
++	ret = clk_prepare_enable(ctrl->hclk);
++	if (ret)
++		return ret;
+ 
+ 	if (ctrl->clock_stop_not_supported) {
+ 		reinit_completion(&ctrl->enumeration);
+@@ -1812,6 +1850,7 @@
+ };
+ 
+ static const struct of_device_id qcom_swrm_of_match[] = {
++	{ .compatible = "hisense,a9-audio-soundwire", .data = &swrm_v1_5_data },
+ 	{ .compatible = "qcom,soundwire-v1.3.0", .data = &swrm_v1_3_data },
+ 	{ .compatible = "qcom,soundwire-v1.5.1", .data = &swrm_v1_5_data },
+ 	{ .compatible = "qcom,soundwire-v1.6.0", .data = &swrm_v1_6_data },

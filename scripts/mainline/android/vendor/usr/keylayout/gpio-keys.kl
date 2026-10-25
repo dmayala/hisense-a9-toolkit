@@ -1,0 +1,11 @@
+# Hisense A9 mainline gpio-keys (matched by input device name).
+# Stock uses its private AI key for scan 766. BUTTON_16 is the standard A16
+# mapping confirmed on run 10: a9service matches the unchanged scanCode 766
+# for single/double/long-press assignments. UNKNOWN does not reach its handler.
+# DT wakeup-source resumes Linux; WAKE also asks Android's input policy to
+# leave noninteractive/doze state. A waking press may be consumed by policy.
+# A device-specific layout replaces Generic.kl: keep the volume/power keys.
+key 115   VOLUME_UP
+key 114   VOLUME_DOWN
+key 116   POWER
+key 766   BUTTON_16   WAKE

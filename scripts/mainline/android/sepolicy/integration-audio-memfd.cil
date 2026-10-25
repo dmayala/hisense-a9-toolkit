@@ -1,0 +1,15 @@
+; Integ N audio: native memfd FMQs need a non-executable shared-file label.
+; OBS HAL ftruncate/write was denied on tmpfs, leaving fd=-1 and invalid FMQs
+; for primary and r_submix. Use the round11 GNSS creator-transition pattern,
+; adding mmap and the audioserver peer needed by AudioFlinger's shared queues.
+(type a9ml_audio_memfd_file) (roletype object_r a9ml_audio_memfd_file)
+(typeattributeset file_type (a9ml_audio_memfd_file))
+(typetransition hal_audio_default tmpfs_202504 file a9ml_audio_memfd_file)
+(allow hal_audio_default a9ml_audio_memfd_file (file (create open read write getattr setattr map)))
+(allow audioserver_202504 a9ml_audio_memfd_file (file (open read write getattr map)))
+(allow a9ml_audio_memfd_file tmpfs_202504 (filesystem (associate)))
+; The client can also originate shared buffers. It already uses the platform
+; audioserver_tmpfs type; let only this HAL map/use those received buffers too.
+(allow hal_audio_default audioserver_tmpfs_202504 (file (open read write getattr map)))
+; Binder fd-use permissions already exist in the platform audio HAL policy.
+; No execute/execute_no_trans or general tmpfs file access is added.

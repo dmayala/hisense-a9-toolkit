@@ -1,0 +1,81 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/* Include only with the audio build flag. A second explicit gate enables hardware. */
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/sound/qcom,q6afe.h>
+#include <dt-bindings/sound/qcom,q6asm.h>
+
+/ {
+ a9_ess_sound: sound-ess {
+  compatible = "hisense,a9-es9218-sndcard";
+  model = "Hisense-A9-HiFi";
+  pinctrl-names = "default", "sleep";
+  pinctrl-0 = <&a9_ess_i2s_default>;
+  pinctrl-1 = <&a9_ess_i2s_sleep>;
+  audio-routing = "Headphone Jack", "HPOUTL",
+                  "Headphone Jack", "HPOUTR";
+#ifdef A9_AUDIO_ENABLE_ES9218
+  status = "okay";
+#else
+  status = "disabled";
+#endif
+  mm1-dai-link {
+   link-name = "MultiMedia1";
+   cpu { sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA1>; };
+  };
+  ess-dai-link {
+   link-name = "ESS HiFi Playback";
+   cpu { sound-dai = <&q6afedai SECONDARY_MI2S_RX>; };
+   platform { sound-dai = <&q6routing>; };
+   codec { sound-dai = <&a9_ess_dac>; };
+  };
+ };
+};
+
+&i2c1 {
+ a9_ess_dac: audio-codec@48 {
+  compatible = "hisense,a9-es9218";
+  reg = <0x48>;
+  #sound-dai-cells = <0>;
+  reset-gpios = <&tlmm 65 GPIO_ACTIVE_LOW>;
+  select-gpios = <&tlmm 69 GPIO_ACTIVE_HIGH>;
+  oscillator-enable-gpios = <&tlmm 66 GPIO_ACTIVE_HIGH>;
+  pa-enable-gpios = <&tlmm 68 GPIO_ACTIVE_HIGH>;
+#ifdef A9_AUDIO_ENABLE_ES9218
+  status = "okay";
+#else
+  status = "disabled";
+#endif
+ };
+};
+
+&q6afedai {
+ dai@12 {
+  reg = <SECONDARY_MI2S_RX>;
+  qcom,sd-lines = <0>;
+ };
+};
+
+&lpass_tlmm {
+#ifdef A9_AUDIO_ENABLE_ES9218
+ status = "okay";
+#endif
+ a9_ess_i2s_default: ess-i2s-default-state {
+  clk { pins = "gpio10"; function = "i2s2_clk"; drive-strength = <8>; bias-disable; output-high; };
+  ws { pins = "gpio11"; function = "i2s2_ws"; drive-strength = <8>; bias-disable; output-high; };
+  data { pins = "gpio12"; function = "i2s2_data"; drive-strength = <8>; bias-disable; output-high; };
+ };
+ a9_ess_i2s_sleep: ess-i2s-sleep-state {
+  clk { pins = "gpio10"; function = "i2s2_clk"; drive-strength = <2>; bias-pull-down; input-enable; };
+  ws { pins = "gpio11"; function = "i2s2_ws"; drive-strength = <2>; bias-pull-down; input-enable; };
+  data { pins = "gpio12"; function = "i2s2_data"; drive-strength = <2>; bias-pull-down; input-enable; };
+ };
+};
+
+#ifdef A9_AUDIO_ENABLE_ES9218
+/* Baseline reservation37..70 is split ONLY at the four proven ESS control pins. */
+&tlmm {
+ gpio-reserved-ranges = <3 1>, <8 4>, <14 7>, <22 3>, <27 4>, <32 1>,
+                        <35 1>, <37 28>, <67 1>, <70 1>, <72 8>,
+                        <87 21>, <109 5>;
+};
+#endif

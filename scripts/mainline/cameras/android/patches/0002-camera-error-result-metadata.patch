@@ -1,0 +1,29 @@
+diff --git a/src/android/camera_device.cpp b/src/android/camera_device.cpp
+--- a/src/android/camera_device.cpp
++++ b/src/android/camera_device.cpp
+@@ -1462,7 +1462,8 @@
+ 		captureResult.num_output_buffers = resultBuffers.size();
+ 		captureResult.output_buffers = resultBuffers.data();
+ 
+-		if (descriptor->status_ == Camera3RequestDescriptor::Status::Success)
++		/* Metadata remains valid when an output buffer reports an error. */
++		if (captureResult.result)
+ 			captureResult.partial_result = 1;
+ 
+ 		callbacks_->process_capture_result(callbacks_, &captureResult);
+diff --git a/src/android/mm/generic_camera_buffer.cpp b/src/android/mm/generic_camera_buffer.cpp
+--- a/src/android/mm/generic_camera_buffer.cpp
++++ b/src/android/mm/generic_camera_buffer.cpp
+@@ -119,7 +119,11 @@
+ 					       hnd->sizes[i] < minimumLength))) {
+ 					error_ = -EINVAL;
+ 					LOG(HAL, Error) << "Invalid minigbm plane " << i
+-							<< " fd/stride/offset/size";
++							<< " fd/stride/offset/size: fd=" << hnd->fds[i]
++							<< " length=" << length << " errno=" << errno
++							<< " stride=" << hnd->strides[i]
++							<< " offset=" << hnd->offsets[i]
++							<< " size=" << hnd->sizes[i];
+ 					return;
+ 				}
+ 				planeInfo_.push_back({ hnd->fds[i], hnd->strides[i],

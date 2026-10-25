@@ -1,0 +1,208 @@
+From a8e352cce8de5fc0320555da4aeea9cbd749972e Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 19:07:54 -0700
+Subject: [PATCH 2/9] drm/bridge: tc358767: optional VDDC supply, DSI mode
+ overrides and DSI->DPI init sequence
+
+Boards like the Hisense A9 drive the bridge from a fixed vendor table: the
+pixel PLL takes a non-RefClk input (PXL_PLLPARAM IN_SEL=2), FRMSYNC is off and
+the PPI timings differ from the computed ones. Add:
+ - vddc-supply (optional), enabled before reset is released;
+ - toshiba,init-sequence = <reg value delay_us>..., replayed with raw 6-byte
+   writes (3 tries each) instead of the computed DSI->DPI setup;
+ - toshiba,dsi-video-mode = burst | non-burst-sync-event | non-burst-sync-pulse;
+ - toshiba,dsi-continuous-clock.
+---
+ drivers/gpu/drm/bridge/tc358767.c | 119 ++++++++++++++++++++++++++++++
+ 1 file changed, 119 insertions(+)
+
+diff --git a/drivers/gpu/drm/bridge/tc358767.c b/drivers/gpu/drm/bridge/tc358767.c
+index 948bb7b28..2cae239ec 100644
+--- a/drivers/gpu/drm/bridge/tc358767.c
++++ b/drivers/gpu/drm/bridge/tc358767.c
+@@ -20,6 +20,7 @@
+ 
+ #include <linux/bitfield.h>
+ #include <linux/clk.h>
++#include <linux/delay.h>
+ #include <linux/device.h>
+ #include <linux/gpio/consumer.h>
+ #include <linux/i2c.h>
+@@ -27,6 +28,7 @@
+ #include <linux/media-bus-format.h>
+ #include <linux/module.h>
+ #include <linux/regmap.h>
++#include <linux/regulator/consumer.h>
+ #include <linux/slab.h>
+ 
+ #include <drm/display/drm_dp_helper.h>
+@@ -388,6 +390,18 @@ struct tc_data {
+ 	struct gpio_desc	*sd_gpio;
+ 	struct gpio_desc	*reset_gpio;
+ 	struct clk		*refclk;
++	struct regulator	*vddc;
++
++	/*
++	 * Optional board init sequence for DSI->DPI (toshiba,init-sequence):
++	 * <reg value delay_us> triplets replayed verbatim instead of the
++	 * computed DPI stream setup. Used by boards whose vendor kernel drives
++	 * the bridge from a fixed table (e.g. the Hisense A9 E Ink bridge,
++	 * which takes its pixel PLL from a non-RefClk input and runs with
++	 * FRMSYNC disabled).
++	 */
++	u32			*init_seq;
++	int			init_seq_len;	/* number of triplets */
+ 
+ 	/* do we have IRQ */
+ 	bool			have_irq;
+@@ -1428,10 +1442,62 @@ static int tc_dpi_rx_enable(struct tc_data *tc)
+ 	return regmap_write(tc->regmap, SYSCTRL, value);
+ }
+ 
++/*
++ * Raw 6-byte writes (big-endian u16 register, little-endian u32 value), the
++ * format the chip's I2C slave takes and the one vendor tables are written in.
++ * Bypasses regmap on purpose: vendor tables touch registers (e.g. DP1_PLLCTRL,
++ * DP_PHY_CTRL) that the regmap access tables do not list for DPI use.
++ */
++static int tc_raw_write(struct tc_data *tc, u16 reg, u32 val)
++{
++	struct i2c_client *client = to_i2c_client(tc->dev);
++	u8 buf[6] = { reg >> 8, reg & 0xff, val & 0xff, (val >> 8) & 0xff,
++		      (val >> 16) & 0xff, (val >> 24) & 0xff };
++	struct i2c_msg msg = {
++		.addr = client->addr, .flags = 0, .len = sizeof(buf), .buf = buf,
++	};
++	int i, ret = -EIO;
++
++	/* the A9 bridge NACKs one write on every power-on (vendor log -107) */
++	for (i = 0; i < 3; i++) {
++		ret = i2c_transfer(client->adapter, &msg, 1);
++		if (ret == 1)
++			return 0;
++		usleep_range(1000, 1100);
++	}
++	return ret < 0 ? ret : -EIO;
++}
++
++static int tc_dpi_stream_enable_seq(struct tc_data *tc)
++{
++	int i, ret, err = 0;
++
++	dev_dbg(tc->dev, "replaying %d-entry init sequence\n", tc->init_seq_len);
++	for (i = 0; i < tc->init_seq_len; i++) {
++		u32 reg = tc->init_seq[3 * i];
++		u32 val = tc->init_seq[3 * i + 1];
++		u32 dly = tc->init_seq[3 * i + 2];
++
++		ret = tc_raw_write(tc, reg, val);
++		if (ret) {
++			dev_err(tc->dev, "init seq #%d reg 0x%03x: %d\n", i, reg, ret);
++			err = ret;
++		}
++		if (dly)
++			fsleep(dly);
++	}
++	/* regmap cache, if any, no longer reflects the chip */
++	regcache_mark_dirty(tc->regmap);
++	return err;
++}
++
+ static int tc_dpi_stream_enable(struct tc_data *tc)
+ {
+ 	int ret;
+ 
++	if (tc->init_seq)
++		return tc_dpi_stream_enable_seq(tc);
++
+ 	dev_dbg(tc->dev, "enable video stream\n");
+ 
+ 	/* Setup PLL */
+@@ -1632,6 +1698,10 @@ static int tc_dpi_atomic_check(struct drm_bridge *bridge,
+ 	int adjusted_clock = 0;
+ 	int ret;
+ 
++	/* a board init sequence programs its own pixel PLL: keep the mode clock */
++	if (tc->init_seq)
++		return crtc_state->mode.clock > 100000 ? -EINVAL : 0;
++
+ 	ret = tc_pxl_pll_calc(tc, clk_get_rate(tc->refclk),
+ 			      crtc_state->mode.clock * 1000,
+ 			      &adjusted_clock, NULL);
+@@ -2280,6 +2350,7 @@ static int tc_mipi_dsi_host_attach(struct tc_data *tc)
+ 		.node = NULL,
+ 	};
+ 	int dsi_lanes, ret;
++	const char *vmode;
+ 
+ 	endpoint = of_graph_get_endpoint_by_regs(dev->of_node, 0, -1);
+ 	dsi_lanes = drm_of_get_data_lanes_count(endpoint, 1, 4);
+@@ -2305,6 +2376,19 @@ static int tc_mipi_dsi_host_attach(struct tc_data *tc)
+ 	dsi->mode_flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_BURST |
+ 			  MIPI_DSI_MODE_LPM | MIPI_DSI_CLOCK_NON_CONTINUOUS;
+ 
++	/* optional board overrides of the DSI video mode */
++	if (!of_property_read_string(dev->of_node, "toshiba,dsi-video-mode", &vmode)) {
++		if (!strcmp(vmode, "non-burst-sync-event"))
++			dsi->mode_flags &= ~MIPI_DSI_MODE_VIDEO_BURST;
++		else if (!strcmp(vmode, "non-burst-sync-pulse"))
++			dsi->mode_flags = (dsi->mode_flags & ~MIPI_DSI_MODE_VIDEO_BURST) |
++					  MIPI_DSI_MODE_VIDEO_SYNC_PULSE;
++		else if (strcmp(vmode, "burst"))
++			return dev_err_probe(dev, -EINVAL, "bad toshiba,dsi-video-mode\n");
++	}
++	if (of_property_read_bool(dev->of_node, "toshiba,dsi-continuous-clock"))
++		dsi->mode_flags &= ~MIPI_DSI_CLOCK_NON_CONTINUOUS;
++
+ 	ret = devm_mipi_dsi_attach(dev, dsi);
+ 	if (ret < 0) {
+ 		dev_err(dev, "failed to attach dsi to host: %d\n", ret);
+@@ -2453,6 +2537,11 @@ static int tc_probe_bridge_endpoint(struct tc_data *tc, enum tc_mode mode)
+ 	return -EINVAL;
+ }
+ 
++static void tc_vddc_disable(void *reg)
++{
++	regulator_disable(reg);
++}
++
+ static int tc_probe(struct i2c_client *client)
+ {
+ 	struct device *dev = &client->dev;
+@@ -2479,6 +2568,36 @@ static int tc_probe(struct i2c_client *client)
+ 		return dev_err_probe(dev, PTR_ERR(tc->refclk),
+ 				     "Failed to get and enable the ref clk\n");
+ 
++	/* Optional VDDC supply (e.g. a GPIO-switched core rail) */
++	tc->vddc = devm_regulator_get_optional(dev, "vddc");
++	if (IS_ERR(tc->vddc)) {
++		if (PTR_ERR(tc->vddc) != -ENODEV)
++			return dev_err_probe(dev, PTR_ERR(tc->vddc), "vddc supply\n");
++		tc->vddc = NULL;
++	}
++	if (tc->vddc) {
++		ret = regulator_enable(tc->vddc);
++		if (ret)
++			return dev_err_probe(dev, ret, "enable vddc\n");
++		ret = devm_add_action_or_reset(dev, tc_vddc_disable, tc->vddc);
++		if (ret)
++			return ret;
++		usleep_range(10000, 10010);
++	}
++
++	ret = of_property_count_u32_elems(dev->of_node, "toshiba,init-sequence");
++	if (ret > 0) {
++		if (ret % 3 || mode != mode_dsi_to_dpi)
++			return dev_err_probe(dev, -EINVAL,
++					     "toshiba,init-sequence: DSI->DPI only, <reg val delay_us> triplets\n");
++		tc->init_seq = devm_kcalloc(dev, ret, sizeof(u32), GFP_KERNEL);
++		if (!tc->init_seq)
++			return -ENOMEM;
++		of_property_read_u32_array(dev->of_node, "toshiba,init-sequence",
++					   tc->init_seq, ret);
++		tc->init_seq_len = ret / 3;
++	}
++
+ 	/* tRSTW = 100 cycles , at 13 MHz that is ~7.69 us */
+ 	usleep_range(10, 15);
+ 

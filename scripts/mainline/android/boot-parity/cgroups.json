@@ -1,0 +1,25 @@
+{
+  "Cgroups": [
+    {
+      "Controller": "cpu",
+      "Path": "/dev/cpuctl",
+      "Mode": "0755",
+      "UID": "system",
+      "GID": "system"
+    },
+    {
+      "Controller": "cpuset",
+      "Path": "/dev/cpuset",
+      "Mode": "0755",
+      "UID": "system",
+      "GID": "system"
+    },
+    {
+      "Controller": "blkio",
+      "Path": "/dev/blkio",
+      "Mode": "0775",
+      "UID": "system",
+      "GID": "system"
+    }
+  ]
+}

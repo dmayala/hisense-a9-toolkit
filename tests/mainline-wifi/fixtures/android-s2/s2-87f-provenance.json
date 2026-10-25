@@ -1,0 +1,29 @@
+{
+  "sources": {
+    "/tmp/claude-1000/-home-user-A9/138276b1-32cf-47e9-a654-4be339175015/scratchpad/s2f-run.out": "0bba7287dd9f4f00a76207538836c0c87abf88a473473d747216eba807365019",
+    "/home/user/A9-build/mainline/wifi-android/s2-87f-attempt1-evidence/root-status.jsonl": "6dd0c21977cff196bc6f4f71df35e1099612569f4ff856af4ed70ad88dfcd066",
+    "/home/user/A9-build/mainline/wifi-android/s2-87f-attempt1-evidence/boot.log": "0a92e378f5f7674aabf7e608d9996e3b429813cb8f16813dd6ffaf5a4de96736",
+    "/home/user/A9-build/mainline/wifi-android/s2-87f-attempt1-evidence/host/runs/20261018T222907Z-mainline-android/meta.txt": "9b5b36ea90271e68e30bf117dd13bd76981cd983e1aff19e9ddf8dbbe3b3d354"
+  },
+  "fixtures": {
+    "s2-87f-console.txt": "0bba7287dd9f4f00a76207538836c0c87abf88a473473d747216eba807365019",
+    "s2-87f-root-status.jsonl": "6dd0c21977cff196bc6f4f71df35e1099612569f4ff856af4ed70ad88dfcd066",
+    "s2-87f-boot-milestones.txt": "80a7d5c801423713a5841434d15d02ff5e7216fb5010474730bd15d21fd02791",
+    "s2-87f-hardware-meta.txt": "c081fe2ef669b48226207f07ec1692ace84d85897644a140e0009a6aeae99c3c"
+  },
+  "vendor_sha256": "2955a1afaa0145c0238346044379c5cdf29a052a55d69e4ba1226c740c51f670",
+  "boot_sha256": "9e9dc37c1d1546746a4e7f84c1ba3124c82e08a0b68bb4f1d98d35316efd9080",
+  "installed_init_hlte556n_rc_sha256": "7b0d100376375aae716f36236b36a3868ba8e6cb461c51209e30097c91deb2b7",
+  "installed_session_rc_sha256": "65fb27e809d280dd2d8e207daa53f9d6c488f74b38212a6c6aaae97b40ed4e5a",
+  "hardware_proven": [
+    "root-ready transport_rc=0 root_rc=0 at awaiting audit",
+    "store-pre and idle cleanup transport_rc=0 root_rc=1 gate=session-service",
+    "boot_completed and quiet-ready before store-pre",
+    "exact gated vendor hash bound in hardware meta"
+  ],
+  "not_captured": [
+    "raw init.svc.a9ml_wifi_session value",
+    "raw full root stdout/stderr"
+  ],
+  "derived_fixture": "Disabled never-started service with unpublished init.svc; tested against real Android clients, not claimed to be a retained hardware property value."
+}

@@ -1,0 +1,70 @@
+S2_GATE phase=ram-data branch=accepted roots=1 children=1 user0=1
+S2_GATE phase=regulatory iw_rc=0
+global=US phy=99 mode=normal syntax=ok
+S2_GATE phase=channel iw_rc=0
+channel=accepted frequency=2427 max_dbm=20.0
+S2_GATE phase=power-limit iw_rc=0
+rc=0 branch=unreported dbm=none
+line=none
+S2_BRIDGE phase=binder-api
+S2_BRIDGE phase=runtime-hashes
+S2_BRIDGE phase=binder-api
+S2_BRIDGE phase=baseline
+S2_BRIDGE command=list-networks result=accepted rc=0
+S2_BRIDGE command=status result=accepted rc=0
+S2_BRIDGE phase=enable
+S2_BRIDGE command=set-wifi-enabled result=accepted rc=0
+S2_BRIDGE command=status result=accepted rc=0
+S2_BRIDGE command=status result=accepted rc=0
+S2_BRIDGE wifi=enabled verified=yes
+S2_BRIDGE command=list-networks result=accepted rc=0
+S2_BRIDGE command=status result=accepted rc=0
+S2_BRIDGE phase=probe-connectivity
+S2_BRIDGE probe=accepted
+S2_GATE phase=power-before command=bridge-probe rc=0
+S2_BRIDGE phase=binder-api
+S2_BRIDGE phase=runtime-hashes
+S2_BRIDGE phase=binder-api
+S2_BRIDGE phase=scan-identity
+S2_BRIDGE scan_caller=shell uid=2000 verified=yes
+S2_BRIDGE phase=scan-start
+S2_BRIDGE command=start-scan result=accepted rc=0
+S2_BRIDGE scan=dispatched
+S2_BRIDGE phase=scan-public-results
+S2_BRIDGE command=list-scan-results result=accepted rc=0
+S2_BRIDGE scan_results=available
+S2_GATE phase=public-scan command=bridge-scan rc=0
+S2_BRIDGE phase=binder-api
+S2_BRIDGE phase=runtime-hashes
+S2_BRIDGE phase=binder-api
+S2_BRIDGE phase=baseline
+S2_BRIDGE command=list-networks result=accepted rc=0
+S2_BRIDGE command=status result=accepted rc=0
+S2_BRIDGE phase=enable
+S2_BRIDGE command=set-wifi-enabled result=accepted rc=0
+S2_BRIDGE command=status result=accepted rc=0
+S2_BRIDGE command=status result=accepted rc=0
+S2_BRIDGE wifi=enabled verified=yes
+S2_BRIDGE command=list-networks result=accepted rc=0
+S2_BRIDGE command=status result=accepted rc=0
+S2_BRIDGE phase=input
+S2_BRIDGE phase=scan-wait
+S2_BRIDGE phase=scan-results
+S2_BRIDGE command=list-scan-results result=accepted rc=0
+S2_BRIDGE phase=scan-select
+S2_BRIDGE result=failed phase=scan-select
+S2_GATE phase=framework-connect command=bridge-connect rc=1
+S2_GATE phase=framework-connect result=failed
+S2_BRIDGE phase=binder-api
+S2_BRIDGE phase=runtime-hashes
+S2_BRIDGE phase=binder-api
+S2_BRIDGE phase=disable
+S2_BRIDGE command=set-wifi-enabled result=accepted rc=0
+S2_BRIDGE command=status result=accepted rc=0
+S2_BRIDGE phase=forget
+S2_BRIDGE command=list-networks result=accepted rc=0
+S2_BRIDGE command=list-networks result=accepted rc=0
+S2_BRIDGE cleanup=forgotten
+S2_GATE phase=cleanup command=bridge-cleanup rc=0
+S2_GATE phase=cleanup framework_cleanup_rc=0
+S2_ROOT_RC 1

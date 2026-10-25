@@ -1,0 +1,13 @@
+/sys/devices/soc0 identity files served read-only from RAM to the sensors PD (sns_reg_config names all six).
+Never read from the real /sys by the listener. Values for the A9 (HLTE556N), as the STOCK kernel reports them:
+
+measured (stock kernel boot log, slot A, a9-bootlog boot-00146 kmsg.txt):
+  socinfo_print: v0.15, id=444, ver=1.0, raw_id=333, raw_ver=0, hw_plat=11, hw_plat_ver=65536,
+  accessory_chip=0, hw_plat_subtype=0, ...
+  soc_id=444, revision "1.0" (ver=1.0), platform_version 65536, platform_subtype_id 0.
+derived (stock kernel image, golden boot_a: drivers/soc/qcom/socinfo.c name table; board DT "Bengal QRD",
+  qcom,msm-id 0x1bc=444, board-id 0xb; every shipped sensor JSON gates on hw_platform QRD):
+  hw_platform "QRD" (hw_plat=11 = QRD).
+inferred (downstream socinfo convention; no shipped sensor JSON reads it):
+  platform_subtype "Unknown" for subtype id 0.
+Format: one line, trailing newline, as the downstream sysfs show functions print.

@@ -1,0 +1,11 @@
+; Round 5: A6L's AT_SECURE lead also applies to the A9 framework Wi-Fi
+; launchers. Their root-owned init rc sets LD_LIBRARY_PATH to the packaged
+; private HAL/supplicant libraries before executing /system/bin/sh. Without
+; noatsecure, bionic removes that variable on the init -> HAL transition;
+; the shell then cannot pass it to its same-domain native exec.
+; Camera and Codec2 already have the equivalent rules in avc-h.cil.
+; Our rmtfs/tqftpserv/pd-mapper/diag-router are static and receive an explicit
+; minimal environment from sandbox.c, so do not copy A6L's radio-domain grant.
+(allow init_202504 hal_wifi_default (process (noatsecure)))
+(allow init_202504 hal_wifi_supplicant_default (process (noatsecure)))
+(allow init_202504 hal_wifi_hostapd_default (process (noatsecure)))

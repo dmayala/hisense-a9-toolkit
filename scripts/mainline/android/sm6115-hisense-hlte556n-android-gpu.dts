@@ -1,0 +1,99 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
+/*
+ * Hisense A9 (HLTE556N) -- ANDROID + GPU variant of the mainline board DT.
+ * 2026-10-15. Status: builds; NEVER BOOTED. Opt-in only (A9_ANDROID=1
+ * A9_GPU=1 scripts/mainline/kernel/build.sh); the default Android DT
+ * (sm6115-hisense-hlte556n-android.dts) is #included unchanged, so every
+ * safety setting of that DT and of the diskless board DT stays as it is.
+ *
+ * Adds the Adreno 610 (gpu@5900000, "qcom,adreno-610.0", gmu-less a6xx with
+ * the "qcom,adreno-gmu-wrapper") for Mesa freedreno. Its SMMU
+ * (adreno_smmu@59a0000), clock controller (gpucc@5990000, module
+ * gpucc-sm6115.ko) and gmu wrapper are already enabled in sm6115.dtsi; only
+ * the GPU node itself is disabled there and in the board DT. runs/gpu.md.
+ *
+ * MEASURED from the stock base DTB (golden edl_2026-10-14_110759, decompiled
+ * as ~/A9-build/mainline/sol-pmic/evidence/base_0.dts):
+ *   - qcom,kgsl-3d0@5900000: chipid 0x6010000 (= A610, the a6xx_catalog entry
+ *     with zapfw "a610_zap.mdt", SQE "a630_sqe.fw"), irq SPI 177, UBWC mode 1,
+ *     highest-bank-bit 14 (mainline takes these from its own ubwc_config).
+ *   - qcom,kgsl-hyp: pas-id 13, firmware "a610_zap" (TZ authenticated).
+ *   - reserved gpu_region@55615000 size 0x2000, pil_adsp_region@53800000 size
+ *     0x1e00000 (upstream sm6115.dtsi: pil_gpu_mem@56115000 and ADSP 0x2800000,
+ *     which covers the stock IPA/GPU regions at 0x55600000-0x55617000).
+ *   - stock vendor /firmware/a610_zap.{mdt,b00,b01,b02,elf}; the .elf is the
+ *     squashed image (14,384 bytes = last segment end 0x3000 + 0x830). Its
+ *     program header flags carry QCOM_MDT_RELOCATABLE (bit 27, segment 2), so
+ *     the mdt loader may place it anywhere in the region; the stock address is
+ *     used anyway, the one TZ authenticated it at under the stock kernel.
+ *
+ * Firmware (NOT in git, NOT in this DT): qcom/a630_sqe.fw (linux-firmware
+ * 20250917, SQE 0x207 >= the 0x190 that a6xx_ucode_check_version wants) and
+ * the zap below, staged by scripts/mainline/android/gpu/stage-firmware.sh and
+ * copied by the vendor to firmware_class.path at post-fs-data.
+ */
+
+#include "sm6115-hisense-hlte556n-android.dts"
+
+/* Stock layout: ADSP ends at 0x55600000, then IPA fw/GSI, then the GPU zap
+ * region at 0x55615000. Review 27: nothing the Android DT reserves is released
+ * and every stock reservation stays: upstream's ADSP range is re-expressed as
+ * stock ADSP + the two stock IPA regions + the zap region + a tail, all
+ * no-map; upstream's (now unused) pil_gpu_mem@56115000 and IPA regions at
+ * 0x56100000 stay reserved too. The ADSP remoteproc stays disabled.
+ * Effective map: gpu/dt-reserved-audit.py (stock coverage, no overlap, no
+ * baseline byte released).
+ */
+&pil_adsp_mem {
+	reg = <0x0 0x53800000 0x0 0x1e00000>;
+};
+
+
+/ {
+	reserved-memory {
+		/*
+		 * Review 27: shrinking ADSP to the stock size must not free the stock
+		 * IPA firmware / GSI regions that sit between ADSP and the zap region
+		 * (stock base DTB l.381-394: ipa_fw_region@55600000 0x10000,
+		 * ipa_gsi_region@55610000 0x5000). Kept no-map exactly as stock; the
+		 * upstream IPA reservations at 0x56100000 stay as well. Effective map
+		 * audited by gpu/dt-reserved-audit.py (stock no-map coverage, no
+		 * overlaps).
+		 */
+		a9_stock_ipa_fw_mem: memory@55600000 {
+			reg = <0x0 0x55600000 0x0 0x10000>;
+			no-map;
+		};
+
+		a9_stock_ipa_gsi_mem: memory@55610000 {
+			reg = <0x0 0x55610000 0x0 0x5000>;
+			no-map;
+		};
+
+		/*
+		 * ...and nothing the Android DT reserved is released: upstream's ADSP
+		 * region (0x53800000 + 0x2800000) is kept byte for byte as stock ADSP
+		 * + the two stock IPA regions + the zap region + this tail
+		 * (0x55617000-0x56000000), all no-map.
+		 */
+		a9_adsp_tail_mem: memory@55617000 {
+			reg = <0x0 0x55617000 0x0 0x9e9000>;
+			no-map;
+		};
+
+		a9_gpu_zap_mem: memory@55615000 {
+			reg = <0x0 0x55615000 0x0 0x2000>;
+			no-map;
+		};
+	};
+};
+
+&gpu {
+	status = "okay";
+};
+
+&gpu_zap_shader {
+	memory-region = <&a9_gpu_zap_mem>;
+	/* squashed stock a610_zap.elf, staged under this name (never committed) */
+	firmware-name = "qcom/sm6115/hisense/hlte556n/a610_zap.mbn";
+};

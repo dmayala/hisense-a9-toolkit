@@ -1,0 +1,44 @@
+From a316467911dc7adfafc1b90f476c87e2b6ef51c6 Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 20:41:36 -0700
+Subject: [PATCH 5/9] firmware: qcom: scm: skip_qtee parameter (Hisense A9
+ bring-up)
+
+qcom_scm.skip_qtee=1 skips the QTEE smcinvoke probe at SCM probe, a TZ
+call with null buffers that the device's own (downstream 4.19) kernel
+never makes. For first boots on old TZ builds.
+---
+ drivers/firmware/qcom/qcom_scm.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/drivers/firmware/qcom/qcom_scm.c b/drivers/firmware/qcom/qcom_scm.c
+index 26bf87247..6e071d09e 100644
+--- a/drivers/firmware/qcom/qcom_scm.c
++++ b/drivers/firmware/qcom/qcom_scm.c
+@@ -2529,12 +2529,26 @@ static void qcom_scm_qtee_free(void *data)
+ 	platform_device_unregister(qtee_dev);
+ }
+ 
++/*
++ * Hisense A9 bring-up: qcom_scm.skip_qtee=1 skips the smcinvoke probe below,
++ * a TZ call with null buffers that the 2022 bengal TZ was never exercised
++ * with by its own kernel.
++ */
++static bool skip_qtee;
++module_param(skip_qtee, bool, 0444);
++MODULE_PARM_DESC(skip_qtee, "Do not probe QTEE smcinvoke support at boot");
++
+ static void qcom_scm_qtee_init(struct qcom_scm *scm)
+ {
+ 	struct platform_device *qtee_dev;
+ 	u64 result, response_type;
+ 	int ret;
+ 
++	if (skip_qtee) {
++		dev_info(scm->dev, "QTEE probe skipped (qcom_scm.skip_qtee)\n");
++		return;
++	}
++
+ 	/*
+ 	 * Probe for smcinvoke support. This will fail due to invalid buffers,
+ 	 * but first, it checks whether the call is supported in QTEE syscall

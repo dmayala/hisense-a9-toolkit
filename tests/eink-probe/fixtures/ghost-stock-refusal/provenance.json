@@ -1,0 +1,16 @@
+{
+  "sources": {
+    "/home/user/A9-build/mainline/eink-settle-f6/r0-ghost/series-matched-89m-readback-20261018/stock/stock.log": "f30d2057f617db80052e84ace452ca13c3bd81624a385ba9ff9d5b3cdfa3ee7e",
+    "/home/user/A9-build/mainline/eink-settle-f6/r0-ghost/run3-queue2.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "supervisor_return": 3,
+  "queue_bytes": 0,
+  "observations": [
+    "stock STOP after 39.3 seconds at source activity verification",
+    "launcher baseline completed; dark viewer action rc 1",
+    "force-clear action rc 1 with permission denied on both baselines",
+    "recovery audit is recovered, home restored true, no pending paths",
+    "viewer stdout was not retained; its exact launch error is unknown"
+  ],
+  "copy_policy": "fixed log labels and name/rc/permission booleans only; no transport vectors"
+}

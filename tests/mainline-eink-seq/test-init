@@ -1,0 +1,19 @@
+#!/bin/busybox sh
+# QEMU only: fake A9 hardware under /fake, then the image's real /init.
+/bin/busybox --install -s /bin
+export PATH=/bin:/sbin
+mount -t proc proc /proc; mount -t sysfs sysfs /sys; mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mkdir -p /fake /tmp; mount -t tmpfs tmpfs /fake
+ip link set eth0 name usb0 2>/dev/null
+sc=$(sed -n 's/.*a9sim=\([^ ]*\).*/\1/p' /proc/cmdline | tr , ' ')
+export SIM_ROOT=/fake SIM_LIB=/test/sim-lib.sh SIM_DIR=/test SIM_KMSG_DEV=1
+export A9_SEQ_ROOT=/fake A9_SEQ_PREPATH=/test/bin A9_SEQ_FW=/fake/lib/firmware/hisense/a9-waveform.bin
+export A9_SEQ_CT=/fake/lib/firmware/hisense/a9-ctrl-template.bin
+export A9_SEQ_REBOOT="touch /tmp/REBOOTED" A9_SEQ_NICE=0 A9_SEQ_SLOW=${SLOW:-20}
+sh -c ". /test/sim-lib.sh; setup $sc"
+cp /lib/firmware/hisense/a9-waveform.bin /fake/lib/firmware/hisense/a9-waveform.bin
+# the image's real control template (the host's pre hash is the real file's)
+cp /lib/firmware/hisense/a9-ctrl-template.bin /fake/lib/firmware/hisense/a9-ctrl-template.bin
+cp /test/fix/* /fake/fix/
+umount /proc /sys /dev 2>/dev/null
+exec /init

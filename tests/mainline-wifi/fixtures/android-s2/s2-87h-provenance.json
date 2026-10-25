@@ -1,0 +1,10 @@
+{
+  "probe_dir": "/home/user/A9-build/mainline/wifi-android/s2-87h-probes/probe-g6xhegm1/evidence",
+  "files": {
+    "/home/user/A9-build/mainline/wifi-android/s2-87h-probes/probe-g6xhegm1/evidence/probe.log": "eeda271d669f54c0f305368cb2c52819f16c1c82688cf7848d366a540f97609f",
+    "/home/user/A9-build/mainline/wifi-android/s2-87h-probes/probe-g6xhegm1/evidence/root-status.jsonl": "7069ea4c66ae6ae54722ebbfea90ace235096cafdde383db3d617aeb487cf2d8",
+    "/home/user/A9-build/mainline/wifi-android/s2-87h-probes/probe-g6xhegm1/evidence/framework-cleanup.log": "5ee6be4aaf3f1f60e4f81db04924085c41d955c912f6a6b52cb291e802bb3f62",
+    "/home/user/A9/runs/20261018T073111Z-mainline-android/android/mount_.txt": "bddea2904d60a86731b598de7fde74f8bde2276e95f2b9fc8b119969aa32423a"
+  },
+  "mount_fixture": "Selected actual /data and /data/user/0 mount rows from earlier same-GSI hardware capture; raw mounts were NOT captured by 87h. /proc/mounts conversion in tests is derived, not a new hardware observation."
+}

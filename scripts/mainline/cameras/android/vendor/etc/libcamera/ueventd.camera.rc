@@ -1,0 +1,4 @@
+# libcamera opens the media graph, sensor subdevs, capture and CPU heap buffers.
+/dev/media*          0660 cameraserver camera
+/dev/v4l-subdev*     0660 cameraserver camera
+/dev/video*          0660 cameraserver camera

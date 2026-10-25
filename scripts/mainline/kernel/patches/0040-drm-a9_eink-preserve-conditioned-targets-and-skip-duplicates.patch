@@ -1,0 +1,417 @@
+From 9ecf506da71f9650c12f04cd1c8acdc5845a4e26 Mon Sep 17 00:00:00 2001
+From: dmayala <dmayala@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 04:56:32 +0000
+Subject: [PATCH 0040] drm/a9_eink: preserve complete targets and suppress
+ duplicates safely
+
+Retain whole conditioned targets and derive target damage against committed
+history. Suppress ordinary equal targets without new power or waveform.
+
+Review 22: preserve 0039 live-rail validation and containment. Consume the
+exact FP status from temperature reads so a later good PG cannot erase a
+dropout; validate again before accepting a duplicate skip. Never energize
+an off pipeline for a no-op. Keep fault acknowledgement and full recovery.
+
+Anchor the soft idle hold to the last real transport output, not duplicate,
+rejected or dry kicks. Expiry wins before/after work; hold=0 only reuses queued
+work after actual physical output. Preserve failed-off retries.
+Absolute HV origins, fresh fixed-bin admission, max_on, progress interlock,
+starvation latch and K=12 remain unchanged. Apply after 0039.
+---
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c    | 119 ++++++++++++++++++-----
+ drivers/gpu/drm/a9_eink/a9_eink_engine.c |  68 ++++++++++---
+ drivers/gpu/drm/a9_eink/a9_eink_engine.h |  20 +++-
+ 3 files changed, 170 insertions(+), 37 deletions(-)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index 6a52157a174304f88071b2fa634be9fcafb2e665..92984a4f04d0765f5ea42354ed8dc9c77ddcd758 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -816,19 +816,22 @@ static int a9_load_waveform(struct a9_eink *a9)
+ }
+ 
+ /* ---- temperatures (stock rules, docs/mainline-plan.md section 4.5 item 6) -------- */
+-static void a9_temps(struct a9_eink *a9, int *t1, int *t2)
++static int a9_hv_sample(struct a9_eink *a9, struct fp9929a_status *st);
++
++static int a9_temps(struct a9_eink *a9, int *t1, int *t2,
++		    struct fp9929a_status *st)
+ {
+-	struct fp9929a_status st;
+-	int v;
++	int v, ret;
+ 
+ 	/* t1: the FP9929A's TMST byte, sampled inside the power-up sequence */
+ 	*t1 = temp_fallback;
+ 	a9->last.t1_raw = INT_MIN;
+-	if (!fp9929a_get_status(a9->pmic_np, &st) && st.temp_valid) {
+-		a9->last.t1_raw = st.temp_c;
++	ret = a9_hv_sample(a9, st);
++	if (!ret && st->temp_valid) {
++		a9->last.t1_raw = st->temp_c;
+ 		/* composer compatibility (it saw TMST as unsigned): above 85 reads
+ 		 * as 0; negative values are refused in a9_update(), not mapped */
+-		*t1 = st.temp_c > 85 ? 0 : st.temp_c;
++		*t1 = st->temp_c > 85 ? 0 : st->temp_c;
+ 	}
+ 	/* t2: PMI632 epd_top_therm in m deg C (mainline interpolates in mV, stock
+ 	 * in uV: up to 73 m deg C apart, a different integer for ~3% of codes) */
+@@ -838,6 +841,7 @@ static void a9_temps(struct a9_eink *a9, int *t1, int *t2)
+ 		a9->last.t2_raw = v;
+ 		*t2 = v < -999 ? 0 : (v > 50999 ? 50 : v / 1000);
+ 	}
++	return ret;
+ }
+ 
+ /* rails up AND power-good. PG is required: logical 1 (DT active-high) means
+@@ -948,9 +952,32 @@ static void a9_rail_fault(struct a9_eink *a9, int ret, const struct fp9929a_stat
+ 		a9->rail.armed, a9->rail.session_ms, a9->rail.since_wf_ms, a9->wf_ret);
+ }
+ 
+-static int a9_power_on(struct a9_eink *a9)
++/* Consume the exact observed sample: a later good PG cannot erase dropout. */
++static int a9_check_rail_sample(struct a9_eink *a9, bool was_on, int ret,
++			      const struct fp9929a_status *st)
++{
++	if (!was_on || a9_hv_good(ret, st))
++		return 0;
++	a9_rail_fault(a9, ret, st);
++	a9_power_off(a9); /* ordered neutral; emergency HV off if that fails */
++	return -EIO;
++}
++
++/* No-op validation never energizes an off pipeline. */
++static int a9_check_live_rails(struct a9_eink *a9)
+ {
+ 	struct fp9929a_status st;
++	bool was_on = READ_ONCE(a9->tx.on);
++	int ret;
++
++	if (!was_on)
++		return 0;
++	ret = a9_hv_sample(a9, &st);
++	return a9_check_rail_sample(a9, was_on, ret, &st);
++}
++
++static int a9_power_on(struct a9_eink *a9)
++{
+ 	int ret;
+ 
+ 	if (a9x_fault_latched())
+@@ -961,15 +988,8 @@ static int a9_power_on(struct a9_eink *a9)
+ 		if (a9->hv_fault)
+ 			return -EIO;	/* still unknown: refuse */
+ 	}
+-	if (a9->tx.on) {
+-		/* rails must still be up and good for every update, not only at enable */
+-		ret = a9_hv_sample(a9, &st);
+-		if (a9_hv_good(ret, &st))
+-			return 0;
+-		a9_rail_fault(a9, ret, &st);
+-		a9_power_off(a9);	/* ordered neutral; emergency HV off if that fails */
+-		return -EIO;
+-	}
++	if (a9->tx.on)
++		return a9_check_live_rails(a9);
+ 	if (!a9x_attached(&a9->tx)) {
+ 		ret = a9x_attach(&a9->tx);
+ 		if (ret)
+@@ -1187,6 +1207,8 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 	bool *init_pending = dry ? &a9->dry_init_pending : &a9->init_pending;
+ 	bool *force_clear = dry ? &a9->dry_force_clear : &a9->force_clear;
+ 	struct sha256_ctx sc;
++	struct fp9929a_status st;
++	bool was_on;
+ 	ktime_t t0 = ktime_get();
+ 	unsigned int zt = READ_ONCE(zero_test);
+ 	bool prepared = false, init_white = false;
+@@ -1215,7 +1237,12 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 		 * It can only refuse. The real admission is after power-up, with
+ 		 * this power-up's valid TMST, before any frame.
+ 		 */
+-		a9_temps(a9, &t1, &t2);
++		was_on = READ_ONCE(a9->tx.on);
++		ret = a9_temps(a9, &t1, &t2, &st);
++		if (a9_check_rail_sample(a9, was_on, ret, &st)) {
++			a9->aborts++;
++			return;
++		}
+ 		if (a9->last.t2_raw == INT_MIN) {
+ 			dev_err(a9->dev, "no thermistor reading: update refused (no fallback)\n");
+ 			a9->aborts++;
+@@ -1263,6 +1290,16 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 		steps = a9e_prepare(&a9->e, job->mode, job->clear, &job->rect, job->mask);
+ 		prepared = true;
+ 		a9->last.prep_us = (u32)ktime_us_delta(ktime_get(), p0);
++		/* Only complete real history is eligible. A coalesced reversion or
++		 * quantized-equivalent target sends nothing: no power/start/end,
++		 * update count, clear/init consumption or HV-budget renewal.
++		 */
++		if (a9->e.unchanged && !dry && !init_white && !*force_clear) {
++			mutex_unlock(&a9->eng_lock);
++			if (a9_check_live_rails(a9))
++				a9->aborts++;
++			return;
++		}
+ 		mutex_unlock(&a9->eng_lock);
+ 	}
+ 	if (!dry) {
+@@ -1275,7 +1312,14 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 			return;
+ 		}
+ 	}
+-	a9_temps(a9, &t1, &t2);	/* t1 was sampled by the FP9929A at this power-up */
++	was_on = !dry && READ_ONCE(a9->tx.on);
++	ret = a9_temps(a9, &t1, &t2, &st); /* this power-up's TMST */
++	if (a9_check_rail_sample(a9, was_on, ret, &st)) {
++		a9->aborts++;
++		if (prepared)
++			a9_unprepare(a9, dry);
++		return;
++	}
+ 	if ((a9->last.t1_raw != INT_MIN && a9->last.t1_raw < A9_TEMP_MIN_C) ||
+ 	    (a9->last.t2_raw != INT_MIN && a9->last.t2_raw < A9_TEMP_MIN_C * 1000)) {
+ 		dev_err(a9->dev, "panel temperature below %d C (FP9929A %d C, epd_therm %d mC): update refused\n",
+@@ -1527,13 +1571,23 @@ static unsigned int a9_hold_ms(void)
+ 	return min(READ_ONCE(hv_hold_ms), 10000u);
+ }
+ 
++/* Remaining soft idle hold, independent of the absolute HV-on origins. */
++static long a9_idle_timeout(unsigned int hold, ktime_t idle_since)
++{
++	s64 left = (s64)hold - ktime_ms_delta(ktime_get(), idle_since);
++
++	return left > 0 ? msecs_to_jiffies(left) : 0;
++}
++
+ static int a9_thread(void *data)
+ {
+ 	struct a9_eink *a9 = data;
+ 	struct a9_job job;
++	ktime_t idle_since = 0;
+ 
+ 	while (!kthread_should_stop()) {
+ 		unsigned int hold = a9_hold_ms();
++		bool physical = false;
+ 		long tmo;
+ 
+ 		if (READ_ONCE(a9->suspending)) {
+@@ -1549,7 +1603,7 @@ static int a9_thread(void *data)
+ 		if (a9->hv_fault)
+ 			tmo = HZ;			/* retry the power-down, no busy loop */
+ 		else if (a9->tx.on)
+-			tmo = msecs_to_jiffies(hold);
++			tmo = a9_idle_timeout(hold, idle_since);
+ 		else
+ 			tmo = MAX_SCHEDULE_TIMEOUT;
+ 		if (tmo)
+@@ -1566,18 +1620,37 @@ static int a9_thread(void *data)
+ 		}
+ 		WRITE_ONCE(a9->busy, true);
+ 		smp_mb();	/* busy is visible before kick reads as cleared (a9_drain) */
++		/* A new kick cannot erase an already-expired physical idle hold. */
++		if (a9->tx.on && !a9->hv_fault && hold &&
++		    !a9_idle_timeout(hold, idle_since)) {
++			/* Observe a live dropout before closing the expired session. */
++			a9_check_live_rails(a9);
++			a9_power_off(a9);
++		}
+ 		if (a9_load_waveform(a9)) {
+ 			WRITE_ONCE(a9->kick, false);	/* dropped; retried at the next commit */
+ 		} else {
+ 			if (a9->tx.on && hv_max_ms &&
+ 			    ktime_ms_delta(ktime_get(), a9->tx.on_since) > hv_max_ms)
+ 				a9_power_off(a9);	/* bounded continuous HV time */
+-			if (a9_take_job(a9, &job))
++			if (a9_take_job(a9, &job)) {
++				u64 frames0 = a9->tx.frames;
++
+ 				a9_update(a9, &job);
+-			/* follow-up already queued: keep the pipeline; otherwise drop it now */
+-			if (!READ_ONCE(a9->kick) && !hold)
+-				a9_power_off(a9);
++				/* Only actual real output renews the idle hold. */
++				if (!job.dry && a9->tx.on && a9->tx.frames != frames0) {
++					idle_since = ktime_get();
++					physical = true;
++				}
++			}
+ 		}
++		/* Expiry wins over queued duplicates. Keep failed-off HZ retries
++		 * and hold=0 reuse for actual queued physical output.
++		 */
++		if (a9->tx.on && !a9->hv_fault &&
++		    ((hold && !a9_idle_timeout(hold, idle_since)) ||
++		     (!hold && (!READ_ONCE(a9->kick) || !physical))))
++			a9_power_off(a9);
+ 		smp_store_release(&a9->busy, false);
+ 		wake_up_all(&a9->wq);	/* drainers */
+ 	}
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_engine.c b/drivers/gpu/drm/a9_eink/a9_eink_engine.c
+index ab1132ca75ed6a68467e44c932b8ae7a2e09baf9..d6f2b3a5aa36cd87ae06db0005eaab916664dc8a 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_engine.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_engine.c
+@@ -126,6 +126,7 @@ void a9e_setup(struct a9e_engine *e)
+ 	for (k = 0; k < 5; k++)
+ 		memset(e->arr[k], 0, (size_t)A9T_N * 2); /* stock: zeroed at TCON start */
+ 	e->have_pre = 0;
++	e->unchanged = 0;
+ 	e->pre_mode = 0;
+ 	e->nframes = 0;
+ 	e->init = 0;
+@@ -202,10 +203,39 @@ void a9e_fb_to_grey(uint8_t *grey, const uint8_t *src, uint32_t pitch, enum a9e_
+ 		a9e_rect_union(changed, &ch);
+ }
+ 
++/* Complete conditioned target damage, not the source-luma damage hint.
++ * Diffusion can propagate arbitrarily far beyond a one-pixel input change.
++ */
++static struct a9e_rect target_damage(const uint8_t *old, const uint8_t *target)
++{
++	struct a9e_rect rect = { 0, 0, 0, 0 };
++	int x, y;
++
++	for (y = 0; y < A9T_H; y++) {
++		int first = A9T_W, last = -1;
++
++		for (x = 0; x < A9T_W; x++) {
++			size_t i = (size_t)y * A9T_W + x;
++
++			if (old[i] != target[i]) {
++				if (x < first) first = x;
++				last = x;
++			}
++		}
++		if (last >= 0) {
++			struct a9e_rect row = { first, y, last + 1, y + 1 };
++
++			a9e_rect_union(&rect, &row);
++		}
++	}
++	return rect;
++}
++
+ /* ---- update ------------------------------------------------------------------ */
+ void a9e_begin_init(struct a9e_engine *e, int bin)
+ {
+ 	e->init = 1;
++	e->unchanged = 0;
+ 	e->bin = bin;
+ 	e->nframes = 0;
+ 	e->st.counter = 0;
+@@ -233,27 +263,42 @@ int a9e_prepare(struct a9e_engine *e, uint32_t mode, int clear, const struct a9e
+ 	e->nframes = 0;
+ 	memset(&e->req, 0, sizeof(e->req));
+ 	e->mode = a9t_request_build(&e->req, pre, mode, e->flag_6c7, &e->clear, &e->clear_reset);
++	/* Condition before request arrays can replace the committed old levels. */
++	a9t_condition(&e->st, e->grey, e->mode, e->nlv, e->work);
++	e->rect = target_damage(e->old, e->nlv);
++	/* have_pre alone is not a recovery authorization: the caller also excludes
++	 * unknown/aborted history, pending init, dry runs and explicit recovery.
++	 * Compare the full mode except bit 8, which end() normalizes as before.
++	 */
++	e->unchanged = e->have_pre && e->flag_6c7 &&
++		(e->pre_mode == (e->mode & ~0x100u)) &&
++		!e->req.count && !e->req.kind && !e->clear &&
++		a9e_rect_empty(&e->rect);
+ 	if (e->req.count)
+ 		a9t_request_arrays(&e->req, e->old, e->arr);	/* old := last step level */
+ 	if (e->req.count || e->clear || e->req.kind)
+ 		e->rect = a9e_rect_full();
+ 	e->mask = mask && !e->req.count && !e->clear;
+ 
+-	a9t_condition(&e->st, e->grey, e->mode, e->nlv, e->work);
+-	if (!(e->rect.x1 == 0 && e->rect.y1 == 0 && e->rect.x2 == A9T_W && e->rect.y2 == A9T_H)) {
+-		/* outside the damage the glass keeps its levels */
++	/* Preserve every conditioned level, including diffusion outside raw damage. */
++	a9t_pack(e->old, e->nlv, e->mode, e->clear, e->pairs);
++	/* Clear's sentinel may drive a steady-white neighbour outside target damage.
++	 * Retain that exact packed footprint when the optional mask is selected.
++	 */
++	if ((e->mode & 0xff) == 3 && !e->clear) {
+ 		for (y = 0; y < A9T_H; y++) {
+-			size_t row = y * A9T_W;
+-			if ((int)y < e->rect.y1 || (int)y >= e->rect.y2) {
+-				memcpy(e->nlv + row, e->old + row, A9T_W);
+-				continue;
++			size_t x;
++
++			for (x = 0; x < A9T_W; x++) {
++				if (e->pairs[y * A9T_W + x] == 256) {
++					struct a9e_rect pixel = { (int)x, (int)y,
++						(int)x + 1, (int)y + 1 };
++
++					a9e_rect_union(&e->rect, &pixel);
++				}
+ 			}
+-			memcpy(e->nlv + row, e->old + row, (size_t)e->rect.x1);
+-			memcpy(e->nlv + row + e->rect.x2, e->old + row + e->rect.x2,
+-			       (size_t)(A9T_W - e->rect.x2));
+ 		}
+ 	}
+-	a9t_pack(e->old, e->nlv, e->mode, e->clear, e->pairs);
+ 	e->type = (uint32_t)a9t_final_type(e->mode, e->clear);
+ 	return (int)e->req.count;
+ }
+@@ -330,6 +375,7 @@ void a9e_end(struct a9e_engine *e)
+ void a9e_abort(struct a9e_engine *e)
+ {
+ 	e->init = 0;
++	e->unchanged = 0;
+ 	e->st.counter = 0;
+ 	e->st.step = 0;
+ 	/* nothing reliable is known about the glass: keep old as is; the caller
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_engine.h b/drivers/gpu/drm/a9_eink/a9_eink_engine.h
+index 9f9765df629672f8fe1abcbc44def1950ef1211a..53a288d37082dadca49f6b68fccf45662f596225 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_engine.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink_engine.h
+@@ -11,7 +11,7 @@
+  * against the stock code under Unicorn):
+  *   a9e_fb_to_grey()   damage rect of the portrait framebuffer -> landscape grey
+  *   a9e_begin()        request builder (mode switch) + step arrays,
+- *                      conditioning, outside-damage levels kept, pack, type
++ *                      whole-canvas conditioning, target damage, pack, type
+  *   a9e_frame()        one drive frame per call until it returns 0
+  *   a9e_end()          old := new, previous mode := this mode
+  * With a full-screen rect and mask = 0, the frames are exactly those of
+@@ -88,6 +88,7 @@ struct a9e_engine {
+ 	struct a9t_state st;
+ 	uint32_t pre_mode;	/* previous update's mode word */
+ 	int have_pre;
++	int unchanged;		/* prepared ordinary target equals old; caller must gate skips */
+ 
+ 	/* current update */
+ 	struct a9t_request req;
+@@ -157,7 +158,13 @@ void a9e_begin_init(struct a9e_engine *e, int bin);
+ /* Start an update of e->grey. clear = the update's clear flag (GC16-type full
+  * clear on Balanced/Clear, the stock clear request on Smooth/Speed). A mode
+  * switch or clear forces a full-screen rect (the steps drive every pixel).
+- * Returns the number of steps of the mode switch (0 = steady). */
++ * Returns the number of steps of the mode switch (0 = steady). This low-level
++ * begin/frame API always renders; a caller wanting duplicate suppression must
++ * use prepare and check unchanged before starting or powering the transport.
++ * rect is a source-damage hint; the prepared rect covers complete conditioned
++ * target differences (plus packed Clear sentinel neighbours), or the full
++ * canvas for a required clear/transition. No conditioned targets are clipped.
++ */
+ int a9e_begin(struct a9e_engine *e, uint32_t mode, int clear, const struct a9e_rect *rect,
+ 	      int mask, int bin);
+ 
+@@ -169,7 +176,14 @@ int a9e_begin(struct a9e_engine *e, uint32_t mode, int clear, const struct a9e_r
+  * a9e_start() then only sets the bin and rewinds the frame counters.
+  * a9e_begin() == a9e_prepare() + a9e_start(). Between the two, only the init
+  * flash may run (a9e_begin_init/a9e_frame/a9e_init_end): it uses neither the
+- * levels nor the arrays. An update preceded by the init flash is prepared on
++ * levels nor the arrays. unchanged is only an equality result, not proof of
++ * known glass: equality is eligible only with normal flag_6c7; callers must
++ * exclude init, explicit clear/recovery, dry runs and
++ * diagnostic jobs, and must invalidate eligibility after an aborted trial.
++ * A skip does not call start/end or advance history/counters/power deadlines.
++ * Final-target equality is stronger than stock's raw-luma equality predicate;
++ * conditioning and raw-luma changed-pixel detection themselves are unchanged.
++ * An update preceded by the init flash is prepared on
+  * the levels the flash leaves (a9e_assume_white() first), and the flash then
+  * ends with a9e_init_end(), which does not touch the levels.
+  */
+-- 
+2.51.0

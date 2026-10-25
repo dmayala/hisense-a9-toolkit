@@ -1,0 +1,53 @@
+Subject: [PROPOSAL] Android: capture the same SMP/DVFS/idle evidence over NCM
+
+A9-project patch for Android owner review; NOT applied to android/.
+Same read-only evidence as diskless capture, without a new transport.
+
+--- a/scripts/mainline/android/vendor/bin/a9ml-ctl.sh
++++ b/scripts/mainline/android/vendor/bin/a9ml-ctl.sh
+@@ -13,6 +13,45 @@
+ capture)
+ 	D=/data/local/tmp/a9cap; rm -rf $D; mkdir -p $D
+ 	dmesg > $D/dmesg.txt 2>&1
++	uname -a > "$D/uname.txt"
++	cat /proc/uptime >> "$D/uname.txt"
++	cat /proc/interrupts > "$D/interrupts.txt"
++	d=$D
++	cat /proc/cpuinfo > "$d/cpuinfo.txt" 2>&1
++	cat /proc/stat > "$d/cpu-stat.txt" 2>&1
++	cat /proc/sys/kernel/random/boot_id > "$d/boot-id.txt" 2>&1
++	for f in online possible present; do
++	    printf '%s=' "$f"
++	    cat "/sys/devices/system/cpu/$f"
++	done > "$d/cpus.txt" 2>&1
++	for p in /sys/devices/system/cpu/cpufreq/policy*; do
++	    [ -d "$p" ] || continue
++	    for f in scaling_driver scaling_governor related_cpus affected_cpus \
++	             scaling_available_frequencies scaling_boost_frequencies \
++	             cpuinfo_min_freq cpuinfo_max_freq scaling_min_freq scaling_max_freq \
++	             scaling_cur_freq cpuinfo_cur_freq stats/total_trans; do
++	        [ -r "$p/$f" ] || continue
++	        printf '%s/%s=' "${p##*/}" "$f"
++	        cat "$p/$f"
++	    done
++	done > "$d/cpufreq.txt" 2>&1
++	cat /sys/devices/system/cpu/cpuidle/current_driver > "$d/cpuidle-driver.txt" 2>&1
++	for p in /sys/devices/system/cpu/cpu[0-9]*/cpuidle/state*; do
++	    [ -d "$p" ] || continue
++	    for f in name usage time rejected disable; do
++	        [ -r "$p/$f" ] || continue
++	        printf '%s/%s=' "${p#/sys/devices/system/cpu/}" "$f"
++	        cat "$p/$f"
++	    done
++	done > "$d/cpuidle.txt" 2>&1
++	for p in /sys/class/thermal/thermal_zone*; do
++	    [ -d "$p" ] || continue
++	    for f in type temp; do
++	        [ -r "$p/$f" ] || continue
++	        printf '%s/%s=' "${p##*/}" "$f"
++	        cat "$p/$f"
++	    done
++	done > "$d/cpu-thermal.txt" 2>&1
+ 	logcat -d -b all -v threadtime > $D/logcat.txt 2>&1
+ 	getprop > $D/getprop.txt
+ 	cat /proc/cmdline > $D/cmdline.txt

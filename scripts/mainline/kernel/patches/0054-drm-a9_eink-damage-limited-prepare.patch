@@ -1,0 +1,1073 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: dmayala <dmayala@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 20:09:03 -0700
+Subject: [PATCH 0054] drm/a9_eink: damage-limited prepare (opt-in,
+ a9_eink.damage_prep)
+
+Every a9_eink update re-conditioned the whole 1.36 Mpx canvas (for Balanced and
+Smooth a serial 1-bit error diffusion), diffed it against the glass levels and
+packed every pair, although drm_hwcomposer/SurfaceFlinger never deliver partial
+damage (input_stats: 119/119 commits full) and a UI change touches a few tiles.
+
+damage_prep (default 0 = the reference full pass, runtime writable): the plane
+conversion records which 32x32 tiles contain a changed grey pixel
+(a9e_fb_to_grey_tiles, exact), the job carries that mask, and a9e_prepare then
+conditions, diffs and packs only what changed. The engine state it produces
+(nlv, pairs, rect, unchanged, mask, type) and therefore every drive frame is bit
+identical to the full pass: tests/damage-equiv over chained updates of real
+frames, all modes, mode switches, clear, LUT changes, abort, dry-run, lost
+damage. Per-pixel conditioning kinds recompute the marked tiles; the serial
+diffusion is an incremental dataflow over per-pixel stored errors (a pixel's
+input is a pure function of its luma and four stored neighbour errors), run for
+the marked tiles and then only for pixels whose inputs changed, with a work cap
+after which the rest is run plainly. Anything that breaks the premises takes the
+reference pass (mode switch, clear, signature change, unknown damage, 16-level
+diffusion, invalidation).
+
+1. a9_eink_damage.c (new, pure C like the engine): tiles, converter, the
+   incremental prepare. a9_eink_engine.c: three hooks gated by inc_enable and
+   the a9e_end validity line; the a9t_condition call stays in the else branch.
+2. a9_eink_drv.c: damage_prep parameter; plane update tracks tiles (or marks
+   the next job untracked); a9_take_job hands the mask over only if complete
+   (not after untracked converts, not around the test pattern); invalidate
+   where old is restored (unprepare, dry run, bin refusal) and when a job is
+   dropped before its prepare; eink/damage_stats (one line).
+No rail, HV, gate, PG, frame-progress, fence, ring, transport or FP9929A change
+(tests/mainline-a9eink-stall/damage-safety-diff.py).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/a9_eink/Makefile         |   2 +-
+ drivers/gpu/drm/a9_eink/a9_eink.h        |   3 +
+ drivers/gpu/drm/a9_eink/a9_eink_damage.c | 647 +++++++++++++++++++++++
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c    |  69 ++-
+ drivers/gpu/drm/a9_eink/a9_eink_engine.c |  22 +-
+ drivers/gpu/drm/a9_eink/a9_eink_engine.h |  74 +++
+ 6 files changed, 812 insertions(+), 5 deletions(-)
+ create mode 100644 drivers/gpu/drm/a9_eink/a9_eink_damage.c
+
+diff --git a/drivers/gpu/drm/a9_eink/Makefile b/drivers/gpu/drm/a9_eink/Makefile
+index 42951b9b0..a183df72c 100644
+--- a/drivers/gpu/drm/a9_eink/Makefile
++++ b/drivers/gpu/drm/a9_eink/Makefile
+@@ -2,5 +2,5 @@
+ # a9tcon.c / a9tcon.h are copied unchanged from scripts/mainline/tcon (A9 repo);
+ # kcompat/ maps their <stdint.h>/<stddef.h>/<string.h> to kernel headers.
+ ccflags-y += -I$(src) -I$(src)/kcompat
+-a9_eink-y := a9_eink_drv.o a9_eink_transport.o a9_eink_guard.o a9_eink_ring.o a9_eink_engine.o a9tcon.o
++a9_eink-y := a9_eink_drv.o a9_eink_transport.o a9_eink_guard.o a9_eink_ring.o a9_eink_engine.o a9_eink_damage.o a9tcon.o
+ obj-$(CONFIG_DRM_A9_EINK) += a9_eink.o
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index a89aa8d58..480088380 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -211,6 +211,9 @@ struct a9_eink {
+ 	u8 *shadow;			/* landscape grey of the latest commit */
+ 	u8 *convert_scratch;		/* cached bounce band for the plane conversion (under shadow_lock) */
+ 	struct a9e_rect dirty;
++	u8 dirty_tm[A9E_NTILES];	/* tiles with a changed grey pixel since the last job (damage_prep), shadow_lock */
++	bool tm_lost;			/* a convert since the last job was not tile-tracked */
++	bool prev_pattern;		/* the previous job's grey was the test pattern */
+ 	bool clear_req, manual_clear_req, kick, busy, suspending, parked;
+ 	bool kms_teardown;		/* remove: a disable really disables (unlinks) */
+ 	u32 mode;			/* stock mode word, sysfs "mode" */
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_damage.c b/drivers/gpu/drm/a9_eink/a9_eink_damage.c
+new file mode 100644
+index 000000000..405fce386
+--- /dev/null
++++ b/drivers/gpu/drm/a9_eink/a9_eink_damage.c
+@@ -0,0 +1,647 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * a9_eink damage-limited prepare (branch eink-damage). Pure C like the engine:
++ * the kernel module and the host tests build this same file.
++ *
++ * What the reference a9e_prepare() does on every update: condition the WHOLE
++ * canvas (1.36 Mpx; for Balanced/Smooth a serial 1-bit error diffusion), diff
++ * it against `old`, pack all pairs. Nothing but the pixels that changed need
++ * that work. This file does it for the changed tiles only and produces the
++ * very same engine state (nlv, pairs, rect, unchanged), proven bit for bit by
++ * test/damage-equiv.c over chained updates of real frames.
++ *
++ * Invariant J ("inc_valid"), established by a9e_end() of a prepare that left
++ * the state consistent, destroyed by anything else:
++ *   (a) old == nlv everywhere,
++ *   (b) nlv == condition(grey_prev) for the signature `sig`, grey_prev being
++ *       the grey of that prepare,
++ *   (c) pairs[i] == old[i] << 4 | old[i] for every pixel outside the tiles
++ *       marked in pk (pk = 8-neighbourhood of the tiles that changed in the
++ *       previous prepare: stale transitions and clear sentinels live there),
++ *   (d) for the 1-bit diffusion: ee holds every pixel's diffusion error of the
++ *       run that produced nlv (ee_valid).
++ * Then a prepare with a tile mask `dmg` covering EVERY grey change since the
++ * previous prepare gives:
++ *   - level conditioning that is a pure per-pixel function (threshold LUT,
++ *     ordered dither, plain >> 4): recompute only the marked tiles;
++ *   - serial diffusion: incremental dataflow over the stored per-pixel errors
++ *     (see below): the marked tiles, then only pixels whose inputs changed;
++ *   - diff against old only inside what was recomputed (J(a) says the rest is
++ *     equal), repack only pk plus the neighbourhood of the new changes.
++ * Anything that breaks the premises (mode/LUT/clear-shadow change = different
++ * signature, clear flag, mode-switch steps, unknown damage, 16-level
++ * diffusion, no checkpoints, J destroyed) takes the reference full pass, which
++ * (with inc_enable) leaves J established again.
++ */
++#include "a9_eink_engine.h"
++
++#include <string.h>
++
++/* floor(v / 2^n), as in a9tcon.c (independent of the compiler's negative shift) */
++static inline int32_t asr(int32_t v, int n)
++{
++	return v >= 0 ? (v >> n) : -(int32_t)((uint32_t)(-(int64_t)v + ((1 << n) - 1)) >> n);
++}
++
++/* ---- tile helpers ---------------------------------------------------------- */
++int a9e_tiles_any(const uint8_t *tm)
++{
++	int i;
++
++	for (i = 0; i < A9E_NTILES; i++)
++		if (tm[i])
++			return 1;
++	return 0;
++}
++
++void a9e_tiles_or(uint8_t *dst, const uint8_t *src)
++{
++	int i;
++
++	for (i = 0; i < A9E_NTILES; i++)
++		dst[i] |= src[i];
++}
++
++struct a9e_rect a9e_tiles_bbox(const uint8_t *tm)
++{
++	struct a9e_rect r = { 0, 0, 0, 0 };
++	int tx, ty;
++
++	for (ty = 0; ty < A9E_TY; ty++)
++		for (tx = 0; tx < A9E_TX; tx++)
++			if (tm[ty * A9E_TX + tx]) {
++				struct a9e_rect t = { tx * A9E_TILE, ty * A9E_TILE,
++					(tx + 1) * A9E_TILE < A9T_W ? (tx + 1) * A9E_TILE : A9T_W,
++					(ty + 1) * A9E_TILE < A9T_H ? (ty + 1) * A9E_TILE : A9T_H };
++
++				a9e_rect_union(&r, &t);
++			}
++	return r;
++}
++
++void a9e_inc_invalidate(struct a9e_engine *e)
++{
++	e->inc_valid = 0;
++}
++
++/* ---- framebuffer -> grey, with the changed-tile mask -------------------------
++ * Same arithmetic and the same bounding box as a9e_fb_to_grey()/_bounce(); the
++ * only addition is the tile mark on a pixel whose grey byte changed. */
++void a9e_fb_to_grey_tiles(uint8_t *grey, const uint8_t *src, uint32_t pitch, enum a9e_fmt fmt,
++			  int c1, int r1, int c2, int r2, struct a9e_rect *changed,
++			  uint8_t *tmask, uint8_t *scratch)
++{
++	int c, r, rb, bpp = fmt == A9E_FMT_R8 ? 1 : 4;
++	int i0 = fmt == A9E_FMT_BGRX ? 2 : 0, i2 = fmt == A9E_FMT_BGRX ? 0 : 2;
++	struct a9e_rect ch = { A9T_W, A9T_H, 0, 0 };
++	size_t bw;
++
++	if (!tmask) {
++		a9e_fb_to_grey_bounce(grey, src, pitch, fmt, c1, r1, c2, r2, changed, scratch);
++		return;
++	}
++	if (c1 < 0) c1 = 0;
++	if (r1 < 0) r1 = 0;
++	if (c2 > A9E_FB_W) c2 = A9E_FB_W;
++	if (r2 > A9E_FB_H) r2 = A9E_FB_H;
++	if (c1 >= c2 || r1 >= r2)
++		return;
++	if (!scratch) {
++		/* direct per-pixel path (the reference loop order) */
++		for (c = c1; c < c2; c++) {
++			int y = A9E_FB_W - 1 - c, rmin = A9T_W, rmax = -1;
++			uint8_t *o = grey + (size_t)y * A9T_W;
++			uint8_t *trow = tmask + (size_t)(y >> 5) * A9E_TX;
++			const uint8_t *p = src + (size_t)r1 * pitch + (size_t)c * bpp;
++
++			for (r = r1; r < r2; r++, p += pitch) {
++				uint8_t v = bpp == 1 ? p[0] :
++					(uint8_t)((76u * p[i0] + 150u * p[1] + 30u * p[i2]) >> 8);
++
++				if (o[r] != v) {
++					if (r < rmin) rmin = r;
++					rmax = r;
++					trow[r >> 5] = 1;
++				}
++				o[r] = v;
++			}
++			if (rmax >= 0) {
++				if (rmin < ch.x1) ch.x1 = rmin;
++				if (rmax + 1 > ch.x2) ch.x2 = rmax + 1;
++				if (y < ch.y1) ch.y1 = y;
++				if (y + 1 > ch.y2) ch.y2 = y + 1;
++			}
++		}
++		if (changed)
++			a9e_rect_union(changed, &ch);
++		return;
++	}
++	bw = (size_t)(c2 - c1) * bpp;
++	for (rb = r1; rb < r2; rb += A9E_BAND_ROWS) {
++		int n = r2 - rb < A9E_BAND_ROWS ? r2 - rb : A9E_BAND_ROWS;
++
++		for (r = 0; r < n; r++)
++			memcpy(scratch + (size_t)r * bw,
++			       src + (size_t)(rb + r) * pitch + (size_t)c1 * bpp, bw);
++		for (c = c1; c < c2; c++) {
++			int y = A9E_FB_W - 1 - c, rmin = n, rmax = -1;
++			uint8_t *o = grey + (size_t)y * A9T_W + rb;
++			uint8_t *trow = tmask + (size_t)(y >> 5) * A9E_TX;
++			const uint8_t *p = scratch + (size_t)(c - c1) * bpp;
++
++			for (r = 0; r < n; r++, p += bw) {
++				uint8_t v = bpp == 1 ? p[0] :
++					(uint8_t)((76u * p[i0] + 150u * p[1] + 30u * p[i2]) >> 8);
++
++				if (o[r] != v) {
++					o[r] = v;
++					if (r < rmin) rmin = r;
++					rmax = r;
++					trow[(rb + r) >> 5] = 1;
++				}
++			}
++			if (rmax >= 0) {
++				if (rb + rmin < ch.x1) ch.x1 = rb + rmin;
++				if (rb + rmax + 1 > ch.x2) ch.x2 = rb + rmax + 1;
++				if (y < ch.y1) ch.y1 = y;
++				if (y + 1 > ch.y2) ch.y2 = y + 1;
++			}
++		}
++	}
++	if (changed)
++		a9e_rect_union(changed, &ch);
++}
++
++/* ---- conditioning kinds ----------------------------------------------------- */
++enum { K_FULL_ONLY, K_LUT3, K_ORD, K_SHIFT, K_ERRDIFF };
++
++/* Mirrors the switch in a9t_condition(). */
++static int cond_kind(uint32_t mode)
++{
++	uint32_t lo = mode & 0xff, hi = (mode >> 8) & 0xff;
++
++	switch (lo) {
++	case 1:
++	case 6:
++		return (hi & 4) ? K_ORD : K_ERRDIFF;
++	case 9:
++		return K_ORD;
++	case 2:
++		return K_FULL_ONLY;	/* 16-level diffusion over three rows: reference pass */
++	case 3:
++		return (hi & 1) ? K_FULL_ONLY : K_LUT3;
++	default:
++		return K_SHIFT;
++	}
++}
++
++static void sig_make(const struct a9e_engine *e, struct a9e_cond_sig *s)
++{
++	memset(s, 0, sizeof(*s));
++	s->mode16 = e->mode & 0xffffu;
++	s->clear_shadow = (uint32_t)e->st.clear_shadow;
++	memcpy(s->g2, e->st.g2, 256);
++	memcpy(s->g16, e->st.g16, 256);
++	memcpy(s->g16s, e->st.g16s, 256);
++}
++
++/* ---- per-pixel kinds over a rectangle ------------------------------------------ */
++static void cond_rect(const struct a9e_engine *e, int kind, int x1, int y1, int x2, int y2)
++{
++	const uint8_t *lut3 = e->st.clear_shadow ? e->st.g16s : e->st.g16;
++	const uint8_t *g2 = e->st.g2, *m = e->t->dither;
++	int x, y;
++
++	for (y = y1; y < y2; y++) {
++		const uint8_t *g = e->grey + (size_t)y * A9T_W;
++		uint8_t *lv = e->nlv + (size_t)y * A9T_W;
++
++		switch (kind) {
++		case K_LUT3:
++			for (x = x1; x < x2; x++)
++				lv[x] = lut3[g[x]] >> 4;
++			break;
++		case K_ORD:
++			for (x = x1; x < x2; x++) {
++				uint8_t a = g2[g[x]];
++
++				lv[x] = (a > m[(y & 31) * 32 + (x & 31)] || a > 0xef) ? 15 : 0;
++			}
++			break;
++		default: /* K_SHIFT */
++			for (x = x1; x < x2; x++)
++				lv[x] = g[x] >> 4;
++		}
++	}
++}
++
++/* ---- serial 1-bit error diffusion, stored errors, incremental dataflow ---------------
++ * The reference (errdiff_1bit in a9tcon.c) scans every row serpentine (even rows
++ * left to right, odd rows right to left) and pushes each pixel's error e on:
++ *   (x + f, y)      asr(5e, 4)                      f = +1 / -1, not at the last scan position
++ *   (x, y + 1)      asr(7e, 4)
++ *   (x + f, y + 1)  asr(e, 3)   if its scan index is even, else (x - f, y + 1)
++ * so the input of a pixel is a pure function of its own luma and of the stored
++ * errors of at most four neighbours:
++ *   p(x,y) = lut[grey] + asr(5 e(x-f, y), 4)                      [scan index > 0]
++ *          + asr(7 e(x, y-1), 4) + asr(e(xb, y-1), 3) + asr(e(xc, y-1), 3)   [y > 0]
++ *   xb = x - f', scan index of xb even;  xc = x + f', scan index of xc odd   (f' of row y-1)
++ * and e = p > 127 ? p - 255 : p, level = p > 127 ? 15 : 0. The sum is order independent
++ * (integer addition, asr applied per term), so recomputing a pixel from the CURRENT stored
++ * errors of its inputs gives exactly the reference value. Incremental run: every pixel of a
++ * damaged tile is recomputed, then any pixel with a changed input, in scan order, row by row,
++ * until a row changes nothing and no damaged tile is left below. Where the error dies out (flat
++ * black/white, i.e. all UI) that is the damaged tiles themselves; where it does not (photos) it
++ * grows, and after A9E_INC_CAP pixels the rest is run plainly (same result, bounded cost). */
++static inline int sidx(int y, int x)
++{
++	return (y & 1) ? A9T_W - 1 - x : x;
++}
++
++/* contribution of row y-1 into pixel (x, y), y > 0 */
++static inline int32_t above(const int16_t *ep, int y, int x)
++{
++	int fp = ((y - 1) & 1) ? -1 : 1, xb = x - fp, xc = x + fp;
++	int32_t a = asr(7 * (int32_t)ep[x], 4);
++
++	if (xb >= 0 && xb < A9T_W && !(sidx(y - 1, xb) & 1))
++		a += asr((int32_t)ep[xb], 3);
++	if (xc >= 0 && xc < A9T_W && (sidx(y - 1, xc) & 1))
++		a += asr((int32_t)ep[xc], 3);
++	return a;
++}
++
++/* One row of the reference, accumulate form, from cur (row y with its carries) and nxt (row y+1);
++ * also stores the errors. */
++static void ed_row(int32_t *cur, int32_t *nxt, uint8_t *lvrow, int16_t *erow, int y)
++{
++	int rev = y & 1, last = y >= A9T_H - 1, f = rev ? -1 : 1, scan;
++
++	for (scan = 0; scan < A9T_W; scan++) {
++		int x = rev ? A9T_W - 1 - scan : scan;
++		int32_t p = cur[x];
++		int32_t er = p > 127 ? p - 255 : p;
++
++		lvrow[x] = p > 127 ? 15 : 0;
++		erow[x] = (int16_t)er;
++		if (scan < A9T_W - 1)
++			cur[x + f] += asr(5 * er, 4);
++		if (!last) {
++			nxt[x] += asr(7 * er, 4);
++			if (scan < A9T_W - 1 && !(scan & 1))
++				nxt[x + f] += asr(er, 3);
++			else if (scan & 1)
++				nxt[x - f] += asr(er, 3);
++		}
++	}
++}
++
++static void ed_load(int32_t *dst, const uint8_t *grey, const uint8_t *lut, int y)
++{
++	const uint8_t *g = grey + (size_t)y * A9T_W;
++	int x;
++
++	for (x = 0; x < A9T_W; x++)
++		dst[x] = lut[g[x]];
++}
++
++/* Plain run of rows y0..H-1 from the stored errors of row y0-1 (y0 = 0: nothing above). */
++static void ed_plain_from(struct a9e_engine *e, int y0)
++{
++	const uint8_t *g = e->grey, *lut = e->st.g2;
++	int32_t *cur = e->work->row[0], *nxt = e->work->row[1], *t;
++	int y, x;
++
++	ed_load(cur, g, lut, y0);
++	if (y0 > 0) {
++		const int16_t *ep = e->ee + (size_t)(y0 - 1) * A9T_W;
++
++		for (x = 0; x < A9T_W; x++)
++			cur[x] += above(ep, y0, x);
++	}
++	if (y0 + 1 < A9T_H)
++		ed_load(nxt, g, lut, y0 + 1);
++	for (y = y0; y < A9T_H; y++) {
++		ed_row(cur, nxt, e->nlv + (size_t)y * A9T_W, e->ee + (size_t)y * A9T_W, y);
++		if (y + 1 >= A9T_H)
++			break;
++		t = cur; cur = nxt; nxt = t;
++		if (y + 2 < A9T_H)
++			ed_load(nxt, g, lut, y + 2);
++	}
++}
++
++/* ---- the engine hooks --------------------------------------------------------- */
++void a9d_condition_full(struct a9e_engine *e)
++{
++	if (cond_kind(e->mode) == K_ERRDIFF && e->ee) {
++		/* the same levels as a9t_condition(), plus the stored errors for the incremental path */
++		ed_plain_from(e, 0);
++		e->ee_valid = 1;
++		return;
++	}
++	e->ee_valid = 0;
++	a9t_condition(&e->st, e->grey, e->mode, e->nlv, e->work);
++}
++
++void a9d_after_full(struct a9e_engine *e)
++{
++	sig_make(e, &e->sig);
++	memset(e->pk, 1, sizeof(e->pk));	/* every tile may hold a transition: repack all next time */
++	e->inc_prep_ok = 1;
++	/* an update that proceeds ends with old == nlv; one with no change keeps it */
++	e->inc_valid = e->td_empty && !e->req.count && !e->clear && !e->req.kind;
++}
++
++static void dilate(uint8_t *dst, const uint8_t *src)
++{
++	int tx, ty;
++
++	memset(dst, 0, A9E_NTILES);
++	for (ty = 0; ty < A9E_TY; ty++)
++		for (tx = 0; tx < A9E_TX; tx++) {
++			int dx, dy;
++
++			if (!src[ty * A9E_TX + tx])
++				continue;
++			for (dy = -1; dy <= 1; dy++)
++				for (dx = -1; dx <= 1; dx++) {
++					int nx = tx + dx, ny = ty + dy;
++
++					if (nx >= 0 && nx < A9E_TX && ny >= 0 && ny < A9E_TY)
++						dst[ny * A9E_TX + nx] = 1;
++				}
++		}
++}
++
++static void tile_px(int t, int *x1, int *y1, int *x2, int *y2)
++{
++	int tx = t % A9E_TX, ty = t / A9E_TX;
++
++	*x1 = tx * A9E_TILE;
++	*y1 = ty * A9E_TILE;
++	*x2 = *x1 + A9E_TILE < A9T_W ? *x1 + A9E_TILE : A9T_W;
++	*y2 = *y1 + A9E_TILE < A9T_H ? *y1 + A9E_TILE : A9T_H;
++}
++
++/* diff old vs nlv over a rect: marks U, grows the row-union bounding box */
++static void diff_rect(const struct a9e_engine *e, int x1, int y1, int x2, int y2, uint8_t *U,
++		      struct a9e_rect *bb)
++{
++	int x, y;
++
++	for (y = y1; y < y2; y++) {
++		const uint8_t *o = e->old + (size_t)y * A9T_W, *n = e->nlv + (size_t)y * A9T_W;
++		int first = A9T_W, last = -1;
++
++		for (x = x1; x < x2; x++)
++			if (o[x] != n[x]) {
++				if (x < first) first = x;
++				last = x;
++				U[(y >> 5) * A9E_TX + (x >> 5)] = 1;
++			}
++		if (last >= 0) {
++			struct a9e_rect row = { first, y, last + 1, y + 1 };
++
++			a9e_rect_union(bb, &row);
++		}
++	}
++}
++
++/* Incremental diffusion over the damaged tiles. Marks U / grows bb for every pixel whose level
++ * changed (nlv == old before: J), returns the number of pixels recomputed. */
++static uint32_t ed_inc(struct a9e_engine *e, const uint8_t *tm, uint8_t *U, struct a9e_rect *bb,
++		       int *capped)
++{
++	const uint8_t *g = e->grey, *lut = e->st.g2;
++	uint8_t *cp = (uint8_t *)e->work->row[2], *cc = (uint8_t *)e->work->row[3], *tmp;
++	uint32_t n = 0, cap = e->inc_cap ? e->inc_cap : A9E_INC_CAP;
++	int tyf = -1, tyl = -1, ty, tx, y, ylast, cp_any = 0, cp_min = A9T_W, cp_max = -1;
++
++	for (ty = 0; ty < A9E_TY; ty++)
++		for (tx = 0; tx < A9E_TX; tx++)
++			if (tm[ty * A9E_TX + tx]) {
++				if (tyf < 0) tyf = ty;
++				tyl = ty;
++			}
++	if (tyf < 0)
++		return 0;
++	ylast = (tyl + 1) * A9E_TILE - 1;
++	if (ylast > A9T_H - 1)
++		ylast = A9T_H - 1;
++	memset(cp, 0, A9T_W);
++	for (y = tyf * A9E_TILE; y < A9T_H; y++) {
++		int f = (y & 1) ? -1 : 1, fp = ((y - 1) & 1) ? -1 : 1;
++		int lo = A9T_W, hi = -1, x, prev = 0, cc_any = 0, cc_min = A9T_W, cc_max = -1;
++		const int16_t *ep = y ? e->ee + (size_t)(y - 1) * A9T_W : NULL;
++		int16_t *er = e->ee + (size_t)y * A9T_W;
++		uint8_t *lv = e->nlv + (size_t)y * A9T_W;
++		const uint8_t *trow = tm + (size_t)(y >> 5) * A9E_TX;
++
++		if (y > ylast && !cp_any)
++			break;
++		if (n > cap) {
++			/* the error does not die out: run the rest plainly (same result) */
++			*capped = 1;
++			ed_plain_from(e, y);
++			diff_rect(e, 0, y, A9T_W, A9T_H, U, bb);
++			return n;
++		}
++		if (y <= ylast) {
++			int txmin = -1, txmax = -1;
++
++			for (tx = 0; tx < A9E_TX; tx++)
++				if (trow[tx]) {
++					if (txmin < 0) txmin = tx;
++					txmax = tx;
++				}
++			if (txmin >= 0) {
++				lo = txmin * A9E_TILE;
++				hi = (txmax + 1) * A9E_TILE - 1;
++				if (hi > A9T_W - 1)
++					hi = A9T_W - 1;
++			}
++		}
++		if (cp_any) {
++			int l2 = cp_min > 0 ? cp_min - 1 : 0, h2 = cp_max < A9T_W - 1 ? cp_max + 1 : A9T_W - 1;
++
++			if (l2 < lo) lo = l2;
++			if (h2 > hi) hi = h2;
++		}
++		if (hi >= 0) {
++			memset(cc, 0, A9T_W);
++			for (x = f > 0 ? lo : hi; x >= 0 && x < A9T_W; x += f) {
++				int inh = x >= lo && x <= hi, cand = prev, changed = 0;
++
++				if (!inh && !prev)
++					break;
++				if (!cand && inh) {
++					cand = trow[x >> 5] != 0;
++					if (!cand && cp_any) {
++						int xb = x - fp, xc = x + fp;
++
++						cand = cp[x] ||
++						       (xb >= 0 && xb < A9T_W && cp[xb] && !(sidx(y - 1, xb) & 1)) ||
++						       (xc >= 0 && xc < A9T_W && cp[xc] && (sidx(y - 1, xc) & 1));
++					}
++				}
++				if (cand) {
++					int32_t p = lut[g[(size_t)y * A9T_W + x]], e2;
++					uint8_t l2;
++
++					if (sidx(y, x) > 0)
++						p += asr(5 * (int32_t)er[x - f], 4);
++					if (y > 0)
++						p += above(ep, y, x);
++					e2 = p > 127 ? p - 255 : p;
++					l2 = p > 127 ? 15 : 0;
++					n++;
++					if (e2 != er[x] || l2 != lv[x]) {
++						changed = 1;
++						if (l2 != lv[x]) {
++							struct a9e_rect px = { x, y, x + 1, y + 1 };
++
++							U[(y >> 5) * A9E_TX + (x >> 5)] = 1;
++							a9e_rect_union(bb, &px);
++						}
++						er[x] = (int16_t)e2;
++						lv[x] = l2;
++						cc[x] = 1;
++						cc_any = 1;
++						if (x < cc_min) cc_min = x;
++						if (x > cc_max) cc_max = x;
++					}
++				}
++				prev = changed;
++			}
++		} else {
++			memset(cc, 0, A9T_W);
++		}
++		tmp = cp; cp = cc; cc = tmp;
++		cp_any = cc_any; cp_min = cc_min; cp_max = cc_max;
++	}
++	return n;
++}
++
++int a9d_prepare(struct a9e_engine *e, int mask)
++{
++	const uint8_t *tm = e->dmg;
++	uint8_t *U = e->tU, *Q = e->tQ;
++	struct a9e_cond_sig *sg = &e->sgn;
++	struct a9e_rect td = { 0, 0, 0, 0 };
++	int kind, t, rows = 0, ntiles = 0;
++	size_t i;
++
++	e->dmg = NULL;
++	kind = cond_kind(e->mode);
++	sig_make(e, sg);
++	if (!tm || !e->inc_valid || !e->have_pre || e->clear || e->req.count || e->req.kind ||
++	    kind == K_FULL_ONLY || (kind == K_ERRDIFF && (!e->ee || !e->ee_valid)) ||
++	    memcmp(sg, &e->sig, sizeof(*sg)))
++		return 0;
++
++	for (t = 0; t < A9E_NTILES; t++)
++		ntiles += tm[t] != 0;
++	if (kind == K_ERRDIFF ? (uint32_t)ntiles * A9E_TILE * A9E_TILE > A9E_INC_GATE_PX :
++				ntiles * 5 > A9E_NTILES * 3)
++		return 0;	/* too much damage for the incremental path to pay: reference pass */
++	ntiles = 0;
++	memset(U, 0, A9E_NTILES);
++	if (kind == K_ERRDIFF) {
++		if (a9e_tiles_any(tm)) {
++			int capped = 0;
++
++			rows = (int)ed_inc(e, tm, U, &td, &capped);
++			e->inc_capped += (uint64_t)capped;
++			for (t = 0; t < A9E_NTILES; t++)
++				ntiles += tm[t] != 0;
++		}
++	} else {
++		for (t = 0; t < A9E_NTILES; t++) {
++			int x1, y1, x2, y2;
++
++			if (!tm[t])
++				continue;
++			tile_px(t, &x1, &y1, &x2, &y2);
++			cond_rect(e, kind, x1, y1, x2, y2);
++			diff_rect(e, x1, y1, x2, y2, U, &td);
++			ntiles++;
++		}
++	}
++
++	e->rect = td;
++	e->td_empty = a9e_rect_empty(&td);
++	e->unchanged = e->have_pre && e->flag_6c7 &&
++		(e->pre_mode == (e->mode & ~0x100u)) &&
++		!e->req.count && !e->req.kind && !e->clear &&
++		a9e_rect_empty(&e->rect);
++	e->mask = mask && !e->req.count && !e->clear;
++
++	/* pairs: stale tiles of the previous prepare plus the neighbourhood of the new changes */
++	dilate(Q, U);
++	for (t = 0; t < A9E_NTILES; t++) {
++		int x1, y1, x2, y2, x, y;
++
++		if (!(Q[t] | e->pk[t]))
++			continue;
++		tile_px(t, &x1, &y1, &x2, &y2);
++		for (y = y1; y < y2; y++) {
++			size_t o = (size_t)y * A9T_W;
++
++			for (x = x1; x < x2; x++)
++				e->pairs[o + x] = (uint16_t)(e->old[o + x] << 4 | e->nlv[o + x]);
++		}
++	}
++	if ((e->mode & 0xff) == 3 && !e->clear) {
++		/* the clear sentinel, as a9t_pack(); a sentinel source pixel changed, so lies in U */
++#define STEADY(j) (e->old[j] == 15 && e->nlv[j] == 15)
++		for (t = 0; t < A9E_NTILES; t++) {
++			int x1, y1, x2, y2, x, y;
++
++			if (!U[t])
++				continue;
++			tile_px(t, &x1, &y1, &x2, &y2);
++			for (y = y1; y < y2; y++)
++				for (x = x1; x < x2; x++) {
++					i = (size_t)y * A9T_W + (size_t)x;
++					if (e->old[i] == 15 || e->nlv[i] != 15)
++						continue;
++					if (x > 0 && STEADY(i - 1))
++						e->pairs[i - 1] = 256;
++					else if (x < A9T_W - 1 && STEADY(i + 1))
++						e->pairs[i + 1] = 256;
++					else if (y > 0 && STEADY(i - A9T_W))
++						e->pairs[i - A9T_W] = 256;
++					else if (y < A9T_H - 1 && STEADY(i + A9T_W))
++						e->pairs[i + A9T_W] = 256;
++				}
++		}
++#undef STEADY
++		for (t = 0; t < A9E_NTILES; t++) {
++			int x1, y1, x2, y2, x, y;
++
++			if (!Q[t])
++				continue;
++			tile_px(t, &x1, &y1, &x2, &y2);
++			for (y = y1; y < y2; y++)
++				for (x = x1; x < x2; x++)
++					if (e->pairs[(size_t)y * A9T_W + (size_t)x] == 256) {
++						struct a9e_rect px = { x, y, x + 1, y + 1 };
++
++						a9e_rect_union(&e->rect, &px);
++					}
++		}
++	}
++	memcpy(e->pk, Q, A9E_NTILES);
++	e->type = (uint32_t)a9t_final_type(e->mode, e->clear);
++
++	e->inc_prep_ok = 1;
++	e->inc_valid = e->td_empty;	/* an update that proceeds restores it in a9e_end() */
++	e->inc_prepares++;
++	e->inc_tiles += (uint64_t)ntiles;
++	e->inc_rows += (uint64_t)rows;
++	e->last_inc = 1;
++	e->last_tiles = (uint32_t)ntiles;
++	e->last_rows = (uint32_t)rows;
++	return 1;
++}
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index 53e0aaeac..32a78a259 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -99,6 +99,10 @@ static bool clear_shadow = true;
+ module_param(clear_shadow, bool, 0444);
+ MODULE_PARM_DESC(clear_shadow, "Initial Clear UI shadow curve (near-black text -> level 0); 0 = stock-compatible Clear bytes. Runtime: eink/clear_shadow");
+ 
++static bool damage_prep;
++module_param(damage_prep, bool, 0644);
++MODULE_PARM_DESC(damage_prep, "Damage-limited prepare: condition, diff and pack only the tiles whose grey changed (bit-identical engine state, tests/damage-equiv). 0 = the reference full pass (default). Runtime");
++
+ static bool convert_bounce = true;
+ module_param(convert_bounce, bool, 0644);
+ MODULE_PARM_DESC(convert_bounce, "Convert the plane through a cached bounce band read in storage order (same output as the direct per-pixel path; the source is write-combined). 0 = direct path, for A/B. Runtime");
+@@ -354,9 +358,18 @@ static void a9_plane_atomic_update(struct drm_plane *plane, struct drm_atomic_co
+ 		}
+ 		/* Called under shadow_lock, which also serializes convert_scratch.
+ 		 * No scratch (allocation failed at probe) or the param off: direct path. */
+-		a9e_fb_to_grey_bounce(a9->shadow, src, fb->pitches[0], fmt,
+-				      clip.x1 - sx, clip.y1 - sy, clip.x2 - sx, clip.y2 - sy, &changed,
+-				      READ_ONCE(convert_bounce) ? a9->convert_scratch : NULL);
++		if (READ_ONCE(damage_prep))
++			a9e_fb_to_grey_tiles(a9->shadow, src, fb->pitches[0], fmt,
++					     clip.x1 - sx, clip.y1 - sy, clip.x2 - sx, clip.y2 - sy,
++					     &changed, a9->dirty_tm,
++					     READ_ONCE(convert_bounce) ? a9->convert_scratch : NULL);
++		else {
++			/* changes made while untracked: the next job falls back to the full pass */
++			a9->tm_lost = true;
++			a9e_fb_to_grey_bounce(a9->shadow, src, fb->pitches[0], fmt,
++					      clip.x1 - sx, clip.y1 - sy, clip.x2 - sx, clip.y2 - sy, &changed,
++					      READ_ONCE(convert_bounce) ? a9->convert_scratch : NULL);
++		}
+ 	}
+ 	if (measure)
+ 		ns[2] = ktime_get_ns() - mark;
+@@ -1020,8 +1033,31 @@ static ssize_t input_stats_show(struct device *kdev, struct device_attribute *at
+ }
+ static DEVICE_ATTR_RO(input_stats);
+ 
++/* Damage-limited prepare counters: one line, separate from status (which is unchanged). */
++static ssize_t damage_stats_show(struct device *kdev, struct device_attribute *attr, char *buf)
++{
++	struct a9_eink *a9 = kdev_to_a9(kdev);
++	u64 inc, full, tiles, rows, capped;
++	u32 last_inc, lt, lr;
++
++	mutex_lock(&a9->eng_lock);
++	inc = a9->e.inc_prepares;
++	full = a9->e.full_prepares;
++	capped = a9->e.inc_capped;
++	tiles = a9->e.inc_tiles;
++	rows = a9->e.inc_rows;
++	last_inc = a9->e.last_inc;
++	lt = a9->e.last_tiles;
++	lr = a9->e.last_rows;
++	mutex_unlock(&a9->eng_lock);
++	return sysfs_emit(buf, "enabled %d ee %d inc %llu full %llu capped %llu tiles %llu px %llu last_inc %u last_tiles %u last_px %u\n",
++			  READ_ONCE(damage_prep), a9->e.ee != NULL, inc, full, capped, tiles, rows, last_inc, lt, lr);
++}
++static DEVICE_ATTR_RO(damage_stats);
++
+ static struct attribute *a9_eink_attrs[] = {
+ 	&dev_attr_input_stats.attr,
++	&dev_attr_damage_stats.attr,
+ 	&dev_attr_mode.attr,
+ 	&dev_attr_black_threshold.attr,
+ 	&dev_attr_white_threshold.attr,
+@@ -1632,6 +1668,8 @@ struct a9_job {
+ 	int clear, mask;
+ 	bool dry;
+ 	struct a9e_rect rect;
++	bool tm_ok;			/* tm lists every grey change since the previous job */
++	u8 tm[A9E_NTILES];
+ };
+ 
+ static int a9_run_frames(struct a9_eink *a9, bool dry, struct sha256_ctx *sc)
+@@ -1840,6 +1878,7 @@ static void a9_unprepare(struct a9_eink *a9, bool dry)
+ {
+ 	mutex_lock(&a9->eng_lock);
+ 	memcpy(a9->e.old, dry ? a9->dry_save_old : a9->prep_save_old, A9T_N);
++	a9e_inc_invalidate(&a9->e);	/* old no longer equals nlv */
+ 	mutex_unlock(&a9->eng_lock);
+ }
+ 
+@@ -1930,6 +1969,8 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 		/* the levels the update starts from (trace / E5a levels_before) */
+ 		if (hash)
+ 			memcpy(a9->trace_old, a9->e.old, A9T_N);
++		a9->e.inc_enable = READ_ONCE(damage_prep) && a9->e.ee;
++		a9->e.dmg = job->tm_ok ? job->tm : NULL;
+ 		steps = a9e_prepare(&a9->e, job->mode, job->clear, &job->rect, job->mask);
+ 		prepared = true;
+ 		a9->last.prep_us = (u32)ktime_us_delta(ktime_get(), p0);
+@@ -2039,6 +2080,7 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 			a9->last.frames = 0;
+ 			a9->last.aborted = 1;
+ 			memcpy(a9->e.old, a9->prep_save_old, A9T_N);	/* glass untouched */
++			a9e_inc_invalidate(&a9->e);
+ 			mutex_unlock(&a9->eng_lock);
+ 			dev_err(a9->dev, "bin %d outside [%d,%d]: update refused\n", bin, lo, hi);
+ 			a9->aborts++;
+@@ -2113,6 +2155,7 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 		memcpy(a9->e.old, a9->dry_save_old, A9T_N);
+ 		a9->e.pre_mode = a9->dry_save_pre;
+ 		a9->e.have_pre = a9->dry_save_have_pre;
++		a9e_inc_invalidate(&a9->e);
+ 	}
+ 	mutex_unlock(&a9->eng_lock);
+ 	return;
+@@ -2146,6 +2189,7 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 		memcpy(a9->e.old, a9->dry_save_old, A9T_N);
+ 		a9->e.pre_mode = a9->dry_save_pre;
+ 		a9->e.have_pre = a9->dry_save_have_pre;
++		a9e_inc_invalidate(&a9->e);
+ 	}
+ 	mutex_unlock(&a9->eng_lock);
+ 	if (!dry)
+@@ -2224,6 +2268,15 @@ static bool a9_take_job(struct a9_eink *a9, struct a9_job *job)
+ 		a9->clear_req = false;
+ 		a9->manual_clear_req = false;
+ 		a9->dirty = (struct a9e_rect){ 0, 0, 0, 0 };
++		/* Damage tiles: valid only if every convert since the previous job was tracked
++		 * and neither this nor the previous job used the test pattern as its grey. */
++		job->tm_ok = READ_ONCE(damage_prep) && !a9->tm_lost && !a9->test_pattern &&
++			     !a9->prev_pattern;
++		if (job->tm_ok)
++			memcpy(job->tm, a9->dirty_tm, sizeof(job->tm));
++		memset(a9->dirty_tm, 0, sizeof(a9->dirty_tm));
++		a9->tm_lost = false;
++		a9->prev_pattern = a9->test_pattern;
+ 		if (a9->test_pattern)
+ 			a9e_pattern_contrast(a9->e.grey);
+ 		else
+@@ -2342,8 +2395,16 @@ static int a9_thread(void *data)
+ 				a9_power_off(a9);	/* bounded continuous HV time */
+ 			if (a9_take_job(a9, &job)) {
+ 				u64 frames0 = a9->tx.frames;
++				u64 preps0 = a9->e.full_prepares + a9->e.inc_prepares;
+ 
+ 				a9_update(a9, &job);
++				if (a9->e.full_prepares + a9->e.inc_prepares == preps0) {
++					/* the job was dropped before its prepare: its damage tiles are
++					 * gone, the damage-limited state no longer describes the grey */
++					mutex_lock(&a9->eng_lock);
++					a9e_inc_invalidate(&a9->e);
++					mutex_unlock(&a9->eng_lock);
++				}
+ 				/* Only actual real output renews the idle hold. */
+ 				if (!job.dry && a9->tx.on && a9->tx.frames != frames0) {
+ 					idle_since = ktime_get();
+@@ -2615,6 +2676,8 @@ static int a9_probe(struct platform_device *pdev)
+ 	for (k = 0; k < 5; k++)
+ 		a9->e.arr[k] = a9_vzalloc(dev, (size_t)A9T_N * 2);
+ 	a9->e.work = a9_vzalloc(dev, sizeof(*a9->e.work));
++	/* optional: without the stored diffusion errors only the per-pixel conditioning kinds are damage-limited */
++	a9->e.ee = a9_vzalloc(dev, A9E_EE_BYTES);
+ 	a9->e.cache = a9_vzalloc(dev, A9T_FRAME_BYTES);
+ 	a9->frame = a9_vzalloc(dev, A9T_FRAME_BYTES);	/* bytes 1..3 := template at load */
+ 	a9->ct = a9_vzalloc(dev, A9T_FRAME_BYTES);
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_engine.c b/drivers/gpu/drm/a9_eink/a9_eink_engine.c
+index ff11f3a8d..1c1feb1f6 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_engine.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_engine.c
+@@ -130,6 +130,9 @@ void a9e_setup(struct a9e_engine *e)
+ 	e->pre_mode = 0;
+ 	e->nframes = 0;
+ 	e->init = 0;
++	e->inc_valid = e->inc_prep_ok = e->ee_valid = 0;
++	e->dmg = NULL;
++	memset(e->pk, 1, sizeof(e->pk));
+ }
+ 
+ struct a9e_rect a9e_rect_from_fb(int c1, int r1, int c2, int r2)
+@@ -303,6 +306,7 @@ static struct a9e_rect target_damage(const uint8_t *old, const uint8_t *target)
+ /* ---- update ------------------------------------------------------------------ */
+ void a9e_begin_init(struct a9e_engine *e, int bin)
+ {
++	e->inc_valid = 0;
+ 	e->init = 1;
+ 	e->unchanged = 0;
+ 	e->bin = bin;
+@@ -313,6 +317,7 @@ void a9e_begin_init(struct a9e_engine *e, int bin)
+ void a9e_assume_white(struct a9e_engine *e)
+ {
+ 	memset(e->old, 15, A9T_N);	/* what a9e_end() of the init flash sets */
++	e->inc_valid = 0;
+ }
+ 
+ void a9e_init_end(struct a9e_engine *e)
+@@ -326,6 +331,8 @@ int a9e_prepare(struct a9e_engine *e, uint32_t mode, int clear, const struct a9e
+ 	uint32_t pre = e->have_pre ? e->pre_mode : mode;
+ 	size_t y;
+ 
++	e->inc_prep_ok = 0;
++	e->last_inc = 0;
+ 	e->init = 0;
+ 	e->clear = clear ? 1 : 0;
+ 	e->rect = *rect;
+@@ -333,8 +340,15 @@ int a9e_prepare(struct a9e_engine *e, uint32_t mode, int clear, const struct a9e
+ 	memset(&e->req, 0, sizeof(e->req));
+ 	e->mode = a9t_request_build(&e->req, pre, mode, e->flag_6c7, &e->clear, &e->clear_reset);
+ 	/* Condition before request arrays can replace the committed old levels. */
+-	a9t_condition(&e->st, e->grey, e->mode, e->nlv, e->work);
++	if (e->inc_enable && a9d_prepare(e, mask))
++		return (int)e->req.count;	/* damage-limited: same state as the full pass below */
++	if (e->inc_enable)
++		a9d_condition_full(e);
++	else
++		a9t_condition(&e->st, e->grey, e->mode, e->nlv, e->work);
++	e->dmg = NULL;
+ 	e->rect = target_damage(e->old, e->nlv);
++	e->td_empty = a9e_rect_empty(&e->rect);
+ 	/* have_pre alone is not a recovery authorization: the caller also excludes
+ 	 * unknown/aborted history, pending init, dry runs and explicit recovery.
+ 	 * Compare the full mode except bit 8, which end() normalizes as before.
+@@ -369,6 +383,9 @@ int a9e_prepare(struct a9e_engine *e, uint32_t mode, int clear, const struct a9e
+ 		}
+ 	}
+ 	e->type = (uint32_t)a9t_final_type(e->mode, e->clear);
++	if (e->inc_enable)
++		a9d_after_full(e);
++	e->full_prepares++;
+ 	return (int)e->req.count;
+ }
+ 
+@@ -434,15 +451,18 @@ void a9e_end(struct a9e_engine *e)
+ 	if (e->init) {
+ 		e->init = 0;
+ 		memset(e->old, 15, A9T_N);	/* glass taken as white after the flash (INFERRED) */
++		e->inc_valid = 0;
+ 		return;
+ 	}
+ 	memcpy(e->old, e->nlv, A9T_N);
+ 	e->pre_mode = e->mode & ~0x100u;	/* the builder only looks at the low byte */
+ 	e->have_pre = 1;
++	e->inc_valid = e->inc_prep_ok;	/* old == nlv again; valid only if this prepare kept the state */
+ }
+ 
+ void a9e_abort(struct a9e_engine *e)
+ {
++	e->inc_valid = 0;
+ 	e->init = 0;
+ 	e->unchanged = 0;
+ 	e->st.counter = 0;
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_engine.h b/drivers/gpu/drm/a9_eink/a9_eink_engine.h
+index e21a16a06..16c719f19 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_engine.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink_engine.h
+@@ -70,6 +70,33 @@ struct a9e_ct_header {
+ 	uint8_t payload_sha256[32];	/* of the payload that follows */
+ };
+ 
++/*
++ * Damage-limited prepare (a9_eink_damage.c). Tiles are 32 x 32 landscape
++ * pixels, row-major: tile (tx, ty) = ty * A9E_TX + tx. A tile mask is one
++ * byte per tile, 0 = no change. Opt-in (a9e_engine.inc_enable); with it off
++ * nothing below is reached and every prepare is the reference full pass.
++ */
++#define A9E_TILE 32
++#define A9E_TX ((A9T_W + A9E_TILE - 1) / A9E_TILE)	/* 52 */
++#define A9E_TY ((A9T_H + A9E_TILE - 1) / A9E_TILE)	/* 26 */
++#define A9E_NTILES (A9E_TX * A9E_TY)			/* 1352 */
++/* serial 1-bit diffusion: the error e of every pixel, int16 (the incremental path re-derives
++ * every pixel's input from its neighbours' stored errors) */
++#define A9E_EE_BYTES ((size_t)A9T_N * sizeof(int16_t))
++/* Cost guards (host-measured: the incremental diffusion costs about 2.8x the plain pass per pixel it
++ * recomputes, and error cascades can be much larger than the damage): the incremental path is not taken
++ * when the damaged tiles alone exceed A9E_INC_GATE_PX (diffusion) or 60 % of the tiles (per-pixel kinds), and the
++ * incremental diffusion gives up, finishing the rest plainly, after A9E_INC_CAP pixels recomputed. */
++#define A9E_INC_GATE_PX ((uint32_t)(A9T_N / 10))
++#define A9E_INC_CAP ((uint32_t)(A9T_N / 8))
++
++/* What the conditioned levels depend on besides the grey buffer. */
++struct a9e_cond_sig {
++	uint32_t mode16;	/* mode word & 0xffff */
++	uint32_t clear_shadow;
++	uint8_t g2[256], g16[256], g16s[256];
++};
++
+ struct a9e_engine {
+ 	/* caller-provided buffers (assign, then a9e_setup) */
+ 	const struct a9t_tables *t;
+@@ -81,8 +108,30 @@ struct a9e_engine {
+ 	struct a9t_work *work;
+ 	uint8_t *cache;		/* A9T_FRAME_BYTES, hold-pass frame cache */
+ 
++	int16_t *ee;		/* optional A9E_EE_BYTES: per-pixel diffusion error of the run that made nlv */
++
+ 	/* knobs */
+ 	int flag_6c7;		/* engine byte this+0x6c7; 1 = no 0x100 added */
++	int inc_enable;		/* 1 = damage-limited prepare (default 0: reference full pass) */
++
++	/* damage-limited prepare state; see a9_eink_damage.c for the invariants */
++	const uint8_t *dmg;	/* tile mask of grey changes since the last prepare; consumed (cleared)
++				 * by a9e_prepare; NULL = unknown, full pass */
++	int inc_valid;		/* old == nlv everywhere and pairs/ee/pk/sig describe nlv */
++	int inc_prep_ok;	/* this prepare left that state consistent (a9e_end makes it valid) */
++	int ee_valid;		/* ee holds the errors of the run that produced nlv */
++	uint32_t inc_cap;	/* 0 = A9E_INC_CAP */
++	int td_empty;		/* target damage (before steps/clear) was empty */
++	struct a9e_cond_sig sig;	/* what nlv was conditioned with */
++	uint8_t pk[A9E_NTILES];	/* tiles whose pairs may differ from steady (old<<4|old) */
++	uint8_t tU[A9E_NTILES], tQ[A9E_NTILES];	/* a9d_prepare scratch (kept off the kernel stack) */
++	struct a9e_cond_sig sgn;
++	/* statistics (read by the driver, never acted on) */
++	uint64_t inc_prepares, full_prepares;	/* prepares through each path */
++	uint64_t inc_tiles, inc_rows;		/* tiles / rows reconditioned by the incremental path */
++	uint32_t last_inc;			/* 1 = the last prepare was incremental */
++	uint32_t last_tiles, last_rows;		/* its work: tiles reconditioned / pixels recomputed by the diffusion */
++	uint64_t inc_capped;			/* incremental diffusions that hit the cap */
+ 
+ 	/* state */
+ 	struct a9t_state st;
+@@ -162,6 +211,31 @@ void a9e_fb_to_grey_bounce(uint8_t *grey, const uint8_t *src, uint32_t pitch, en
+ 			   int c1, int r1, int c2, int r2, struct a9e_rect *changed,
+ 			   uint8_t *scratch);
+ 
++/* Same grey bytes and *changed as a9e_fb_to_grey_bounce(), and additionally
++ * tmask[tile] = 1 for every tile that contains a grey pixel that changed
++ * (exactly: a tile is marked iff one of its pixels differs from what grey held
++ * before). tmask may be NULL (then it is the bounce function). scratch may be
++ * NULL (direct per-pixel path). Marks are only ever set, never cleared. */
++void a9e_fb_to_grey_tiles(uint8_t *grey, const uint8_t *src, uint32_t pitch, enum a9e_fmt fmt,
++			  int c1, int r1, int c2, int r2, struct a9e_rect *changed,
++			  uint8_t *tmask, uint8_t *scratch);
++
++/* Tile helpers. */
++int a9e_tiles_any(const uint8_t *tm);
++void a9e_tiles_or(uint8_t *dst, const uint8_t *src);
++/* Bounding rect (landscape) of the marked tiles, empty if none. */
++struct a9e_rect a9e_tiles_bbox(const uint8_t *tm);
++
++/* The damage-limited state no longer describes the glass/levels (the caller
++ * changed old, restored it, dropped a job whose damage was consumed, ...): the
++ * next prepare is the reference full pass. Always safe to call. */
++void a9e_inc_invalidate(struct a9e_engine *e);
++
++/* Internal hooks of a9e_prepare (a9_eink_damage.c), reached only with inc_enable. */
++int a9d_prepare(struct a9e_engine *e, int mask);	/* 1 = prepared incrementally */
++void a9d_condition_full(struct a9e_engine *e);		/* conditioning, writes the carry checkpoints */
++void a9d_after_full(struct a9e_engine *e);		/* record sig/pk/validity after a full pass */
++
+ /* Start the one-time init flash at bin. Frames via a9e_frame(). */
+ void a9e_begin_init(struct a9e_engine *e, int bin);
+ 

@@ -1,0 +1,744 @@
+From 5ff946df22a4aad9a8c29ed83e2b2e3c3f95df4f Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 16:03:42 -0700
+Subject: [PATCH] drm/a9_eink: render-ahead ring: a producer renders the
+ update, the worker only composes and commits
+
+Mainline Android runs 5-7 (8 CPUs, SCHED_FIFO worker): drive frames were
+repeated (late_drive 11-12, max_gap_drive 23.7-25.5 ms) and in run 7 one was
+held past the 35.3 ms frame-progress deadline (stall_fault, HV dropped). The
+worker rendered every frame between its own blocking commits.
+
+- New producer kthread "a9_eink_r" (nice -10) renders a REAL update's frames
+  (init flash, if pending, then the update) into a ring of 32 slots, each
+  byte 0 of the data region only (rows 5..828, words 0..411: 339,488 B;
+  10.9 MB in all). a9r_pack refuses a frame with drive data outside the
+  data region (never produced by the core).
+- The worker (consumer) waits until the ring is full or the update is
+  completely rendered, keeping the panel on idle (template) refreshes at
+  the frame rate meanwhile (bounded, 2 s), then per frame does only the
+  byte-0 compose into the template buffer (a9x_show_data: equal to
+  a9x_compose of the full frame) and the commit.
+- Underrun (ring empty before the producer is done): idle frame, update
+  aborted (forced clear next), no fault latch: the frame-progress interlock
+  still covers any drive frame held too long. enable=0, transport errors,
+  prefill timeout: idle frame, producer stopped, abort. The worker holds
+  eng_lock for the update and lends the engine to the producer until
+  a9r_stop() returns.
+- Dry runs (E5a) and zero_test keep the synchronous path; trace hashing
+  moves to the producer (same frames).
+- Pacing diagnosis in status line 4: commit_max_us / commit_slow (the DRM
+  commit call itself > 1.5 periods), compose_max_us, render_max_us,
+  prefill_us, ring_min, underruns: shows whether the msm commit is what
+  takes more than a period.
+Power path unchanged: same transport power-on/off, template, commit path,
+interlock (armed/disarmed by the same a9x_commit_locked), caps and bins.
+Host harness cases (17)-(22).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/a9_eink/Makefile            |   2 +-
+ drivers/gpu/drm/a9_eink/a9_eink.h           |  45 ++++
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c       | 185 ++++++++++++++--
+ drivers/gpu/drm/a9_eink/a9_eink_ring.c      | 222 ++++++++++++++++++++
+ drivers/gpu/drm/a9_eink/a9_eink_transport.c |  84 ++++++++
+ 5 files changed, 521 insertions(+), 17 deletions(-)
+ create mode 100644 drivers/gpu/drm/a9_eink/a9_eink_ring.c
+
+diff --git a/drivers/gpu/drm/a9_eink/Makefile b/drivers/gpu/drm/a9_eink/Makefile
+index 31f1256f9..42951b9b0 100644
+--- a/drivers/gpu/drm/a9_eink/Makefile
++++ b/drivers/gpu/drm/a9_eink/Makefile
+@@ -2,5 +2,5 @@
+ # a9tcon.c / a9tcon.h are copied unchanged from scripts/mainline/tcon (A9 repo);
+ # kcompat/ maps their <stdint.h>/<stddef.h>/<string.h> to kernel headers.
+ ccflags-y += -I$(src) -I$(src)/kcompat
+-a9_eink-y := a9_eink_drv.o a9_eink_transport.o a9_eink_guard.o a9_eink_engine.o a9tcon.o
++a9_eink-y := a9_eink_drv.o a9_eink_transport.o a9_eink_guard.o a9_eink_ring.o a9_eink_engine.o a9tcon.o
+ obj-$(CONFIG_DRM_A9_EINK) += a9_eink.o
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index f5dbd1083..150ee7a5d 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -8,6 +8,7 @@
+ #include <linux/ktime.h>
+ #include <linux/mutex.h>
+ #include <linux/notifier.h>
++#include <linux/spinlock.h>
+ #include <linux/wait.h>
+ 
+ #include <drm/drm_client.h>
+@@ -20,6 +21,7 @@
+ #include "a9_eink_engine.h"
+ 
+ struct iio_channel;
++struct sha256_ctx;
+ struct regulator;
+ struct task_struct;
+ struct dentry;
+@@ -75,8 +77,38 @@ struct a9x_transport {
+ 	 * the commit's own execution if the incoming frame drives (review 10) */
+ 	u64 late_drive, vbl_skips_drive;
+ 	u32 max_gap_drive_us;
++	/* pacing diagnosis (0033): the commit call itself, and the compose */
++	u32 commit_max_us, compose_max_us;
++	u64 commit_slow;		/* commit calls > 1.5 periods */
+ };
+ 
++/*
++ * Render-ahead ring (a9_eink_ring.c, patch 0033): slots hold byte 0 of the
++ * data region (rows 5..828, words 0..411) of one frame each.
++ */
++#define A9R_SLOTS 32
++#define A9R_DATA ((size_t)A9T_H * A9T_DATA_WORDS)	/* 339,488 bytes */
++struct a9_ring {
++	u8 *mem;			/* A9R_SLOTS * A9R_DATA */
++	bool null[A9R_SLOTS];
++	spinlock_t lock;
++	wait_queue_head_t wq;
++	unsigned int head, tail;	/* produced / consumed (monotonic) */
++	bool running, done, stop;	/* producer in the engine; finished; asked to stop */
++	int err;
++	unsigned int fill_min;		/* lowest fill the consumer saw after prefill */
++	u64 underruns;
++};
++void a9r_init(struct a9_ring *r, u8 *mem);
++int a9r_pack(const u8 *frame, u8 *slot, bool *null);
++void a9r_reset(struct a9_ring *r);
++u8 *a9r_slot(struct a9_ring *r);
++void a9r_publish(struct a9_ring *r, bool null);
++void a9r_finish(struct a9_ring *r, int err);
++int a9r_prefill(struct a9_ring *r, struct a9x_transport *t, unsigned int timeout_ms);
++int a9r_drive(struct a9_ring *r, struct a9x_transport *t, const bool *enable);
++void a9r_stop(struct a9_ring *r);
++
+ /*
+  * Deadline of the interlock in frame periods. Measured on boot 11: all-zero
+  * commits ran with a maximum gap of 13.2 ms (period 11.76 ms); the dry run
+@@ -102,8 +134,10 @@ int a9x_attach(struct a9x_transport *t);	/* -EAGAIN: msm not there yet */
+ void a9x_detach(struct a9x_transport *t);
+ int a9x_power_on(struct a9x_transport *t);
+ int a9x_show(struct a9x_transport *t, const u8 *frame);	/* uses byte 0 of each word only */
++int a9x_show_data(struct a9x_transport *t, const u8 *data);	/* a ring slot (A9R_DATA) */
+ int a9x_power_off(struct a9x_transport *t);
+ int a9x_blank(struct a9x_transport *t);
++int a9x_idle_refresh(struct a9x_transport *t);	/* one idle (template) frame, always */
+ bool a9x_attached(struct a9x_transport *t);
+ 
+ struct a9_eink {
+@@ -150,6 +184,17 @@ struct a9_eink {
+ 	struct notifier_block pm_nb;
+ 	struct task_struct *thread;
+ 
++	/* render-ahead (0033): the producer thread renders a real update's frames */
++	struct a9_ring ring;
++	struct task_struct *rthread;
++	wait_queue_head_t rwq;
++	bool rjob;			/* a job is posted for the producer */
++	bool rjob_init;			/* it starts with the init flash */
++	int rjob_bin;
++	struct sha256_ctx *rjob_sc;	/* trace: hash of the update frames */
++	unsigned int ring_init_n;	/* frames of the init pass, incl. a blank */
++	u32 render_max_us, prefill_us;
++
+ 	/* last update, for sysfs/debugfs */
+ 	struct {
+ 		u32 mode, pre, type, frames, steps;
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index 7197589cf..f519391bb 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -561,7 +561,9 @@ static ssize_t status_show(struct device *kdev, struct device_attribute *attr, c
+ 		"updates %llu aborts %llu frames %llu late %llu vbl_skips %llu commit_fail %llu max_gap_us %u"
+ 		" late_drive %llu vbl_skips_drive %llu max_gap_drive_us %u\n"
+ 		"last mode %#x pre %#x clear %d type %u bin %d t1 %d t2 %d frames %u steps %u dry %d aborted %d"
+-		" rect %d,%d-%d,%d begin_us %u total_us %u prep_us %u\n",
++		" rect %d,%d-%d,%d begin_us %u total_us %u prep_us %u\n"
++		"pace commit_max_us %u commit_slow %llu compose_max_us %u render_max_us %u"
++		" prefill_us %u ring_min %u underruns %llu\n",
+ 		enable, a9->wf_loaded, a9x_attached(t), t->on, atomic_read(&a9x_stall_fault),
+ 		a9->ct_loaded,
+ 		a9->updates, a9->aborts, t->frames, t->late, t->vbl_skips, t->commits_failed,
+@@ -570,7 +572,8 @@ static ssize_t status_show(struct device *kdev, struct device_attribute *attr, c
+ 		a9->last.bin, a9->last.t1, a9->last.t2, a9->last.frames, a9->last.steps,
+ 		a9->last.dry, a9->last.aborted, a9->last.rect.x1, a9->last.rect.y1,
+ 		a9->last.rect.x2, a9->last.rect.y2, a9->last.begin_us, a9->last.total_us,
+-		a9->last.prep_us);
++		a9->last.prep_us, t->commit_max_us, t->commit_slow, t->compose_max_us,
++		a9->render_max_us, a9->prefill_us, a9->ring.fill_min, a9->ring.underruns);
+ }
+ static DEVICE_ATTR_RO(status);
+ 
+@@ -835,6 +838,125 @@ static int a9_run_frames(struct a9_eink *a9, bool dry, struct sha256_ctx *sc)
+ 	return 0;
+ }
+ 
++/*
++ * ---- render-ahead (patch 0033) -------------------------------------------------
++ * A real update's frames are rendered by the producer thread into the ring
++ * (a9_eink_ring.c) while the worker sends them. The worker holds eng_lock for
++ * the whole update and LENDS the engine to the producer: between posting the
++ * job and a9r_stop() returning only the producer touches a9->e, a9->frame and
++ * the hash context.
++ */
++static void a9_produce(struct a9_eink *a9)
++{
++	struct a9_ring *r = &a9->ring;
++	bool init = a9->rjob_init, null = true;
++	int bin = a9->rjob_bin, err = 0, more;
++	u8 *slot;
++
++	if (init)
++		a9e_begin_init(&a9->e, bin);
++	else
++		a9e_start(&a9->e, bin);
++	for (;;) {
++		ktime_t r0;
++		u32 us;
++
++		slot = a9r_slot(r);
++		if (!slot) {
++			err = -ECANCELED;
++			break;
++		}
++		r0 = ktime_get();
++		more = a9e_frame(&a9->e, a9->frame);
++		if (!init && a9->rjob_sc)
++			sha256_update(a9->rjob_sc, a9->frame, A9T_FRAME_BYTES);
++		err = a9r_pack(a9->frame, slot, &null);
++		us = (u32)ktime_us_delta(ktime_get(), r0);
++		if (us > a9->render_max_us)
++			a9->render_max_us = us;
++		if (err) {
++			dev_err(a9->dev, "frame with drive data outside the data region: update aborted\n");
++			break;
++		}
++		a9r_publish(r, null);
++		if (more)
++			continue;
++		if (!null) {
++			/* never hold a driving frame, whatever the table's last column says */
++			dev_warn_once(a9->dev, "waveform pass ended on a driving frame: blanking\n");
++			slot = a9r_slot(r);
++			if (!slot) {
++				err = -ECANCELED;
++				break;
++			}
++			memset(slot, 0, A9R_DATA);
++			a9r_publish(r, true);
++		}
++		if (init) {
++			a9e_init_end(&a9->e);
++			a9->ring_init_n = r->head;	/* only the producer moves head */
++			init = false;
++			a9e_start(&a9->e, bin);
++			continue;
++		}
++		break;
++	}
++	a9r_finish(r, err);
++}
++
++static int a9_render_thread(void *data)
++{
++	struct a9_eink *a9 = data;
++
++	set_user_nice(current, -10);
++	while (!kthread_should_stop()) {
++		wait_event_interruptible(a9->rwq, READ_ONCE(a9->rjob) || kthread_should_stop());
++		if (!READ_ONCE(a9->rjob))
++			continue;
++		WRITE_ONCE(a9->rjob, false);
++		a9_produce(a9);
++	}
++	return 0;
++}
++
++/*
++ * Real update with the pipeline up (idle frame on the glass): post the job,
++ * wait until the ring is full (or the update completely rendered), then send.
++ * Any error: idle frame now, producer stopped; the caller aborts (forced
++ * clear next, power-down). *init_shown: every init-flash frame was sent.
++ */
++#define A9_PREFILL_MS 2000
++static int a9_run_ring(struct a9_eink *a9, bool init, int bin, struct sha256_ctx *sc,
++		       bool *init_shown)
++{
++	u64 f0 = a9->tx.frames;
++	ktime_t p0 = ktime_get();
++	int ret;
++
++	a9r_reset(&a9->ring);
++	a9->ring_init_n = 0;
++	a9->rjob_init = init;
++	a9->rjob_bin = bin;
++	a9->rjob_sc = sc;
++	smp_wmb();	/* job fields before the flag */
++	WRITE_ONCE(a9->rjob, true);
++	wake_up(&a9->rwq);
++	ret = a9r_prefill(&a9->ring, &a9->tx, A9_PREFILL_MS);
++	a9->prefill_us = (u32)ktime_us_delta(ktime_get(), p0);
++	if (ret)
++		dev_err(a9->dev, "render-ahead prefill failed (%d): update not started\n", ret);
++	else
++		ret = a9r_drive(&a9->ring, &a9->tx, &enable);
++	if (ret == -EAGAIN)
++		dev_err(a9->dev, "render-ahead underrun after %llu frames: update aborted\n",
++			a9->tx.frames - f0);
++	if (ret && a9x_blank(&a9->tx))
++		dev_err(a9->dev, "blank after a render-ahead error failed\n");
++	a9r_stop(&a9->ring);	/* the producer has left the engine */
++	*init_shown = init && a9->ring_init_n && a9->tx.frames - f0 >= a9->ring_init_n;
++	return ret;
++}
++
+ /*
+  * An update refused after its a9e_prepare() but before any frame (power-up
+  * refused, temperature, bin): the glass is untouched, so the levels go back
+@@ -1027,23 +1149,38 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 			return;
+ 		}
+ 	}
+-	if (init_white) {
+-		/* prepared on old := 15, what the flash leaves (INFERRED: glass white) */
+-		a9e_begin_init(&a9->e, bin);
+-		ret = a9_run_frames(a9, dry, NULL);
+-		a9e_init_end(&a9->e);
++	a9->last.pre = pre;
++	if (!dry) {
++		/* render-ahead: init flash (if pending) + update, in one sequence */
++		bool init_shown = false;
++
++		if (hash)
++			sha256_init(&sc);
++		a9->last.begin_us = (u32)ktime_us_delta(ktime_get(), t0);
++		ret = a9_run_ring(a9, init_white, bin, hash ? &sc : NULL, &init_shown);
++		if (init_shown)
++			*init_pending = false;
+ 		if (ret)
+ 			goto abort;
+ 		*init_pending = false;
++	} else {
++		if (init_white) {
++			/* prepared on old := 15, what the flash leaves (INFERRED: glass white) */
++			a9e_begin_init(&a9->e, bin);
++			ret = a9_run_frames(a9, dry, NULL);
++			a9e_init_end(&a9->e);
++			if (ret)
++				goto abort;
++			*init_pending = false;
++		}
++		if (hash)
++			sha256_init(&sc);
++		a9e_start(&a9->e, bin);
++		a9->last.begin_us = (u32)ktime_us_delta(ktime_get(), t0);
++		ret = a9_run_frames(a9, dry, hash ? &sc : NULL);
++		if (ret)
++			goto abort;
+ 	}
+-	if (hash)
+-		sha256_init(&sc);
+-	a9->last.pre = pre;
+-	a9e_start(&a9->e, bin);
+-	a9->last.begin_us = (u32)ktime_us_delta(ktime_get(), t0);
+-	ret = a9_run_frames(a9, dry, hash ? &sc : NULL);
+-	if (ret)
+-		goto abort;
+ 	a9e_end(&a9->e);
+ 
+ 	a9->last.mode = a9->e.mode;
+@@ -1442,12 +1579,14 @@ static int a9_probe(struct platform_device *pdev)
+ 	a9->trace_old = a9_vzalloc(dev, A9T_N);
+ 	a9->dry_save_old = a9_vzalloc(dev, A9T_N);
+ 	a9->prep_save_old = a9_vzalloc(dev, A9T_N);
++	a9r_init(&a9->ring, a9_vzalloc(dev, A9R_SLOTS * A9R_DATA));	/* ~10.9 MB */
++	init_waitqueue_head(&a9->rwq);
+ 	a9->dry_levels = a9_vzalloc(dev, A9T_N);
+ 	if (!a9->tables || !a9->shadow || !a9->e.grey || !a9->e.old || !a9->e.nlv ||
+ 	    !a9->e.pairs || !a9->e.arr[4] || !a9->e.arr[0] || !a9->e.arr[1] ||
+ 	    !a9->e.arr[2] || !a9->e.arr[3] || !a9->e.work || !a9->e.cache ||
+ 	    !a9->frame || !a9->ct || !a9->trace_old || !a9->dry_save_old || !a9->dry_levels ||
+-	    !a9->prep_save_old)
++	    !a9->prep_save_old || !a9->ring.mem)
+ 		return -ENOMEM;
+ 	memset(a9->shadow, 0xff, A9T_N);	/* white, like the levels */
+ 
+@@ -1459,16 +1598,26 @@ static int a9_probe(struct platform_device *pdev)
+ 	if (ret)
+ 		return dev_err_probe(dev, ret, "KMS init\n");
+ 
++	a9->rthread = kthread_run(a9_render_thread, a9, "a9_eink_r");
++	if (IS_ERR(a9->rthread)) {
++		ret = PTR_ERR(a9->rthread);
++		a9->rthread = NULL;
++		return ret;
++	}
+ 	a9->thread = kthread_run(a9_thread, a9, "a9_eink");
+ 	if (IS_ERR(a9->thread)) {
+ 		ret = PTR_ERR(a9->thread);
+ 		a9->thread = NULL;
++		kthread_stop(a9->rthread);
++		a9->rthread = NULL;
+ 		return ret;
+ 	}
+ 	ret = drm_dev_register(drm, 0);
+ 	if (ret) {
+ 		kthread_stop(a9->thread);
+ 		a9->thread = NULL;
++		kthread_stop(a9->rthread);
++		a9->rthread = NULL;
+ 		return ret;
+ 	}
+ 	a9->pm_nb.notifier_call = a9_pm_notify;
+@@ -1491,6 +1640,10 @@ static void a9_teardown(struct a9_eink *a9)
+ 		kthread_stop(a9->thread);	/* powers the pipeline down */
+ 		a9->thread = NULL;
+ 	}
++	if (a9->rthread) {
++		kthread_stop(a9->rthread);	/* idle: the worker always stops it */
++		a9->rthread = NULL;
++	}
+ 	a9x_detach(&a9->tx);
+ 	a9x_fini(&a9->tx);
+ }
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_ring.c b/drivers/gpu/drm/a9_eink/a9_eink_ring.c
+new file mode 100644
+index 000000000..58b21aaf6
+--- /dev/null
++++ b/drivers/gpu/drm/a9_eink/a9_eink_ring.c
+@@ -0,0 +1,222 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * a9_eink render-ahead ring (patch 0033, frame pacing on Android).
++ *
++ * Mainline Android runs 5-7: with the worker rendering each frame between
++ * its own blocking commits, drive frames were repeated (late_drive 11-12,
++ * max_gap_drive 23.7-25.5 ms) and once held past the 35.3 ms interlock
++ * deadline. Now a producer thread renders the update's frames AHEAD into
++ * this ring and the worker (the consumer) does per frame only the byte-0
++ * compose into the template buffer and the commit.
++ *
++ * Each slot holds byte 0 of the data region only (rows 5..828, words
++ * 0..411: 339,488 bytes): outside it byte 0 is 0 in every frame the core
++ * produces (a9r_pack refuses a frame where it is not), and bytes 1..3 come
++ * from the validated control template at compose time (a9x_show_data), so a
++ * composed buffer equals what a9x_compose made of the full frame.
++ *
++ * Rules, all enforced here:
++ *  - the waveform starts only once the ring is full (or the whole update is
++ *    rendered): a9r_prefill; until then the panel scans the idle frame;
++ *  - the consumer never waits for a frame with a drive frame on the glass:
++ *    an empty ring before the producer is done is an UNDERRUN (-EAGAIN); the
++ *    caller blanks (idle frame) and aborts the update (forced clear next).
++ *    No fault is latched for it: the frame-progress interlock independently
++ *    covers any drive frame held too long;
++ *  - stop (abort, enable=0, transport lost) wakes the producer, which ends
++ *    after at most the frame it is rendering.
++ * Locking: r->lock (spinlock) protects head/tail/flags; the producer writes
++ * a slot only while it is free (head - tail < A9R_SLOTS) and the consumer
++ * reads it only while it is filled; publishing/consuming moves the index
++ * under the lock. Separate so tests/mainline-a9eink-stall compiles it.
++ */
++#include <linux/jiffies.h>
++#include <linux/spinlock.h>
++#include <linux/string.h>
++#include <linux/wait.h>
++
++#include "a9_eink.h"
++
++void a9r_init(struct a9_ring *r, u8 *mem)
++{
++	r->mem = mem;
++	spin_lock_init(&r->lock);
++	init_waitqueue_head(&r->wq);
++	r->head = r->tail = 0;
++	r->running = false;
++}
++
++/* frame (A9T_FRAME_BYTES) -> slot: byte 0 of the data region; *null = no drive */
++int a9r_pack(const u8 *frame, u8 *slot, bool *null)
++{
++	u8 acc = 0, out = 0;
++	int r, w;
++
++	for (r = 0; r < A9T_TH; r++) {
++		const u8 *f = frame + (size_t)r * A9T_TW * 4;
++
++		if (r < A9T_HEAD_ROWS) {
++			for (w = 0; w < A9T_TW; w++)
++				out |= f[w * 4];
++			continue;
++		}
++		for (w = 0; w < A9T_DATA_WORDS; w++) {
++			u8 v = f[w * 4];
++
++			acc |= v;
++			*slot++ = v;
++		}
++		for (; w < A9T_TW; w++)
++			out |= f[w * 4];
++	}
++	*null = !acc;
++	return out ? -EINVAL : 0;	/* drive data outside the data region: refuse */
++}
++
++/* consumer: a fresh ring for one update (the producer is idle) */
++void a9r_reset(struct a9_ring *r)
++{
++	spin_lock(&r->lock);
++	r->head = r->tail = 0;
++	r->done = r->stop = false;
++	r->err = 0;
++	r->running = true;
++	r->fill_min = A9R_SLOTS;
++	spin_unlock(&r->lock);
++}
++
++static bool a9r_space(struct a9_ring *r)
++{
++	bool ok;
++
++	spin_lock(&r->lock);
++	ok = r->stop || r->head - r->tail < A9R_SLOTS;
++	spin_unlock(&r->lock);
++	return ok;
++}
++
++/* producer: the next free slot, waiting for space; NULL once stopped */
++u8 *a9r_slot(struct a9_ring *r)
++{
++	u8 *s = NULL;
++
++	wait_event(r->wq, a9r_space(r));
++	spin_lock(&r->lock);
++	if (!r->stop)
++		s = r->mem + (size_t)(r->head % A9R_SLOTS) * A9R_DATA;
++	spin_unlock(&r->lock);
++	return s;
++}
++
++void a9r_publish(struct a9_ring *r, bool null)
++{
++	spin_lock(&r->lock);
++	r->null[r->head % A9R_SLOTS] = null;
++	r->head++;
++	spin_unlock(&r->lock);
++	wake_up_all(&r->wq);
++}
++
++/* producer: the update is rendered (err 0) or ended (err < 0) */
++void a9r_finish(struct a9_ring *r, int err)
++{
++	spin_lock(&r->lock);
++	r->done = true;
++	r->err = err;
++	r->running = false;
++	spin_unlock(&r->lock);
++	wake_up_all(&r->wq);
++}
++
++static bool a9r_filled(struct a9_ring *r)
++{
++	bool ok;
++
++	spin_lock(&r->lock);
++	ok = r->done || r->head - r->tail >= A9R_SLOTS;
++	spin_unlock(&r->lock);
++	return ok;
++}
++
++/*
++ * consumer: until the ring is full or the update completely rendered, keep
++ * the panel on idle refreshes at the frame rate (the stock idle frame, as
++ * between updates; no gap for the timing counters), bounded by timeout_ms.
++ */
++int a9r_prefill(struct a9_ring *r, struct a9x_transport *t, unsigned int timeout_ms)
++{
++	unsigned long end = jiffies + msecs_to_jiffies(timeout_ms);
++	int err;
++
++	while (!a9r_filled(r)) {
++		if (time_after(jiffies, end))
++			return -ETIMEDOUT;
++		err = a9x_idle_refresh(t);
++		if (err)
++			return err;
++	}
++	spin_lock(&r->lock);
++	err = r->done && r->err ? r->err : 0;
++	spin_unlock(&r->lock);
++	return err;
++}
++
++/*
++ * consumer: send every rendered frame, one commit each. 0 = the whole update
++ * was sent; -EAGAIN = underrun (the producer is not done and nothing is
++ * ready); -ECANCELED = *enable went 0; else the producer's or the
++ * transport's error. On any error the caller blanks and aborts.
++ */
++int a9r_drive(struct a9_ring *r, struct a9x_transport *t, const bool *enable)
++{
++	for (;;) {
++		unsigned int fill;
++		const u8 *s;
++		int ret;
++
++		spin_lock(&r->lock);
++		fill = r->head - r->tail;
++		if (fill < r->fill_min)
++			r->fill_min = fill;
++		if (!fill) {
++			ret = r->done ? r->err : -EAGAIN;
++			if (ret == -EAGAIN)
++				r->underruns++;
++			spin_unlock(&r->lock);
++			return ret;
++		}
++		s = r->mem + (size_t)(r->tail % A9R_SLOTS) * A9R_DATA;
++		spin_unlock(&r->lock);
++		/* emergency stop: enable=0 mid-update aborts after this frame */
++		if (!READ_ONCE(*enable))
++			return -ECANCELED;
++		ret = a9x_show_data(t, s);
++		if (ret)
++			return ret;
++		spin_lock(&r->lock);
++		r->tail++;
++		spin_unlock(&r->lock);
++		wake_up_all(&r->wq);
++	}
++}
++
++static bool a9r_idle(struct a9_ring *r)
++{
++	bool idle;
++
++	spin_lock(&r->lock);
++	idle = !r->running;
++	spin_unlock(&r->lock);
++	return idle;
++}
++
++/* consumer: stop the producer and wait until it has left the engine */
++void a9r_stop(struct a9_ring *r)
++{
++	spin_lock(&r->lock);
++	r->stop = true;
++	spin_unlock(&r->lock);
++	wake_up_all(&r->wq);
++	/* bounded: the producer ends after at most one a9e_frame() */
++	wait_event(r->wq, a9r_idle(r));
++}
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_transport.c b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+index 8dd6c5097..c6a1cfac3 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_transport.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+@@ -71,6 +71,39 @@ static int a9x_commit_locked(struct a9x_transport *t, int idx, bool null);
+ #endif
+ #define A9X_BYTE0_LANES 0x000000ff000000ffULL	/* byte 0 of two 32-bit words */
+ 
++/*
++ * buffer idx := template, with byte 0 of the data region (rows 5..828,
++ * words 0..411) from a ring slot (a9_eink_ring.c). Returns true if every
++ * data byte is 0. The result equals a9x_compose() of the full frame the slot
++ * was packed from (a9r_pack refuses drive data outside the data region).
++ * t->lock held, t->tmpl set.
++ */
++static bool a9x_compose_data(struct a9x_transport *t, int idx, const u8 *data)
++{
++	u8 *dst = t->map[idx].vaddr;
++	u32 acc = 0;
++	int r, w;
++
++	for (r = 0; r < TX_H; r++) {
++		const u32 *c = (const u32 *)(t->tmpl + (size_t)r * TX_W * 4);
++		u32 *d = (u32 *)(dst + (size_t)r * t->pitch);
++
++		if (r < A9T_HEAD_ROWS) {
++			memcpy(d, c, TX_W * 4);
++			continue;
++		}
++		for (w = 0; w < A9T_DATA_WORDS; w++) {
++			u32 v = *data++;
++
++			acc |= v;
++			d[w] = c[w] | v;	/* byte 0 = bits 0..7 (little endian) */
++		}
++		for (; w < TX_W; w++)
++			d[w] = c[w];
++	}
++	return !acc;
++}
++
+ /* buffer idx := the control template: the idle frame (no drive). t->lock held */
+ static void a9x_fill_idle(struct a9x_transport *t, int idx)
+ {
+@@ -435,6 +468,12 @@ static int a9x_commit_locked(struct a9x_transport *t, int idx, bool null)
+ 	if (t->on && t->vbl_ref)
+ 		vbl0 = drm_crtc_vblank_count(t->ms->crtc);
+ 	ret = drm_client_modeset_commit(&t->client);
++	/* pacing diagnosis: does the commit itself take more than a period? */
++	cgap = (u32)ktime_us_delta(ktime_get(), cstart);
++	if (cgap > t->commit_max_us)
++		t->commit_max_us = cgap;
++	if (cgap > a9x_period_us(t) + a9x_period_us(t) / 2)
++		t->commit_slow++;
+ 	if (ret) {
+ 		t->commits_failed++;
+ 		return ret;
+@@ -557,6 +596,34 @@ int a9x_show(struct a9x_transport *t, const u8 *frame)
+ 	return ret;
+ }
+ 
++/* one ring slot (a9_eink_ring.c): the per-frame work is the compose only */
++int a9x_show_data(struct a9x_transport *t, const u8 *data)
++{
++	ktime_t c0;
++	int back, ret;
++	bool null;
++	u32 us;
++
++	mutex_lock(&t->lock);
++	if (!t->on || t->gone || !t->tmpl) {
++		mutex_unlock(&t->lock);
++		return -ENODEV;
++	}
++	back = t->front ^ 1;
++	c0 = ktime_get();
++	null = a9x_compose_data(t, back, data);
++	us = (u32)ktime_us_delta(ktime_get(), c0);
++	if (us > t->compose_max_us)
++		t->compose_max_us = us;
++	ret = a9x_commit_locked(t, back, null);
++	if (!ret) {
++		t->frames++;
++		t->front_null = null;
++	}
++	mutex_unlock(&t->lock);
++	return ret;
++}
++
+ /* idle (template) frame, let it scan two refreshes, CRTC off. t->lock held. */
+ static int a9x_power_off_locked(struct a9x_transport *t)
+ {
+@@ -627,3 +694,20 @@ int a9x_blank(struct a9x_transport *t)
+ 	mutex_unlock(&t->lock);
+ 	return ret;
+ }
++
++/* commit one idle (template) frame now, whatever is on screen (render-ahead prefill) */
++int a9x_idle_refresh(struct a9x_transport *t)
++{
++	int back, ret = -ENODEV;
++
++	mutex_lock(&t->lock);
++	if (t->on && !t->gone) {
++		back = t->front ^ 1;
++		a9x_fill_idle(t, back);
++		ret = a9x_commit_locked(t, back, true);
++		if (!ret)
++			t->front_null = true;
++	}
++	mutex_unlock(&t->lock);
++	return ret;
++}

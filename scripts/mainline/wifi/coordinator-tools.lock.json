@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "name": "strace",
+      "version": "6.16",
+      "alias": "/home/user/A9-build/tools/arm64-static-strace/bin/strace",
+      "store": "/nix/store/mc19bdmgv2lijn8acywbr9fj1xs5zzpd-strace-static-aarch64-unknown-linux-musl-6.16/bin/strace",
+      "bytes": 1793648,
+      "sha256": "1d33daed173360a7d7726fc37ef1a2af958a8493ea36644f29c2b8f25bdbf82e",
+      "abi": "aarch64-linux-musl-static",
+      "provenance": {
+        "kind": "cached-nix-derivation-and-actual-source-audit",
+        "deriver": "/nix/store/awg30m1f2m8icdzg9dlpa8c8bpmq9xpy-strace-static-aarch64-unknown-linux-musl-6.16.drv",
+        "source_archive": "/nix/store/k5db1n20pfd9rscjm8lw513bkyv697cf-strace-6.16.tar.xz",
+        "source_archive_sha256": "3d7aee7e4f044b2f67f3d51a8a76eda18076e9fb2774de54ac351d777d4ebffa",
+        "source_evidence": "src/strace.c:339 help; :2388 option table; :2591 opt_kill_on_exit=true; :3045-3050 attach/kernel checks then PTRACE_O_EXITKILL; doc/strace.1.in:525"
+      }
+    },
+    {
+      "name": "iw",
+      "version": "6.17",
+      "alias": "/home/user/A9-build/tools/arm64-static-iw/bin/iw",
+      "store": "/nix/store/x3sfpa9s31hf2chssl5fazc0gabk5xrg-iw-static-aarch64-unknown-linux-musl-6.17/bin/iw",
+      "bytes": 643912,
+      "sha256": "6a6951202b0e1120e7ba05fc57d7faec60790ede5614b5477c79fa386002703b",
+      "abi": "aarch64-linux-musl-static",
+      "provenance": {
+        "kind": "user-supplied-cached-static-nix-store-output"
+      }
+    }
+  ]
+}

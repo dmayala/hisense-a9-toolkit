@@ -1,0 +1,129 @@
+# Mainline uclamp/CFS hierarchy; no schedtune or fake control files.
+on init
+    chown system system /dev/cpuctl
+    chown system system /dev/cpuctl/tasks
+    chmod 0664 /dev/cpuctl/tasks
+    chown system system /dev/cpuctl/cgroup.procs
+    chmod 0664 /dev/cpuctl/cgroup.procs
+    mkdir /dev/cpuctl/foreground 0755 system system
+    chown system system /dev/cpuctl/foreground
+    chown system system /dev/cpuctl/foreground/tasks
+    chmod 0664 /dev/cpuctl/foreground/tasks
+    chown system system /dev/cpuctl/foreground/cgroup.procs
+    chmod 0664 /dev/cpuctl/foreground/cgroup.procs
+    write /dev/cpuctl/foreground/cpu.shares 1024
+    write /dev/cpuctl/foreground/cpu.uclamp.min 0
+    write /dev/cpuctl/foreground/cpu.uclamp.max max
+    mkdir /dev/cpuctl/foreground_window 0755 system system
+    chown system system /dev/cpuctl/foreground_window
+    chown system system /dev/cpuctl/foreground_window/tasks
+    chmod 0664 /dev/cpuctl/foreground_window/tasks
+    chown system system /dev/cpuctl/foreground_window/cgroup.procs
+    chmod 0664 /dev/cpuctl/foreground_window/cgroup.procs
+    write /dev/cpuctl/foreground_window/cpu.shares 1024
+    write /dev/cpuctl/foreground_window/cpu.uclamp.min 0
+    write /dev/cpuctl/foreground_window/cpu.uclamp.max max
+    mkdir /dev/cpuctl/background 0755 system system
+    chown system system /dev/cpuctl/background
+    chown system system /dev/cpuctl/background/tasks
+    chmod 0664 /dev/cpuctl/background/tasks
+    chown system system /dev/cpuctl/background/cgroup.procs
+    chmod 0664 /dev/cpuctl/background/cgroup.procs
+    write /dev/cpuctl/background/cpu.shares 52
+    write /dev/cpuctl/background/cpu.uclamp.min 0
+    write /dev/cpuctl/background/cpu.uclamp.max max
+    mkdir /dev/cpuctl/top-app 0755 system system
+    chown system system /dev/cpuctl/top-app
+    chown system system /dev/cpuctl/top-app/tasks
+    chmod 0664 /dev/cpuctl/top-app/tasks
+    chown system system /dev/cpuctl/top-app/cgroup.procs
+    chmod 0664 /dev/cpuctl/top-app/cgroup.procs
+    write /dev/cpuctl/top-app/cpu.shares 1024
+    write /dev/cpuctl/top-app/cpu.uclamp.min 0
+    write /dev/cpuctl/top-app/cpu.uclamp.max max
+    mkdir /dev/cpuctl/rt 0755 system system
+    chown system system /dev/cpuctl/rt
+    chown system system /dev/cpuctl/rt/tasks
+    chmod 0664 /dev/cpuctl/rt/tasks
+    chown system system /dev/cpuctl/rt/cgroup.procs
+    chmod 0664 /dev/cpuctl/rt/cgroup.procs
+    write /dev/cpuctl/rt/cpu.shares 1024
+    write /dev/cpuctl/rt/cpu.uclamp.min 0
+    write /dev/cpuctl/rt/cpu.uclamp.max max
+    mkdir /dev/cpuctl/system 0755 system system
+    chown system system /dev/cpuctl/system
+    chown system system /dev/cpuctl/system/tasks
+    chmod 0664 /dev/cpuctl/system/tasks
+    chown system system /dev/cpuctl/system/cgroup.procs
+    chmod 0664 /dev/cpuctl/system/cgroup.procs
+    write /dev/cpuctl/system/cpu.shares 1024
+    write /dev/cpuctl/system/cpu.uclamp.min 0
+    write /dev/cpuctl/system/cpu.uclamp.max max
+    mkdir /dev/cpuctl/system-background 0755 system system
+    chown system system /dev/cpuctl/system-background
+    chown system system /dev/cpuctl/system-background/tasks
+    chmod 0664 /dev/cpuctl/system-background/tasks
+    chown system system /dev/cpuctl/system-background/cgroup.procs
+    chmod 0664 /dev/cpuctl/system-background/cgroup.procs
+    write /dev/cpuctl/system-background/cpu.shares 52
+    write /dev/cpuctl/system-background/cpu.uclamp.min 0
+    write /dev/cpuctl/system-background/cpu.uclamp.max max
+    mkdir /dev/cpuctl/dex2oat 0755 system system
+    chown system system /dev/cpuctl/dex2oat
+    chown system system /dev/cpuctl/dex2oat/tasks
+    chmod 0664 /dev/cpuctl/dex2oat/tasks
+    chown system system /dev/cpuctl/dex2oat/cgroup.procs
+    chmod 0664 /dev/cpuctl/dex2oat/cgroup.procs
+    write /dev/cpuctl/dex2oat/cpu.shares 52
+    write /dev/cpuctl/dex2oat/cpu.uclamp.min 0
+    write /dev/cpuctl/dex2oat/cpu.uclamp.max max
+    mkdir /dev/cpuctl/nnapi-hal 0755 system system
+    chown system system /dev/cpuctl/nnapi-hal
+    chown system system /dev/cpuctl/nnapi-hal/tasks
+    chmod 0664 /dev/cpuctl/nnapi-hal/tasks
+    chown system system /dev/cpuctl/nnapi-hal/cgroup.procs
+    chmod 0664 /dev/cpuctl/nnapi-hal/cgroup.procs
+    write /dev/cpuctl/nnapi-hal/cpu.shares 1024
+    write /dev/cpuctl/nnapi-hal/cpu.uclamp.min 0
+    write /dev/cpuctl/nnapi-hal/cpu.uclamp.max max
+    mkdir /dev/cpuctl/camera-daemon 0755 system system
+    chown system system /dev/cpuctl/camera-daemon
+    chown system system /dev/cpuctl/camera-daemon/tasks
+    chmod 0664 /dev/cpuctl/camera-daemon/tasks
+    chown system system /dev/cpuctl/camera-daemon/cgroup.procs
+    chmod 0664 /dev/cpuctl/camera-daemon/cgroup.procs
+    write /dev/cpuctl/camera-daemon/cpu.shares 1024
+    write /dev/cpuctl/camera-daemon/cpu.uclamp.min 0
+    write /dev/cpuctl/camera-daemon/cpu.uclamp.max max
+    chown system system /dev/cpuset/tasks
+    chmod 0664 /dev/cpuset/tasks
+    chown system system /dev/cpuset/cgroup.procs
+    chmod 0664 /dev/cpuset/cgroup.procs
+    chown system system /dev/cpuset/foreground/tasks
+    chmod 0664 /dev/cpuset/foreground/tasks
+    chown system system /dev/cpuset/foreground/cgroup.procs
+    chmod 0664 /dev/cpuset/foreground/cgroup.procs
+    chown system system /dev/cpuset/foreground_window/tasks
+    chmod 0664 /dev/cpuset/foreground_window/tasks
+    chown system system /dev/cpuset/foreground_window/cgroup.procs
+    chmod 0664 /dev/cpuset/foreground_window/cgroup.procs
+    chown system system /dev/cpuset/background/tasks
+    chmod 0664 /dev/cpuset/background/tasks
+    chown system system /dev/cpuset/background/cgroup.procs
+    chmod 0664 /dev/cpuset/background/cgroup.procs
+    chown system system /dev/cpuset/top-app/tasks
+    chmod 0664 /dev/cpuset/top-app/tasks
+    chown system system /dev/cpuset/top-app/cgroup.procs
+    chmod 0664 /dev/cpuset/top-app/cgroup.procs
+    chown system system /dev/cpuset/system-background/tasks
+    chmod 0664 /dev/cpuset/system-background/tasks
+    chown system system /dev/cpuset/system-background/cgroup.procs
+    chmod 0664 /dev/cpuset/system-background/cgroup.procs
+    chown system system /dev/cpuset/restricted/tasks
+    chmod 0664 /dev/cpuset/restricted/tasks
+    chown system system /dev/cpuset/restricted/cgroup.procs
+    chmod 0664 /dev/cpuset/restricted/cgroup.procs
+    chown system system /dev/cpuset/camera-daemon/tasks
+    chmod 0664 /dev/cpuset/camera-daemon/tasks
+    chown system system /dev/cpuset/camera-daemon/cgroup.procs
+    chmod 0664 /dev/cpuset/camera-daemon/cgroup.procs

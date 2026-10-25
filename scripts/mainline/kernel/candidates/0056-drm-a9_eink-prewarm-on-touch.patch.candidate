@@ -1,0 +1,335 @@
+From: eink-latency r2
+Subject: [PATCH] drm/a9_eink: opt-in cold-start prewarm on touch-down (prewarm, default 0)
+
+See runs/eink-latency-r2.md section next (c); review 88 C1-C4 fixed. Stacks on 0055.
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index aea6ccc..5b8c229 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -4,6 +4,7 @@
+ 
+ #include <linux/atomic.h>
+ #include <linux/hrtimer.h>
++#include <linux/input.h>
+ #include <linux/iosys-map.h>
+ #include <linux/ktime.h>
+ #include <linux/mutex.h>
+@@ -328,6 +329,15 @@ struct a9_eink {
+ 	struct notifier_block pm_nb;
+ 	struct task_struct *thread;
+ 
++	/* eink-latency r2 prewarm (opt-in, a9_eink.prewarm): a touch-down while the
++	 * pipeline is off asks the worker to power up ahead of the first update */
++	struct input_handler input_h;
++	bool input_h_registered;
++	bool prewarm_req;		/* set from input event context, cleared by the worker */
++	bool prewarm_session;		/* worker only: this HV session came from a prewarm, no output yet */
++	ktime_t prewarm_block_until;	/* worker writes, event context reads: no poke before this */
++	atomic_long_t prewarm_pokes;
++	u64 prewarm_req_n, prewarm_up, prewarm_unused, prewarm_fail;	/* worker only */
+ 
+ 	/* render-ahead (0033): the producer thread renders a real update's frames */
+ 	struct a9_ring ring;
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index b0cf2ac..7a5e25a 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -103,6 +103,23 @@ static bool damage_prep;
+ module_param(damage_prep, bool, 0644);
+ MODULE_PARM_DESC(damage_prep, "Damage-limited prepare: condition, diff and pack only the tiles whose grey changed (bit-identical engine state, tests/damage-equiv). 0 = the reference full pass (default). Runtime");
+ 
++/*
++ * eink-latency r2, cold start (runs/eink-latency-r2.md §next c). Default OFF; HV
++ * policy: attended review before any session enables it. 1 = a touch-down
++ * (BTN_TOUCH 1 or ABS_MT_TRACKING_ID >= 0) while the pipeline is off starts the
++ * normal power-up (same gates, bin pre-filter, PG and rail/temperature checks as
++ * the first update would do) so that it overlaps the app's rendering. The
++ * session is then held exactly like after an update (hv_hold_ms, hv_max_ms, the
++ * FP9929A max_on_ms/min_off_ms untouched); a prewarm that sees no output before
++ * the hold expires blocks further prewarms for prewarm_gap_ms.
++ */
++static unsigned int prewarm;
++module_param(prewarm, uint, 0644);
++MODULE_PARM_DESC(prewarm, "Cold-start prewarm: 0 = off (default), 1 = a touch-down while the pipeline is off powers it up ahead of the first update (bounded by hv_hold_ms; see prewarm_gap_ms). HV policy: attended review first");
++static unsigned int prewarm_gap_ms = 10000;
++module_param(prewarm_gap_ms, uint, 0644);
++MODULE_PARM_DESC(prewarm_gap_ms, "After a prewarm that saw no update, no new prewarm for this long (default 10000, clamped 3000..60000)");
++
+ static bool skip_same_target;
+ module_param(skip_same_target, bool, 0644);
+ MODULE_PARM_DESC(skip_same_target, "Stock-style no-change skip (composer 0x1a6ee4): a steady job whose grey AND starting levels equal those of the last completed update is dropped before its prepare (it would be prepared as unchanged and send nothing). Default N (review 89: default-on is a separate decision after its A/B) = always prepare, the 0054 behaviour. Runtime");
+@@ -1106,9 +1123,22 @@ static ssize_t damage_stats_show(struct device *kdev, struct device_attribute *a
+ }
+ static DEVICE_ATTR_RO(damage_stats);
+ 
++/* eink-latency r2 prewarm counters: one line (worker-owned fields read without a lock: diagnostic) */
++static ssize_t prewarm_stats_show(struct device *kdev, struct device_attribute *attr, char *buf)
++{
++	struct a9_eink *a9 = kdev_to_a9(kdev);
++
++	return sysfs_emit(buf, "prewarm %u gap_ms %u handler %d pokes %ld req %llu up %llu unused %llu fail %llu\n",
++			  READ_ONCE(prewarm), READ_ONCE(prewarm_gap_ms), a9->input_h_registered,
++			  atomic_long_read(&a9->prewarm_pokes), READ_ONCE(a9->prewarm_req_n),
++			  READ_ONCE(a9->prewarm_up), READ_ONCE(a9->prewarm_unused), READ_ONCE(a9->prewarm_fail));
++}
++static DEVICE_ATTR_RO(prewarm_stats);
++
+ static struct attribute *a9_eink_attrs[] = {
+ 	&dev_attr_input_stats.attr,
+ 	&dev_attr_damage_stats.attr,
++	&dev_attr_prewarm_stats.attr,
+ 	&dev_attr_mode.attr,
+ 	&dev_attr_black_threshold.attr,
+ 	&dev_attr_white_threshold.attr,
+@@ -2413,6 +2443,8 @@ abort:
+ 			 a9->e.rect.y1, a9->e.rect.x2, a9->e.rect.y2, a9->tx.frames - sent0,
+ 			 a9->tx.late_drive - ld0, ret);
+ 	a9e_abort(&a9->e);
++	if (!dry)
++		a9->same.valid = 0;	/* review 88: the record never describes an aborted glass */
+ 	a9->last.aborted = 1;
+ 	a9->aborts++;
+ 	*force_clear = true;
+@@ -2565,6 +2597,130 @@ static long a9_idle_timeout(unsigned int hold, ktime_t idle_since)
+ 	return left > 0 ? msecs_to_jiffies(left) : 0;
+ }
+ 
++/*
++ * eink-latency r2 prewarm: the cold path of __a9_update() up to (not including)
++ * its first frame, with nothing prepared and no engine state touched: fault latch,
++ * thermistor + previous-TMST bin pre-filter, a9_power_on() (panel/fp9929a gates,
++ * FP9929A PG), this power-up's TMST + rail sample, temperature floor and bin
++ * admission. Any refusal leaves the pipeline off. Worker thread only.
++ */
++static int a9_prewarm_up(struct a9_eink *a9)
++{
++	struct fp9929a_status st;
++	int t1, t2, bin, lo, hi, ret;
++
++	if (a9x_fault_latched() || !READ_ONCE(enable) || READ_ONCE(zero_test) || a9->hv_fault)
++		return -EIO;
++	if (!a9x_attached(&a9->tx)) {
++		ret = a9x_attach(&a9->tx);
++		if (ret)
++			return ret;
++	}
++	ret = a9_temps(a9, &t1, &t2, &st);
++	if (a9_check_rail_sample(a9, false, ret, &st))
++		return -EIO;
++	if (a9->last.t2_raw == INT_MIN)
++		return -ENODATA;
++	mutex_lock(&a9->eng_lock);
++	bin = a9t_temp_bin(&a9->e.st, t1, t2);
++	mutex_unlock(&a9->eng_lock);
++	if (a9->last.t1_raw != INT_MIN && !a9_bin_admitted(bin, &lo, &hi))
++		return -ERANGE;
++	ret = a9_power_on(a9);
++	if (ret)
++		return ret;
++	ret = a9_temps(a9, &t1, &t2, &st);	/* this power-up's TMST */
++	if (a9_check_rail_sample(a9, true, ret, &st))
++		return -EIO;			/* latched and powered down by the check */
++	mutex_lock(&a9->eng_lock);
++	bin = a9t_temp_bin(&a9->e.st, t1, t2);
++	mutex_unlock(&a9->eng_lock);
++	if (a9->last.t1_raw == INT_MIN || a9->last.t2_raw == INT_MIN ||
++	    a9->last.t1_raw < A9_TEMP_MIN_C || a9->last.t2_raw < A9_TEMP_MIN_C * 1000 ||
++	    !a9_bin_admitted(bin, &lo, &hi)) {
++		a9_power_off(a9);
++		return -ERANGE;
++	}
++	return 0;
++}
++
++/* worker only: a prewarm session ends (powered down, or about to be) without an update */
++static void a9_prewarm_expired(struct a9_eink *a9)
++{
++	if (a9->prewarm_session && a9->tx.on) {
++		/* the prewarm saw no update: rate-limit the next one */
++		a9->prewarm_unused++;
++		WRITE_ONCE(a9->prewarm_block_until,
++			   ktime_add_ms(ktime_get(), clamp(READ_ONCE(prewarm_gap_ms), 3000u, 60000u)));
++	}
++	a9->prewarm_session = false;
++}
++
++/* input event context (atomic, event_lock held): only flags and a wake-up.
++ * No prewarm with a zero hold: it would be powered down at once (review 88 C4). */
++static void a9_prewarm_poke(struct a9_eink *a9)
++{
++	if (!READ_ONCE(prewarm) || !READ_ONCE(hv_hold_ms) || READ_ONCE(a9->tx.on) ||
++	    READ_ONCE(a9->suspending) || READ_ONCE(a9->prewarm_req))
++		return;
++	atomic_long_inc(&a9->prewarm_pokes);
++	if (ktime_before(ktime_get(), READ_ONCE(a9->prewarm_block_until)))
++		return;
++	WRITE_ONCE(a9->prewarm_req, true);
++	wake_up(&a9->wq);
++}
++
++static void a9_input_event(struct input_handle *handle, unsigned int type,
++			   unsigned int code, int value)
++{
++	if ((type == EV_KEY && code == BTN_TOUCH && value == 1) ||
++	    (type == EV_ABS && code == ABS_MT_TRACKING_ID && value >= 0))
++		a9_prewarm_poke(handle->handler->private);
++}
++
++static int a9_input_connect(struct input_handler *handler, struct input_dev *dev,
++			    const struct input_device_id *id)
++{
++	struct input_handle *h = kzalloc(sizeof(*h), GFP_KERNEL);
++	int ret;
++
++	if (!h)
++		return -ENOMEM;
++	h->dev = dev;
++	h->handler = handler;
++	h->name = "a9_eink_prewarm";
++	ret = input_register_handle(h);
++	if (ret)
++		goto free;
++	ret = input_open_device(h);	/* an extra listener, never a grab */
++	if (ret)
++		goto unreg;
++	return 0;
++unreg:
++	input_unregister_handle(h);
++free:
++	kfree(h);
++	return ret;
++}
++
++static void a9_input_disconnect(struct input_handle *h)
++{
++	input_close_device(h);
++	input_unregister_handle(h);
++	kfree(h);
++}
++
++/* touchscreens only: multitouch position or a BTN_TOUCH key */
++static const struct input_device_id a9_input_ids[] = {
++	{ .flags = INPUT_DEVICE_ID_MATCH_EVBIT | INPUT_DEVICE_ID_MATCH_ABSBIT,
++	  .evbit = { BIT_MASK(EV_ABS) },
++	  .absbit = { [BIT_WORD(ABS_MT_POSITION_X)] = BIT_MASK(ABS_MT_POSITION_X) } },
++	{ .flags = INPUT_DEVICE_ID_MATCH_EVBIT | INPUT_DEVICE_ID_MATCH_KEYBIT,
++	  .evbit = { BIT_MASK(EV_KEY) },
++	  .keybit = { [BIT_WORD(BTN_TOUCH)] = BIT_MASK(BTN_TOUCH) } },
++	{ },
++};
++
+ static int a9_thread(void *data)
+ {
+ 	struct a9_eink *a9 = data;
+@@ -2580,6 +2736,8 @@ static int a9_thread(void *data)
+ 
+ 		if (READ_ONCE(a9->suspending)) {
+ 			/* system suspend: rails down, history kept, wait for resume */
++			WRITE_ONCE(a9->prewarm_req, false);
++			a9->prewarm_session = false;
+ 			a9_power_off(a9);
+ 			have_prev = boosted = false;	/* no interaction across suspend */
+ 			smp_store_release(&a9->parked, true);
+@@ -2600,12 +2758,39 @@ static int a9_thread(void *data)
+ 		if (tmo)
+ 			wait_event_interruptible_timeout(a9->wq,
+ 				READ_ONCE(a9->kick) || READ_ONCE(a9->suspending) ||
++				READ_ONCE(a9->prewarm_req) ||
+ 				READ_ONCE(a9->tx.unreg_hv_unknown) || kthread_should_stop(), tmo);
+ 		if (kthread_should_stop())
+ 			break;
+ 		if (READ_ONCE(a9->suspending))
+ 			continue;
++		if (!READ_ONCE(a9->kick) && READ_ONCE(a9->prewarm_req)) {
++			/* eink-latency r2 prewarm: power up now, hold as after an update.
++			 * busy before the request is cleared: a9_drain never sees a gap. */
++			WRITE_ONCE(a9->busy, true);
++			smp_mb();
++			WRITE_ONCE(a9->prewarm_req, false);
++			a9->prewarm_req_n++;
++			if (READ_ONCE(prewarm) && a9_hold_ms() && !a9->tx.on && !a9->hv_fault) {
++				int ret;
++
++				ret = a9_load_waveform(a9);
++				if (!ret)
++					ret = a9_prewarm_up(a9);
++				if (!ret) {
++					idle_since = ktime_get();	/* the hold runs from the power-up */
++					a9->prewarm_session = true;
++					a9->prewarm_up++;
++				} else {
++					a9->prewarm_fail++;
++				}
++			}
++			smp_store_release(&a9->busy, false);
++			wake_up_all(&a9->wq);
++			continue;
++		}
+ 		if (!READ_ONCE(a9->kick)) {
++			a9_prewarm_expired(a9);
+ 			a9_power_off(a9);	/* idle */
+ 			continue;
+ 		}
+@@ -2616,6 +2801,7 @@ static int a9_thread(void *data)
+ 		    !a9_idle_timeout(hold, idle_since)) {
+ 			/* Observe a live dropout before closing the expired session. */
+ 			a9_check_live_rails(a9);
++			a9_prewarm_expired(a9);	/* review 88 C2: an expiring prewarm counts here too */
+ 			a9_power_off(a9);
+ 		}
+ 		if (a9_load_waveform(a9)) {
+@@ -2628,7 +2814,11 @@ static int a9_thread(void *data)
+ 				u64 frames0 = a9->tx.frames;
+ 				u64 preps0 = a9->e.full_prepares + a9->e.inc_prepares;
+ 
++				/* review 88 C3: a touch-down queued before or during this job is
++				 * answered by the job itself; never by a later prewarm */
++				WRITE_ONCE(a9->prewarm_req, false);
+ 				a9_update(a9, &job);
++				WRITE_ONCE(a9->prewarm_req, false);
+ 				if (a9->e.full_prepares + a9->e.inc_prepares == preps0) {
+ 					/* the job was dropped before its prepare: its damage tiles are
+ 					 * gone, the damage-limited state no longer describes the grey */
+@@ -2640,6 +2830,7 @@ static int a9_thread(void *data)
+ 				if (!job.dry && a9->tx.on && a9->tx.frames != frames0) {
+ 					idle_since = ktime_get();
+ 					physical = true;
++					a9->prewarm_session = false;	/* the prewarm was used */
+ 					/* Output history may cross a session boundary (that is
+ 					 * the point: the next tap after a power-down), but the
+ 					 * boost is recomputed from it at every output, never
+@@ -2965,6 +3156,17 @@ static int a9_probe(struct platform_device *pdev)
+ 	}
+ 	a9->pm_nb.notifier_call = a9_pm_notify;
+ 	register_pm_notifier(&a9->pm_nb);
++	/* prewarm listener: registered always, inert while a9_eink.prewarm=0 */
++	a9->input_h.event = a9_input_event;
++	a9->input_h.connect = a9_input_connect;
++	a9->input_h.disconnect = a9_input_disconnect;
++	a9->input_h.name = "a9_eink_prewarm";
++	a9->input_h.id_table = a9_input_ids;
++	a9->input_h.private = a9;
++	if (input_register_handler(&a9->input_h))
++		dev_warn(dev, "prewarm input handler not registered: a9_eink.prewarm has no effect\n");
++	else
++		a9->input_h_registered = true;
+ 	a9_debugfs(a9);
+ 	dev_info(dev, "E Ink KMS %ux%u; frames %s; transport %s; HV hold %u ms\n",
+ 		 A9E_FB_W, A9E_FB_H, enable ? "SENT TO THE PANEL" : "dry run (a9_eink.enable=0)",
+@@ -2974,7 +3176,14 @@ static int a9_probe(struct platform_device *pdev)
+ 
+ static void a9_teardown(struct a9_eink *a9)
+ {
+-	bool drained = a9_drain(a9);
++	bool drained;
++
++	if (a9->input_h_registered) {
++		input_unregister_handler(&a9->input_h);	/* no poke after this */
++		a9->input_h_registered = false;
++	}
++	WRITE_ONCE(a9->prewarm_req, false);
++	drained = a9_drain(a9);
+ 
+ 	if (!drained)
+ 		/* a wedged commit could also wedge kthread_stop: rails first */

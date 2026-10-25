@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- GApps supplies network location. handheld_core_hardware.xml already declares
+     android.hardware.location.network; do not mask it with AOSP's default
+     unavailable-feature. Other hardware exclusions remain in their own files. -->
+<permissions>
+</permissions>

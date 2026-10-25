@@ -1,0 +1,5 @@
+; Candidate7: netmgr client transport and ordinary private database observation.
+(allow vendor_stock_rild self (netlink_generic_socket (create bind read write getattr getopt setopt)))
+(allow vendor_stock_rild vendor_radio_vendor_data_file (file (watch watch_reads ioctl)))
+; F2FS_IOC_GET_FEATURES only (read-only feature query on the opened runtime DB).
+(allowx vendor_stock_rild vendor_radio_vendor_data_file (ioctl file (0xf50c)))

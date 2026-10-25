@@ -1,0 +1,211 @@
+#!/bin/busybox sh
+# /init for the Hisense A9 diskless mainline image (2026-10-14, revised
+# 2026-10-15 after the first-boot reset loop, docs/mainline-kernel-build.md).
+#
+# Where a reset lands (the part that keeps the phone out of a loop):
+#   - the kernel arms PON reboot reason 2 (= bootloader fastboot) when the
+#     PMIC PON driver probes (qcom_pon.beacon=2); init re-asserts it first
+#     thing and logs the PMIC's readback. From then on a panic, a watchdog
+#     bite, a plain reboot or a hang caught by the watchdog all land in
+#     bootloader FASTBOOT, never in this image again;
+#   - storage is never touched, so init cannot clear a misc BCB. The first-
+#     boot procedure (scripts/mainline/first-boot.sh) enters this image with
+#     the BCB empty instead.
+#
+# Default boot = console + logging only:
+#   - never mounts or opens storage (UFS/SD are also disabled in the DT);
+#   - never powers the E Ink panel (see "E Ink" below);
+#   - USB gadget: ACM serial shell (host /dev/ttyACM*) + NCM network
+#     (phone 172.16.42.1, DHCP lease 172.16.42.2 for the host, telnet 23);
+#   - kernel log is mirrored to pstore/ramoops (DT); it survives only a WARM
+#     reset (reboot=warm on the command line, untested on the A9), because
+#     the phone's normal PS_HOLD reset is a hard reset that drops DDR;
+#   - DEAD-MAN TIMER: after a9.deadman seconds (default 120) the phone reboots
+#     to the BOOTLOADER (fastboot); /tmp/stay holds it until the file is gone;
+#   - a9-ctl on TCP 2323 (NCM): stay/release/capture/capture-dbg/bootloader;
+#   - FAIL-FAST: no USB device controller after a9.udcwait seconds (default
+#     40) = reboot to the bootloader at once (unless /tmp/stay). Landing in
+#     fastboot about 1 min after power-on therefore means "init ran, USB
+#     failed"; about 2.5 min means "USB was up, nobody took over".
+#
+# Kernel command line flags read here:
+#   a9.deadman=<s>   dead-man timeout, 0 = off
+#   a9.udcwait=<s>   how long to wait for a UDC before failing fast, 0 = never fail fast
+#   a9.eink=core|bridge  load the display modules in stages (a9-eink load);
+#                    never powers anything. The power gates are opened only
+#                    by hand (a9-eink allow) for one planned test.
+/bin/busybox --install -s /bin
+export PATH=/bin:/sbin
+mkdir -p /proc /sys /dev /tmp /run /mnt
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mkdir -p /dev/pts && mount -t devpts devpts /dev/pts
+mount -t tmpfs tmpfs /tmp
+mount -t tmpfs tmpfs /run
+mount -t configfs configfs /sys/kernel/config
+mkdir -p /sys/fs/pstore && mount -t pstore pstore /sys/fs/pstore 2>/dev/null
+mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null
+
+exec </dev/console >/dev/console 2>&1
+log() { echo "a9-init: $*"; echo "a9-init: $*" >/dev/kmsg; echo "$(cut -d' ' -f1 /proc/uptime) $*" >>/tmp/a9-progress; }
+
+# --- beacon first: any reset from here on lands in bootloader fastboot -------
+B=/sys/module/qcom_pon/parameters/beacon
+if [ -w $B ]; then
+	err=$( (echo 2 > $B) 2>&1 )
+	now=$(cat $B 2>/dev/null)
+	if [ "$now" = 2 ]; then
+		log "beacon: PON reboot reason read back from the PMIC = 2 (fastboot)"
+	else
+		# the parameter exists even without a PON device; then it only stores
+		log "beacon: NOT ARMED (readback '$now' $err): a reset may return to this image"
+	fi
+else
+	log "beacon: $B missing (no PON driver?): a reset may return here"
+fi
+log "start, $(uname -r), $(cat /proc/device-tree/model 2>/dev/null)"
+log "kernel: $(dmesg | grep -m1 'beacon: reboot reason' | sed 's/^\[[^]]*\] //')"
+
+flag() { # flag <name> <default>
+	for w in $(cat /proc/cmdline); do
+		case "$w" in "$1="*) echo "${w#*=}"; return;; esac
+	done
+	echo "$2"
+}
+DEADMAN=$(flag a9.deadman 120)
+UDCWAIT=$(flag a9.udcwait 40)
+EINK=$(flag a9.eink 0)
+
+# --- watchdog: a hung kernel resets instead of hanging forever ---------------
+if [ -c /dev/watchdog0 ] || [ -c /dev/watchdog ]; then
+	watchdog -T 32 -t 8 /dev/watchdog && log "watchdog petting started (32 s timeout)"
+fi
+
+# --- dead-man timer ----------------------------------------------------------
+if [ "$DEADMAN" != 0 ]; then
+	(
+		sleep "$DEADMAN"
+		# /tmp/stay HOLDS the timer (a9-ctl "stay <s>" creates it and removes
+		# it again after <s> s); it fires as soon as the file is gone
+		while [ -e /tmp/stay ]; do sleep 2; done
+		log "dead-man timer ($DEADMAN s) expired: reboot to bootloader"
+		# E Ink sequencer used in this boot: close the gates, verify HV off first
+		[ -d /tmp/eink-seq ] && timeout 40 /bin/a9-eink-seq safe "dead-man" >/dev/null 2>&1
+		sync
+		/bin/a9-reboot bootloader
+	) &
+	log "dead-man: reboot to bootloader in $DEADMAN s (held while /tmp/stay exists)"
+fi
+
+# --- USB gadget: ACM + NCM ---------------------------------------------------
+gadget() {
+	G=/sys/kernel/config/usb_gadget/a9
+	mkdir -p $G || return 1
+	cd $G || return 1
+	echo 0x1d6b > idVendor		# Linux Foundation
+	echo 0x0104 > idProduct		# Multifunction Composite Gadget
+	echo 0x0200 > bcdUSB
+	echo 0x0100 > bcdDevice
+	mkdir -p strings/0x409
+	echo "A9 mainline" > strings/0x409/manufacturer
+	echo "Hisense A9 diskless mainline" > strings/0x409/product
+	echo "a9-mainline" > strings/0x409/serialnumber
+	mkdir -p configs/c.1/strings/0x409
+	echo "ACM+NCM" > configs/c.1/strings/0x409/configuration
+	echo 250 > configs/c.1/MaxPower
+	mkdir -p functions/acm.GS0 functions/ncm.usb0
+	echo 02:a9:00:00:00:01 > functions/ncm.usb0/dev_addr
+	echo 02:a9:00:00:00:02 > functions/ncm.usb0/host_addr
+	ln -s functions/acm.GS0 configs/c.1/ 2>/dev/null
+	ln -s functions/ncm.usb0 configs/c.1/ 2>/dev/null
+	i=0 max=$UDCWAIT
+	[ "$max" = 0 ] && max=600
+	while [ -z "$(ls /sys/class/udc 2>/dev/null)" ] && [ $i -lt $max ]; do sleep 1; i=$((i+1)); done
+	UDC=$(ls /sys/class/udc 2>/dev/null | head -n1)
+	[ -n "$UDC" ] || { log "no UDC after $i s"; cd /; return 1; }
+	echo "$UDC" > UDC && log "gadget bound to $UDC"
+	cd /
+}
+if [ "$UDCWAIT" = 0 ]; then
+	# never fail fast: wait for a UDC in the background so the shells come up
+	( gadget || log "USB gadget setup FAILED" ) &
+elif ! gadget; then
+	log "USB gadget setup FAILED"
+	dmesg > /tmp/dmesg.nousb
+	[ -r /sys/kernel/debug/devices_deferred ] && sed 's/^/a9-init: deferred: /' /sys/kernel/debug/devices_deferred >/dev/kmsg
+	dmesg | grep -v a9-init | grep -i -e qusb -e dwc3 -e 'udc[ :]' | tail -n 20 | sed 's/^/a9-init: usb: /' >/dev/kmsg
+	if [ ! -e /tmp/stay ]; then
+		log "fail-fast: no USB, reboot to bootloader"
+		sync
+		/bin/a9-reboot bootloader
+	fi
+fi
+
+# shell on the ACM port, respawned
+(
+	while true; do
+		[ -c /dev/ttyGS0 ] && setsid sh -c 'exec sh -i </dev/ttyGS0 >/dev/ttyGS0 2>&1'
+		sleep 1
+	done
+) &
+
+# network: NCM, static address, one DHCP lease for the host, telnet shell
+if ifconfig usb0 172.16.42.1 netmask 255.255.255.0 up 2>/dev/null; then
+	cat > /tmp/udhcpd.conf <<-EOF
+	start 172.16.42.2
+	end 172.16.42.2
+	interface usb0
+	max_leases 1
+	lease_file /tmp/udhcpd.leases
+	option subnet 255.255.255.0
+	EOF
+	touch /tmp/udhcpd.leases
+	udhcpd /tmp/udhcpd.conf
+	telnetd -l /bin/sh -b 172.16.42.1
+	log "usb0 172.16.42.1 up, telnetd + udhcpd running"
+	# raw TCP control/capture service (one command per connection, a9-ctl)
+	tcpsvd -E 0 2323 /bin/a9-ctl >/dev/null 2>&1 &
+	log "a9-ctl on tcp 2323"
+	# live kernel log for the host (first-boot.sh tails it for the whole
+	# session, so the last lines before a hang or reset reach the host)
+	tcpsvd -E 0 2324 sh -c 'dmesg; exec cat /dev/kmsg' >/dev/null 2>&1 &
+	log "kmsg stream on tcp 2324"
+else
+	log "usb0 missing: NCM not available"
+fi
+
+# shell on the UART console too (no physical access is assumed)
+(
+	while true; do setsid sh -c 'exec sh -i </dev/console >/dev/console 2>&1'; sleep 1; done
+) &
+
+# --- interrupt monitor: every 5 s, log any IRQ line that grew by more than
+# 2000 (a storm starves everything on the single CPU, maxcpus=1)
+(
+	prev=/tmp/irq.prev; cat /proc/interrupts > $prev
+	while true; do
+		sleep 5
+		cur=/tmp/irq.cur; cat /proc/interrupts > $cur
+		awk 'NR==FNR { if ($1 ~ /:$/) a[$1]=$2; next }
+		     $1 ~ /:$/ && ($2 - a[$1]) > 2000 { printf "a9-irqmon: %s +%d in 5 s:", $1, $2 - a[$1]; for (i=3;i<=NF;i++) printf " %s", $i; print "" }' \
+			$prev $cur > /tmp/irq.storm
+		[ -s /tmp/irq.storm ] && cat /tmp/irq.storm > /dev/kmsg
+		mv $cur $prev
+	done
+) &
+
+# --- E Ink: only on explicit request -----------------------------------------
+# Default: nothing loads. The FP9929A driver is built in and has already
+# powered the rails DOWN if the bootloader left them up (dmesg "fp9929a").
+case "$EINK" in
+	0) ;;
+	core|bridge)
+		log "a9.eink=$EINK: staged module load (no power)"
+		/bin/a9-eink load "$EINK" ;;
+	*)	log "a9.eink=$EINK refused (use core or bridge)" ;;
+esac
+
+log "ready; dmesg | grep -i -e fp9929a -e a9-init"
+dmesg > /tmp/dmesg.boot
+while true; do sleep 3600; done

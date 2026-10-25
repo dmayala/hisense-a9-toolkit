@@ -1,0 +1,183 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/*
+ * ATTENDED D2 experiment, included ONLY after a9-adsp-d1.dtsi.
+ * Stock handset: RX_CDC_DMA_RX_0 mono -> RX0 -> EAR_RDAC/RDAC3 RX1.
+ * No AW/ESS output, microphone, headset or jack node is enabled here.
+ * The three custom compatibles require d2-kernel/0001; they are deliberately
+ * distinct from normal mainline bindings. Controller HW0 and WCD EFUSE are
+ * validated at runtime. A compiled DT is not evidence of electrical operation.
+ */
+#include <dt-bindings/clock/qcom,sm6115-lpasscc.h>
+#include <dt-bindings/sound/qcom,q6dsp-lpass-ports.h>
+
+/ {
+	/delete-node/ sound;
+	a9_d2_codec: a9-d2-codec {
+		compatible = "hisense,a9-d2-wcd937x";
+		#sound-dai-cells = <1>;
+		reset-gpios = <&tlmm 92 GPIO_ACTIVE_LOW>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&a9_d2_reset>;
+		/* Exactly stock: rxtx/px L9; buck L14, each 1.8V. No dummy rail. */
+		vdd-rxtx-supply = <&pm6125_l9>;
+		vdd-px-supply = <&pm6125_l9>;
+		vdd-buck-supply = <&a9_d2_l14>;
+		qcom,rx-device = <&a9_d2_rx>;
+		qcom,tx-device = <&a9_d2_tx>;
+	};
+
+	sound {
+		compatible = "hisense,a9-d2-sndcard";
+		model = "A9D2Earpiece";
+		widgets = "Speaker", "Earpiece";
+		audio-routing = "Earpiece", "EAR", "IN1_HPHL", "HPHL_OUT";
+		mm1-dai-link {
+			link-name = "MultiMedia1";
+			cpu { sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA1>; };
+		};
+		ear-playback-dai-link {
+			link-name = "D2 Earpiece Playback";
+			cpu { sound-dai = <&q6afedai RX_CODEC_DMA_RX_0>; };
+			platform { sound-dai = <&q6routing>; };
+			codec {
+				sound-dai = <&a9_d2_codec 0>, <&a9_d2_swr_rx 0>, <&a9_d2_rxmacro 0>;
+			};
+		};
+	};
+};
+
+/* Inherited q6asm child order 0,1,2 stays unchanged; only MM1 is linked. */
+
+&rpm_requests {
+	regulators-0 {
+		a9_d2_l14: l14 {
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+		};
+	};
+};
+
+&tlmm {
+	/* D1 ranges minus TLMM92 only. ESS65/66/68/69 and AW107 stay reserved. */
+	gpio-reserved-ranges = <3 1>, <14 7>, <22 3>, <27 4>, <32 1>,
+		<35 1>, <37 34>, <72 8>, <87 5>, <93 15>, <109 5>;
+	a9_d2_reset: a9-d2-reset-state {
+		pins = "gpio92";
+		function = "gpio";
+		drive-strength = <16>;
+		bias-disable;
+		/* Active-low reset remains asserted until driver validates supplies. */
+		output-low;
+	};
+};
+
+&lpass_tlmm {
+	status = "okay";
+	a9_d2_tx_clk: a9-d2-tx-clk-state {
+		pins = "gpio0"; function = "swr_tx_clk";
+		drive-strength = <10>; slew-rate = <3>; bias-disable;
+	};
+	a9_d2_tx_data: a9-d2-tx-data-state {
+		pins = "gpio1", "gpio2"; function = "swr_tx_data";
+		drive-strength = <10>; slew-rate = <3>; bias-bus-hold;
+	};
+	a9_d2_rx_clk: a9-d2-rx-clk-state {
+		pins = "gpio3"; function = "swr_rx_clk";
+		drive-strength = <10>; slew-rate = <3>; bias-disable;
+	};
+	a9_d2_rx_data: a9-d2-rx-data-state {
+		pins = "gpio4", "gpio5"; function = "swr_rx_data";
+		drive-strength = <10>; slew-rate = <3>; bias-bus-hold;
+	};
+};
+
+&soc {
+	a9_d2_audiocc: clock-controller@a6a9000 {
+		compatible = "qcom,sm6115-lpassaudiocc";
+		reg = <0 0x0a6a9000 0 0x1000>;
+		#reset-cells = <1>;
+	};
+	a9_d2_lpasscc: clock-controller@a7ec000 {
+		compatible = "qcom,sm6115-lpasscc";
+		reg = <0 0x0a7ec000 0 0x1000>;
+		#reset-cells = <1>;
+	};
+	a9_d2_rxmacro: codec@a600000 {
+		compatible = "qcom,sm6115-lpass-rx-macro";
+		reg = <0 0x0a600000 0 0x1000>;
+		#sound-dai-cells = <1>;
+		#clock-cells = <0>;
+		clock-output-names = "a9-d2-rx-mclk";
+		clocks = <&q6afecc LPASS_CLK_ID_RX_CORE_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			<&q6afecc LPASS_CLK_ID_RX_CORE_NPL_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			<&q6afecc LPASS_HW_DCODEC_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			<&a9_d2_vamacro>;
+		clock-names = "mclk", "npl", "dcodec", "fsgen";
+	};
+	a9_d2_vamacro: codec@a730000 {
+		compatible = "qcom,sm6115-lpass-va-macro";
+		reg = <0 0x0a730000 0 0x1000>;
+		#sound-dai-cells = <1>;
+		#clock-cells = <0>;
+		clock-output-names = "a9-d2-fsgen";
+		clocks = <&q6afecc LPASS_CLK_ID_VA_CORE_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			<&q6afecc LPASS_HW_DCODEC_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			<&q6afecc LPASS_CLK_ID_VA_CORE_2X_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
+		clock-names = "mclk", "dcodec", "npl";
+		qcom,dmic-sample-rate = <600000>;
+	};
+	a9_d2_swr_rx: soundwire@a610000 {
+		compatible = "hisense,a9-d2-soundwire";
+		reg = <0 0x0a610000 0 0x2000>;
+		interrupts = <GIC_SPI 297 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&a9_d2_rxmacro>; clock-names = "iface";
+		resets = <&a9_d2_audiocc LPASS_AUDIO_SWR_RX_CGCR>;
+		reset-names = "swr_audio_cgcr";
+		pinctrl-names = "default";
+		pinctrl-0 = <&a9_d2_rx_clk &a9_d2_rx_data>;
+		label = "RX";
+		qcom,din-ports = <0>; qcom,dout-ports = <5>;
+		qcom,ports-sinterval-low = /bits/ 8 <3 31 31 7 0>;
+		qcom,ports-offset1 = /bits/ 8 <0 0 11 1 0>;
+		qcom,ports-offset2 = /bits/ 8 <0 0 11 0 0>;
+		qcom,ports-hstart = /bits/ 8 <255 3 255 255 255>;
+		qcom,ports-hstop = /bits/ 8 <255 6 255 255 255>;
+		qcom,ports-word-length = /bits/ 8 <1 7 4 255 255>;
+		qcom,ports-block-pack-mode = /bits/ 8 <255 0 1 255 255>;
+		qcom,ports-block-group-count = /bits/ 8 <255 255 255 255 0>;
+		qcom,ports-lane-control = /bits/ 8 <1 0 0 0 0>;
+		#sound-dai-cells = <1>; #address-cells = <2>; #size-cells = <0>;
+		a9_d2_rx: codec@0,4 {
+			compatible = "sdw20217010a00"; reg = <0 4>;
+			qcom,rx-port-mapping = <1 2 3 4 5>;
+		};
+	};
+	a9_d2_swr_va: soundwire@a740000 {
+		compatible = "hisense,a9-d2-soundwire";
+		reg = <0 0x0a740000 0 0x2000>;
+		interrupts = <GIC_SPI 296 IRQ_TYPE_LEVEL_HIGH>, <GIC_SPI 79 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&a9_d2_vamacro>; clock-names = "iface";
+		resets = <&a9_d2_lpasscc LPASS_SWR_TX_CONFIG_CGCR>;
+		reset-names = "swr_audio_cgcr";
+		pinctrl-names = "default";
+		pinctrl-0 = <&a9_d2_tx_clk &a9_d2_tx_data>;
+		label = "VA";
+		qcom,din-ports = <3>; qcom,dout-ports = <0>;
+		qcom,ports-sinterval-low = /bits/ 8 <3 3 3>;
+		qcom,ports-offset1 = /bits/ 8 <1 2 1>;
+		qcom,ports-offset2 = /bits/ 8 <0 0 0>;
+		qcom,ports-hstart = /bits/ 8 <255 255 255>;
+		qcom,ports-hstop = /bits/ 8 <255 255 255>;
+		qcom,ports-word-length = /bits/ 8 <255 255 255>;
+		qcom,ports-block-pack-mode = /bits/ 8 <255 255 255>;
+		qcom,ports-block-group-count = /bits/ 8 <255 255 255>;
+		qcom,ports-lane-control = /bits/ 8 <0 0 0>;
+		#sound-dai-cells = <1>; #address-cells = <2>; #size-cells = <0>;
+		a9_d2_tx: codec@0,3 {
+			compatible = "sdw20217010a00"; reg = <0 3>;
+			/* Stock codecport ADC1->VA1, ADC23->VA2,
+			 * DMIC03/MBHC and DMIC46->VA3. No TX stream is linked. */
+			qcom,tx-port-mapping = <1 2 3 3>;
+		};
+	};
+};

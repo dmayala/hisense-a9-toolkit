@@ -1,0 +1,13 @@
+hisense-a9-toolkit
+Copyright 2026 dmayala
+
+Licensed under the Apache License, Version 2.0 (LICENSE), except:
+- kernel patches and drivers (scripts/mainline/**/*.patch, scripts/mainline/*/driver/)
+  are GPL-2.0-only, as are the Linux headers they carry;
+- scripts/mainline/boot-deadline/policy-platform/*.cil.gz are AOSP SELinux policy
+  (Apache-2.0, The Android Open Source Project);
+- tools/mkbootimg.py and tools/gki/ are from AOSP (Apache-2.0).
+
+This repository contains no Hisense or Qualcomm firmware unless listed above.
+Device firmware, vendor binaries and the E Ink waveform are extracted by the
+user from their own phone and are not redistributed here.

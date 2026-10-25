@@ -1,0 +1,161 @@
+From fa1fe6dadf20506e7e234c147224c983844f5c95 Mon Sep 17 00:00:00 2001
+From: A9 GPU agent <noreply@anthropic.com>
+Date: Thu, 15 Oct 2026 22:00:47 -0700
+Subject: [PATCH] drm/vkms: optional write-combined, pinned dumb buffers for
+ GPU import
+
+A9 mainline Android GPU mode (opt-in, default off): minigbm allocates the
+Android buffers as vkms dumb buffers and Mesa freedreno renders into them
+through the Adreno 610's SMMU, which is not I/O coherent. The shmem pages are
+mapped cacheable and the generic PRIME exporter has no begin/end_cpu_access,
+so a CPU reader (a9_eink's vmap of the imported framebuffer, a gralloc lock
+for screencap) could read stale lines, and dirty lines left by page zeroing
+could later be evicted over GPU output.
+
+vkms.map_wc=1 (writable at runtime; only buffers created afterwards change)
+makes new dumb buffers write-combined for user mmap and kernel vmap, pins
+their pages at creation and cleans+invalidates them from the CPU caches once.
+Imported objects are unchanged (the shmem helper keeps map_wc off for them).
+On arm64 the cache maintenance needs dcache_clean_inval_poc(), so the option
+is ignored unless vkms is built in.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/vkms/vkms_drv.c | 111 +++++++++++++++++++++++++++++++-
+ 1 file changed, 110 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/vkms/vkms_drv.c b/drivers/gpu/drm/vkms/vkms_drv.c
+index 5a640b531..f0ba8fc1b 100644
+--- a/drivers/gpu/drm/vkms/vkms_drv.c
++++ b/drivers/gpu/drm/vkms/vkms_drv.c
+@@ -12,6 +12,8 @@
+ #include <linux/module.h>
+ #include <linux/device/faux.h>
+ #include <linux/dma-mapping.h>
++#include <linux/slab.h>
++#include <asm/cacheflush.h>
+ 
+ #include <drm/clients/drm_client_setup.h>
+ #include <drm/drm_gem.h>
+@@ -90,10 +92,117 @@ static void vkms_atomic_commit_tail(struct drm_atomic_commit *old_state)
+ 	drm_atomic_helper_cleanup_planes(dev, old_state);
+ }
+ 
++/*
++ * map_wc (default off): give NEW dumb buffers write-combined CPU mappings
++ * (user mmap and kernel vmap) and pin their pages at creation, after cleaning
++ * and invalidating them from the CPU caches once. For a non-coherent GPU
++ * (e.g. Adreno through its SMMU) that imports these buffers as dma-bufs: the
++ * shmem pages are otherwise mapped cacheable, the generic PRIME exporter has
++ * no begin/end_cpu_access, and a CPU reader (an importing KMS driver's vmap,
++ * a gralloc lock) could see stale lines or evict dirty zero lines over GPU
++ * output. Only buffers created while the parameter is set are affected;
++ * imported objects never are (the shmem helper keeps map_wc off for them).
++ * The cache maintenance needs the arch helper, so on arm64 the option
++ * requires vkms to be built in; elsewhere (x86) the shmem helper already
++ * switches the pages to WC.
++ */
++static bool vkms_map_wc;
++module_param_named(map_wc, vkms_map_wc, bool, 0644);
++MODULE_PARM_DESC(map_wc, "Write-combined, pinned, cache-cleaned dumb buffers for non-coherent GPU import (default off)");
++
++#define VKMS_WC_SUPPORTED (!IS_ENABLED(CONFIG_ARM64) || IS_BUILTIN(CONFIG_DRM_VKMS))
++
++struct vkms_gem_object {
++	struct drm_gem_shmem_object shmem;	/* first: freed with kfree(shmem) */
++	bool wc_pinned;
++};
++
++static struct vkms_gem_object *to_vkms_gem(struct drm_gem_object *obj)
++{
++	return container_of(to_drm_gem_shmem_obj(obj), struct vkms_gem_object, shmem);
++}
++
++static void vkms_gem_free(struct drm_gem_object *obj)
++{
++	struct vkms_gem_object *vo = to_vkms_gem(obj);
++
++	if (vo->wc_pinned)
++		drm_gem_shmem_unpin(&vo->shmem);
++	drm_gem_shmem_free(&vo->shmem);
++}
++
++static const struct drm_gem_object_funcs vkms_gem_funcs = {
++	.free = vkms_gem_free,
++	.print_info = drm_gem_shmem_object_print_info,
++	.pin = drm_gem_shmem_object_pin,
++	.unpin = drm_gem_shmem_object_unpin,
++	.get_sg_table = drm_gem_shmem_object_get_sg_table,
++	.vmap = drm_gem_shmem_object_vmap,
++	.vunmap = drm_gem_shmem_object_vunmap,
++	.mmap = drm_gem_shmem_object_mmap,
++	.vm_ops = &drm_gem_shmem_vm_ops,
++};
++
++static struct drm_gem_object *vkms_gem_create_object(struct drm_device *dev, size_t size)
++{
++	struct vkms_gem_object *vo = kzalloc(sizeof(*vo), GFP_KERNEL);
++
++	if (!vo)
++		return ERR_PTR(-ENOMEM);
++	vo->shmem.base.funcs = &vkms_gem_funcs;
++	/* reset to false by the shmem helper for imported (private) objects */
++	vo->shmem.map_wc = VKMS_WC_SUPPORTED && READ_ONCE(vkms_map_wc);
++	return &vo->shmem.base;
++}
++
++static void vkms_gem_clean_pages(struct drm_gem_shmem_object *shmem)
++{
++#if defined(CONFIG_ARM64) && IS_BUILTIN(CONFIG_DRM_VKMS)
++	pgoff_t i, n = shmem->base.size >> PAGE_SHIFT;
++
++	for (i = 0; i < n; i++) {
++		unsigned long va = (unsigned long)page_address(shmem->pages[i]);
++
++		dcache_clean_inval_poc(va, va + PAGE_SIZE);
++	}
++#endif
++}
++
++static int vkms_dumb_create(struct drm_file *file, struct drm_device *dev,
++			    struct drm_mode_create_dumb *args)
++{
++	struct drm_gem_object *obj;
++	struct vkms_gem_object *vo;
++	int ret;
++
++	ret = drm_gem_shmem_dumb_create(file, dev, args);
++	if (ret)
++		return ret;
++	obj = drm_gem_object_lookup(file, args->handle);
++	if (!obj)
++		return -ENOENT;
++	vo = to_vkms_gem(obj);
++	if (vo->shmem.map_wc) {
++		/* pages are zeroed through the cacheable linear map: pin them
++		 * now and push those lines out before any WC or device access */
++		ret = drm_gem_shmem_pin(&vo->shmem);
++		if (!ret) {
++			vo->wc_pinned = true;
++			vkms_gem_clean_pages(&vo->shmem);
++		}
++	}
++	drm_gem_object_put(obj);
++	if (ret)
++		drm_gem_handle_delete(file, args->handle);
++	return ret;
++}
++
+ static const struct drm_driver vkms_driver = {
+ 	.driver_features	= DRIVER_MODESET | DRIVER_ATOMIC | DRIVER_GEM,
+ 	.fops			= &vkms_driver_fops,
+-	DRM_GEM_SHMEM_DRIVER_OPS,
++	.gem_prime_import	= drm_gem_shmem_prime_import_no_map,
++	.gem_create_object	= vkms_gem_create_object,
++	.dumb_create		= vkms_dumb_create,
+ 	DRM_FBDEV_SHMEM_DRIVER_OPS,
+ 
+ 	.name			= DRIVER_NAME,
+-- 
+2.51.0
+

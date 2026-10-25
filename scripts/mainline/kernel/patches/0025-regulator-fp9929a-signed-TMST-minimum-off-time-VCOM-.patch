@@ -1,0 +1,309 @@
+From 847855ba748de8902bbec4127e87ab78ca59c6c4 Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 09:03:45 -0700
+Subject: [PATCH] regulator: fp9929a: signed TMST, minimum off time, VCOM
+ readback; drm/a9_eink: refuse below 0 C
+
+From the FP9929A datasheet (rev 1.1) review for the Hisense A9:
+
+- TMST (register 0) is a signed byte (0xf6 = -10 C, 0xff = -1 C): decode
+  as s8 after the I2C error check. The range policy stays in the consumer:
+  a9_eink now refuses an update when the FP9929A or the PMI632 thermistor
+  reads below 0 C (the composer's bins start at 0 C; the panel's cold
+  rating is unknown) instead of mapping it to 0.
+- Fig. 5: VGL needs VLD >= 500 ms to discharge to -7.4 V after power-off.
+  New min_off_ms (500..10000, default 1000, 0 refused): a power-up within
+  that time of the last completed power-down (this driver's, including the
+  probe's power-down of bootloader-left rails and the max_on fallback)
+  waits, checking the gate every 20 ms (-EPERM if it closes), so rapid
+  update cycling cannot re-energize undischarged rails. The wait counts as
+  an in-flight enable for allow_power_on=0.
+- After the VCOM write (PWRUP up): register 1 bit 0 must read 1 (VCOM from
+  the I2C DAC, the reset default; never written) and register 2 must read
+  back the code (5 tries each); otherwise the ordered power-down runs and
+  the power-up fails with -EIO.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c |  20 +++-
+ drivers/regulator/fp9929a.c           | 137 +++++++++++++++++++++++++-
+ 2 files changed, 154 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index 95ec1de5a..ac6d12629 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -125,6 +125,13 @@ MODULE_PARM_DESC(any_mode, "Testing: accept any stock mode word in sysfs mode, n
+ #define A9_MODE_DEFAULT 518	/* Smooth, the compat contract default */
+ #define A9_MODE_CLEAR 0x203	/* force_clear: Clear + clear flag = type-2 table */
+ #define A9_DRAIN_MS 15000
++/*
++ * Lowest panel temperature this driver drives at. The FP9929A reports a
++ * signed TMST (datasheet: 0xf6 = -10 C) and the PMI632 thermistor can read
++ * below zero; the composer's temperature bins start at 0 C and the panel's
++ * cold rating is unknown, so below this nothing is driven (no clamp to 0).
++ */
++#define A9_TEMP_MIN_C 0
+ 
+ static inline struct a9_eink *to_a9(struct drm_device *d)
+ {
+@@ -497,7 +504,9 @@ static void a9_temps(struct a9_eink *a9, int *t1, int *t2)
+ 	a9->last.t1_raw = INT_MIN;
+ 	if (!fp9929a_get_status(a9->pmic_np, &st) && st.temp_valid) {
+ 		a9->last.t1_raw = st.temp_c;
+-		*t1 = st.temp_c > 85 ? 0 : st.temp_c;	/* composer: above 85 reads as 0 */
++		/* composer compatibility (it saw TMST as unsigned): above 85 reads
++		 * as 0; negative values are refused in a9_update(), not mapped */
++		*t1 = st.temp_c > 85 ? 0 : st.temp_c;
+ 	}
+ 	/* t2: PMI632 epd_top_therm in m deg C (mainline interpolates in mV, stock
+ 	 * in uV: up to 73 m deg C apart, a different integer for ~3% of codes) */
+@@ -652,6 +661,15 @@ static void a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 		}
+ 	}
+ 	a9_temps(a9, &t1, &t2);	/* t1 was sampled by the FP9929A at this power-up */
++	if ((a9->last.t1_raw != INT_MIN && a9->last.t1_raw < A9_TEMP_MIN_C) ||
++	    (a9->last.t2_raw != INT_MIN && a9->last.t2_raw < A9_TEMP_MIN_C * 1000)) {
++		dev_err(a9->dev, "panel temperature below %d C (FP9929A %d C, epd_therm %d mC): update refused\n",
++			A9_TEMP_MIN_C, a9->last.t1_raw, a9->last.t2_raw);
++		a9->aborts++;
++		if (!dry)
++			a9_power_off(a9);
++		return;
++	}
+ 
+ 	if (!dry && READ_ONCE(zero_test)) {
+ 		unsigned int i, n = min(READ_ONCE(zero_test), 850U);	/* <= 10 s at 85 Hz */
+diff --git a/drivers/regulator/fp9929a.c b/drivers/regulator/fp9929a.c
+index 86f1b814f..0179c5a77 100644
+--- a/drivers/regulator/fp9929a.c
++++ b/drivers/regulator/fp9929a.c
+@@ -27,6 +27,13 @@
+  *  - probe never talks I2C; it only takes the GPIOs and, if the bootloader left
+  *    the rails up, runs the power-DOWN sequence above;
+  *  - shutdown/remove always power down;
++ *  - VCOM check: after the VCOM write, register 1 bit 0 (VCOM from the I2C DAC,
++ *    reset default, never written) and the register 2 readback must match,
++ *    else the power-up is refused (-EIO) with the ordered power-down;
++ *  - minimum off time: fp9929a.min_off_ms (500..10000, default 1000) from the
++ *    last completed power-down to the next energize (datasheet VGL discharge
++ *    VLD >= 500 ms); an earlier power-up waits, checking the gate;
++ *  - TMST (register 0) is a signed byte; range policy belongs to the consumer;
+  *  - hard on-time limit: fp9929a.max_on_ms (1..20000, default 20000), counted
+  *    from the moment PWRUP is first raised (so it also covers a power-up
+  *    that stalls, e.g. in I2C). If the rails are still energized that long
+@@ -65,12 +72,14 @@
+  */
+ 
+ #include <linux/atomic.h>
++#include <linux/bits.h>
+ #include <linux/delay.h>
+ #include <linux/devm-helpers.h>
+ #include <linux/gpio/consumer.h>
+ #include <linux/hwmon.h>
+ #include <linux/i2c.h>
+ #include <linux/ktime.h>
++#include <linux/minmax.h>
+ #include <linux/module.h>
+ #include <linux/mutex.h>
+ #include <linux/notifier.h>
+@@ -83,7 +92,9 @@
+ #include <linux/wait_bit.h>
+ #include <linux/workqueue.h>
+ 
+-#define FP9929A_REG_TMST	0x00	/* temperature, unsigned deg C */
++#define FP9929A_REG_TMST	0x00	/* temperature, SIGNED deg C (datasheet: 0xf6 = -10) */
++#define FP9929A_REG_FUNC	0x01	/* FUNC_ADJUST; bit 0 = 1: VCOM from the I2C DAC (reset 1) */
++#define FP9929A_FUNC_VCOM_I2C	BIT(0)
+ #define FP9929A_REG_VCOM	0x02	/* VCOM code */
+ 
+ #define FP9929A_VCOM_DEFAULT_MV	2650
+@@ -203,6 +214,8 @@ struct fp9929a {
+ 	bool forced_off;	/* max_on_ms fault latched */
+ 	int forced_gen;		/* fp9929a_clear_gen when it latched */
+ 	unsigned int max_on_ms;	/* limit armed by the current power-up */
++	bool off_valid;		/* off_at holds a power-down done by this driver */
++	ktime_t off_at;		/* when PWRUP last went low (power-down completed) */
+ 	struct delayed_work max_on_work;
+ 	struct notifier_block panic_nb;
+ 	bool have_temp;
+@@ -250,6 +263,38 @@ module_param_cb(max_on_ms, &fp9929a_max_on_ops, &max_on_ms, 0644);
+ MODULE_PARM_DESC(max_on_ms,
+ 		 "Force the E Ink rails down and latch a fault this long after a power-up starts (ms, 1..20000, default 20000; read at each power-up, refused while energized)");
+ 
++/*
++ * min_off_ms: minimum time from the last completed power-down to the next
++ * energize. Datasheet fig. 5: VGL needs VLD >= 500 ms to discharge to -7.4 V
++ * after power-off; a power-up inside that window waits (checking the gate
++ * every 20 ms) instead of re-energizing rails that may not have discharged.
++ * 500..10000 ms, default 1000; 0 is refused, there is no "off".
++ */
++#define FP9929A_MIN_OFF_MIN	500
++#define FP9929A_MIN_OFF_MAX	10000
++static unsigned int min_off_ms = 1000;
++
++static int fp9929a_min_off_set(const char *val, const struct kernel_param *kp)
++{
++	unsigned int v;
++	int ret = kstrtouint(val, 0, &v);
++
++	if (ret)
++		return ret;
++	if (v < FP9929A_MIN_OFF_MIN || v > FP9929A_MIN_OFF_MAX)
++		return -EINVAL;
++	WRITE_ONCE(min_off_ms, v);
++	return 0;
++}
++
++static const struct kernel_param_ops fp9929a_min_off_ops = {
++	.set = fp9929a_min_off_set,
++	.get = param_get_uint,
++};
++module_param_cb(min_off_ms, &fp9929a_min_off_ops, &min_off_ms, 0644);
++MODULE_PARM_DESC(min_off_ms,
++		 "Minimum time from a completed power-down to the next power-up (ms, 500..10000, default 1000; datasheet VGL discharge >= 500 ms)");
++
+ static u8 fp9929a_vcom_code(unsigned int mv)
+ {
+ 	if (mv < FP9929A_VCOM_MIN_MV || mv >= FP9929A_VCOM_MAX_MV)
+@@ -281,12 +326,20 @@ static unsigned int fp9929a_vcom_from_cmdline(void)
+ }
+ 
+ /* called with lock held */
++/* PWRUP has just gone low: the discharge interval (min_off_ms) starts now */
++static void fp9929a_mark_off(struct fp9929a *fp)
++{
++	WRITE_ONCE(fp->off_at, ktime_get());
++	WRITE_ONCE(fp->off_valid, true);
++}
++
+ static void fp9929a_power_down(struct fp9929a *fp)
+ {
+ 	usleep_range(1000, 1100);
+ 	gpiod_set_value_cansleep(fp->vcom_en, 0);
+ 	usleep_range(50000, 50100);
+ 	gpiod_set_value_cansleep(fp->pwrup, 0);
++	fp9929a_mark_off(fp);
+ 	fp->on = false;
+ 	WRITE_ONCE(fp->energized, false);
+ }
+@@ -379,6 +432,7 @@ static void fp9929a_max_on_work(struct work_struct *work)
+ 			gpiod_set_value_cansleep(fp->vcom_en, 0);
+ 			msleep(50);
+ 			gpiod_set_value_cansleep(fp->pwrup, 0);
++			fp9929a_mark_off(fp);
+ 			dev_crit(fp->dev, "max_on_ms %u expired with the lock held: E Ink pins dropped\n",
+ 				 fp->max_on_ms);
+ 		}
+@@ -398,6 +452,71 @@ static void fp9929a_max_on_work(struct work_struct *work)
+ 	mutex_unlock(&fp->lock);
+ }
+ 
++/*
++ * Called with fp->lock held (nothing energized): if the last power-down
++ * completed less than min_off_ms ago, wait the rest, ending early (-EPERM)
++ * if the gate closes meanwhile. The waiting power-up counts as in flight,
++ * so allow_power_on=0 still waits for it (up to its 2 s quiescence limit).
++ */
++static int fp9929a_min_off_wait(struct fp9929a *fp)
++{
++	unsigned int min = READ_ONCE(min_off_ms);
++	s64 left;
++
++	if (!READ_ONCE(fp->off_valid))
++		return 0;
++	left = (s64)min - ktime_ms_delta(ktime_get(), READ_ONCE(fp->off_at));
++	if (left <= 0)
++		return 0;
++	dev_info(fp->dev, "power-up waits %lld ms: min_off_ms %u since the last power-down\n",
++		 left, min);
++	while (left > 0) {
++		if (!READ_ONCE(allow_power_on)) {
++			dev_warn(fp->dev, "power-up refused during the min_off wait: allow_power_on closed\n");
++			return -EPERM;
++		}
++		msleep(min_t(s64, left, 20));
++		left = (s64)min - ktime_ms_delta(ktime_get(), READ_ONCE(fp->off_at));
++	}
++	return 0;
++}
++
++static int fp9929a_read_reg(struct fp9929a *fp, u8 reg)
++{
++	int i, ret = -EIO;
++
++	for (i = 0; i < FP9929A_I2C_TRIES; i++) {
++		ret = i2c_smbus_read_byte_data(fp->client, reg);
++		if (ret >= 0)
++			return ret;
++		usleep_range(1000, 1100);
++	}
++	return ret;
++}
++
++/*
++ * After the VCOM write, with PWRUP up: register 1 bit 0 must already select
++ * the I2C DAC (reset default; never written here) and register 2 must read
++ * back the code just written. A write the bus acknowledged is not yet
++ * evidence of the setting; any mismatch or read error refuses the power-up.
++ */
++static int fp9929a_check_vcom(struct fp9929a *fp)
++{
++	int func = fp9929a_read_reg(fp, FP9929A_REG_FUNC);
++	int vcom;
++
++	if (func < 0 || !(func & FP9929A_FUNC_VCOM_I2C)) {
++		dev_err(fp->dev, "register 1 = %d: VCOM not selected from I2C (bit 0), powering down\n", func);
++		return -EIO;
++	}
++	vcom = fp9929a_read_reg(fp, FP9929A_REG_VCOM);
++	if (vcom != fp->vcom_code) {
++		dev_err(fp->dev, "VCOM readback %d != code 0x%02x, powering down\n", vcom, fp->vcom_code);
++		return -EIO;
++	}
++	return 0;
++}
++
+ static int fp9929a_write_vcom(struct fp9929a *fp)
+ {
+ 	int i, ret = -EIO;
+@@ -482,6 +601,11 @@ static int __fp9929a_enable(struct fp9929a *fp)
+ 				    "power-up refused: max_on_ms fault latched (disable, or write 1 to clear_fault)\n");
+ 		return -EIO;
+ 	}
++	ret = fp9929a_min_off_wait(fp);
++	if (ret) {
++		mutex_unlock(&fp->lock);
++		return ret;
++	}
+ 
+ 	fp->have_temp = false;	/* only this power-up's sample counts */
+ 	WRITE_ONCE(fp->expired, false);	/* nothing is energized here */
+@@ -511,10 +635,17 @@ static int __fp9929a_enable(struct fp9929a *fp)
+ 		mutex_unlock(&fp->lock);
+ 		return ret;
+ 	}
++	ret = fp9929a_check_vcom(fp);
++	if (ret) {
++		fp9929a_abort_power_up(fp);
++		mutex_unlock(&fp->lock);
++		return ret;
++	}
+ 
+ 	ret = i2c_smbus_read_byte_data(fp->client, FP9929A_REG_TMST);
+ 	if (ret >= 0) {
+-		fp->temp_c = ret;	/* unsigned in the vendor driver */
++		/* signed byte (datasheet: 0xff = -1 C); policy is the consumer's */
++		fp->temp_c = (s8)ret;
+ 		fp->have_temp = true;
+ 	}
+ 	usleep_range(20000, 20100);
+@@ -733,6 +864,8 @@ static int fp9929a_probe(struct i2c_client *client)
+ 		usleep_range(50000, 50100);
+ 	}
+ 	gpiod_direction_output(fp->pwrup, 0);
++	if (up > 0 || com > 0)
++		fp9929a_mark_off(fp);	/* the discharge interval applies here too */
+ 	fp->on = false;
+ 	fp->energized = false;
+ 

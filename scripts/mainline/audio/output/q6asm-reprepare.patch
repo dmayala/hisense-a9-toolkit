@@ -1,0 +1,25 @@
+--- a/q6asm-dai.c
++++ b/q6asm-dai.c
+@@ -242,6 +242,9 @@
+ 		prtd->state = Q6ASM_STREAM_STOPPED;
+ 	}
+ 
++	/* ALSA resets appl_ptr on PREPARE; start the new queue at the same origin. */
++	prtd->queue_ptr = 0;
++
+ 	ret = q6asm_map_memory_regions(substream->stream, prtd->audio_client,
+ 				       prtd->phys,
+ 				       (prtd->pcm_size / prtd->periods),
+--- a/q6asm.c
++++ b/q6asm.c
+@@ -514,6 +514,10 @@
+ 
+ 	ac->port[dir].buf = buf;
+ 
++	/* A fresh mapping starts at period zero, including XRUN recovery. */
++	ac->port[dir].dsp_buf = 0;
++	atomic_set(&ac->port[dir].hw_ptr, 0);
++
+ 	buf[0].phys = phys;
+ 	buf[0].size = period_sz;
+ 

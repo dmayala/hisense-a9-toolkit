@@ -1,0 +1,284 @@
+From 942b2c3a2047512092d6eeaef1244481dba7b34b Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 19:07:55 -0700
+Subject: [PATCH 3/9] drm/panel: add Hisense A9 (HLTE556N) E Ink transport
+ panel skeleton
+
+448x829@85 DPI transport mode behind the TC358767, panel power lines and the
+FP9929A supply. prepare is refused unless enable=1.
+---
+ drivers/gpu/drm/panel/Kconfig                 |  10 +
+ drivers/gpu/drm/panel/Makefile                |   1 +
+ .../drm/panel/panel-hisense-hlte556n-eink.c   | 230 ++++++++++++++++++
+ 3 files changed, 241 insertions(+)
+ create mode 100644 drivers/gpu/drm/panel/panel-hisense-hlte556n-eink.c
+
+diff --git a/drivers/gpu/drm/panel/Kconfig b/drivers/gpu/drm/panel/Kconfig
+index 3eac4d0f8..77a03ad62 100644
+--- a/drivers/gpu/drm/panel/Kconfig
++++ b/drivers/gpu/drm/panel/Kconfig
+@@ -187,6 +187,16 @@ config DRM_PANEL_LVDS
+ 	  handling of power supplies or control signals. It implements automatic
+ 	  backlight handling if the panel is attached to a backlight controller.
+ 
++config DRM_PANEL_HISENSE_HLTE556N_EINK
++	tristate "Hisense A9 (HLTE556N) E Ink transport panel"
++	depends on OF && GPIOLIB && REGULATOR
++	depends on DRM_PANEL
++	help
++	  The 448x829@85 DPI "transport" mode that carries software-TCON
++	  drive frames to the Hisense A9 E Ink panel behind a TC358767
++	  bridge, plus the panel power lines and the FP9929A supply.
++	  Refuses to power the panel unless enable=1 is given.
++
+ config DRM_PANEL_HIMAX_HX8279
+ 	tristate "Himax HX8279-based panels"
+ 	depends on OF
+diff --git a/drivers/gpu/drm/panel/Makefile b/drivers/gpu/drm/panel/Makefile
+index c2c5cf817..eeb326ba3 100644
+--- a/drivers/gpu/drm/panel/Makefile
++++ b/drivers/gpu/drm/panel/Makefile
+@@ -19,6 +19,7 @@ obj-$(CONFIG_DRM_PANEL_ELIDA_KD35T133) += panel-elida-kd35t133.o
+ obj-$(CONFIG_DRM_PANEL_FEIXIN_K101_IM2BA02) += panel-feixin-k101-im2ba02.o
+ obj-$(CONFIG_DRM_PANEL_FEIYANG_FY07024DI26A30D) += panel-feiyang-fy07024di26a30d.o
+ obj-$(CONFIG_DRM_PANEL_FOCALTECH_OTA7290B) += panel-focaltech-ota7290b.o
++obj-$(CONFIG_DRM_PANEL_HISENSE_HLTE556N_EINK) += panel-hisense-hlte556n-eink.o
+ obj-$(CONFIG_DRM_PANEL_HIMAX_HX8279) += panel-himax-hx8279.o
+ obj-$(CONFIG_DRM_PANEL_HIMAX_HX83102) += panel-himax-hx83102.o
+ obj-$(CONFIG_DRM_PANEL_HIMAX_HX83112A) += panel-himax-hx83112a.o
+diff --git a/drivers/gpu/drm/panel/panel-hisense-hlte556n-eink.c b/drivers/gpu/drm/panel/panel-hisense-hlte556n-eink.c
+new file mode 100644
+index 000000000..f70022a5b
+--- /dev/null
++++ b/drivers/gpu/drm/panel/panel-hisense-hlte556n-eink.c
+@@ -0,0 +1,230 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Hisense A9 (HLTE556N) E Ink panel, as seen behind its TC358767 DSI->DPI
++ * bridge. SKELETON, never run on hardware (2026-10-14).
++ *
++ * What this "panel" is: the 824x1648 E Ink glass has no timing controller of
++ * its own. A software TCON in userspace turns each grey image into a series of
++ * waveform "drive frames" and scans them out through the DSI->DPI bridge to the
++ * panel's source drivers. The DRM side therefore sees a fixed transport mode:
++ *
++ *   448x829 @ 85 Hz, XRGB8888, pixel clock 40.078 MHz
++ *   (h 448 + fp 80 + sync 4 + bp 30, v 829 + fp 4 + sync 2 + bp 4)
++ *
++ * USERSPACE INTERFACE (what the TCON must do; nothing here depends on it):
++ *  - open the KMS device of the MDSS, use the one connector/mode this panel
++ *    exposes, scan out 448x829 XRGB8888 frames, one per vblank;
++ *  - the drive data rides in byte 0 of every 32-bit pixel: rows 0..4 blank,
++ *    rows 5..828 words 0..411 = 4 E Ink pixels as 2-bit codes
++ *    (p0<<6 | p1<<4 | p2<<2 | p3), words 412..447 zero, bytes 1..3 zero
++ *    (scripts/mainline/a9tcon.py, docs/mainline-plan.md section 4);
++ *  - the E Ink high voltage is up exactly while the CRTC is active: the TCON
++ *    enables the CRTC for an update, sends the frames, ENDS WITH AN ALL-ZERO
++ *    FRAME (no drive), then disables the CRTC (DPMS off), which powers the
++ *    FP9929A down. Never leave a non-zero frame on screen with the CRTC active.
++ *
++ * Panel control lines (vendor qcom,mdss_dsi_epd_eink_fhdhs_video): xon,
++ * epd-power-on, xoe, mode and the unexplained i2c-mux-sel. The vendor kernel
++ * raises them, waits 10 ms, then powers the FP9929A before the bridge init
++ * (dsi_panel_power_on / dsi_panel_enable). This driver keeps that order:
++ * prepare = lines up, 10 ms, FP9929A on; unprepare = FP9929A off, mux low.
++ * The 1.8 V lines stay up after unprepare, as on stock (they are only dropped
++ * on an explicit request there, and the A6L port warns against it).
++ *
++ * SAFETY: prepare is refused unless panel_hisense_hlte556n_eink.enable=1 (and
++ * the FP9929A has its own fp9929a.allow_power_on gate). Probe drives nothing.
++ */
++
++#include <linux/delay.h>
++#include <linux/gpio/consumer.h>
++#include <linux/media-bus-format.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/regulator/consumer.h>
++
++#include <drm/drm_connector.h>
++#include <drm/drm_modes.h>
++#include <drm/drm_panel.h>
++
++static bool enable;
++module_param(enable, bool, 0644);
++MODULE_PARM_DESC(enable, "Allow the E Ink panel to be powered and driven (default: no)");
++
++struct a9_eink {
++	struct drm_panel panel;
++	struct device *dev;
++	struct regulator *vpanel;	/* FP9929A */
++	struct gpio_desc *xon, *power, *xoe, *mode, *mux;
++	bool powered;
++};
++
++static inline struct a9_eink *to_a9(struct drm_panel *p)
++{
++	return container_of(p, struct a9_eink, panel);
++}
++
++static const struct drm_display_mode a9_eink_mode = {
++	.clock = 40078,
++	.hdisplay = 448,
++	.hsync_start = 448 + 80,
++	.hsync_end = 448 + 80 + 4,
++	.htotal = 448 + 80 + 4 + 30,
++	.vdisplay = 829,
++	.vsync_start = 829 + 4,
++	.vsync_end = 829 + 4 + 2,
++	.vtotal = 829 + 4 + 2 + 4,
++	/* vendor bridge POCTRL = 0x86: VS_POL | HS_POL set (active low) */
++	.flags = DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC,
++	.width_mm = 76,
++	.height_mm = 152,
++};
++
++static void a9_lines(struct a9_eink *a9, int v)
++{
++	/* vendor order: power-on, xoe, mode, xon (then vddc/mux) */
++	gpiod_direction_output(a9->power, v);
++	gpiod_direction_output(a9->xoe, v);
++	gpiod_direction_output(a9->mode, v);
++	gpiod_direction_output(a9->xon, v);
++}
++
++static int a9_eink_prepare(struct drm_panel *panel)
++{
++	struct a9_eink *a9 = to_a9(panel);
++	int ret;
++
++	if (!enable) {
++		dev_warn(a9->dev,
++			 "refusing to power the E Ink panel: boot with panel_hisense_hlte556n_eink.enable=1\n");
++		return -EPERM;
++	}
++
++	a9_lines(a9, 1);
++	if (a9->mux)
++		gpiod_direction_output(a9->mux, 1);
++	usleep_range(10000, 10010);
++
++	ret = regulator_enable(a9->vpanel);
++	if (ret) {
++		dev_err(a9->dev, "FP9929A power-up failed: %d\n", ret);
++		if (a9->mux)
++			gpiod_set_value_cansleep(a9->mux, 0);
++		return ret;
++	}
++	a9->powered = true;
++	return 0;
++}
++
++static int a9_eink_unprepare(struct drm_panel *panel)
++{
++	struct a9_eink *a9 = to_a9(panel);
++
++	if (a9->powered) {
++		regulator_disable(a9->vpanel);
++		a9->powered = false;
++	}
++	if (a9->mux)
++		gpiod_set_value_cansleep(a9->mux, 0);
++	return 0;
++}
++
++static int a9_eink_get_modes(struct drm_panel *panel,
++			     struct drm_connector *connector)
++{
++	static const u32 bus_format = MEDIA_BUS_FMT_RGB888_1X24;
++	struct drm_display_mode *mode;
++
++	mode = drm_mode_duplicate(connector->dev, &a9_eink_mode);
++	if (!mode)
++		return -ENOMEM;
++	drm_mode_set_name(mode);
++	mode->type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
++	drm_mode_probed_add(connector, mode);
++
++	connector->display_info.bpc = 8;
++	connector->display_info.width_mm = a9_eink_mode.width_mm;
++	connector->display_info.height_mm = a9_eink_mode.height_mm;
++	drm_display_info_set_bus_formats(&connector->display_info, &bus_format, 1);
++	return 1;
++}
++
++static const struct drm_panel_funcs a9_eink_funcs = {
++	.prepare = a9_eink_prepare,
++	.unprepare = a9_eink_unprepare,
++	.get_modes = a9_eink_get_modes,
++};
++
++static int a9_eink_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct a9_eink *a9;
++
++	a9 = devm_drm_panel_alloc(dev, struct a9_eink, panel, &a9_eink_funcs,
++				  DRM_MODE_CONNECTOR_DPI);
++	if (IS_ERR(a9))
++		return PTR_ERR(a9);
++	a9->dev = dev;
++
++	a9->vpanel = devm_regulator_get(dev, "vpanel");
++	if (IS_ERR(a9->vpanel))
++		return dev_err_probe(dev, PTR_ERR(a9->vpanel), "vpanel supply\n");
++
++	/* ASIS: probe must not drive anything */
++	a9->xon = devm_gpiod_get(dev, "xon", GPIOD_ASIS);
++	if (IS_ERR(a9->xon))
++		return dev_err_probe(dev, PTR_ERR(a9->xon), "xon gpio\n");
++	a9->power = devm_gpiod_get(dev, "power", GPIOD_ASIS);
++	if (IS_ERR(a9->power))
++		return dev_err_probe(dev, PTR_ERR(a9->power), "power gpio\n");
++	a9->xoe = devm_gpiod_get(dev, "xoe", GPIOD_ASIS);
++	if (IS_ERR(a9->xoe))
++		return dev_err_probe(dev, PTR_ERR(a9->xoe), "xoe gpio\n");
++	a9->mode = devm_gpiod_get(dev, "mode", GPIOD_ASIS);
++	if (IS_ERR(a9->mode))
++		return dev_err_probe(dev, PTR_ERR(a9->mode), "mode gpio\n");
++	a9->mux = devm_gpiod_get_optional(dev, "mux", GPIOD_ASIS);
++	if (IS_ERR(a9->mux))
++		return dev_err_probe(dev, PTR_ERR(a9->mux), "mux gpio\n");
++
++	platform_set_drvdata(pdev, a9);
++	drm_panel_add(&a9->panel);
++	dev_info(dev, "E Ink transport panel 448x829@85; driving %s\n",
++		 enable ? "ALLOWED" : "refused (safe default)");
++	return 0;
++}
++
++static void a9_eink_remove(struct platform_device *pdev)
++{
++	struct a9_eink *a9 = platform_get_drvdata(pdev);
++
++	drm_panel_remove(&a9->panel);
++	a9_eink_unprepare(&a9->panel);
++}
++
++static void a9_eink_shutdown(struct platform_device *pdev)
++{
++	struct a9_eink *a9 = platform_get_drvdata(pdev);
++
++	a9_eink_unprepare(&a9->panel);
++}
++
++static const struct of_device_id a9_eink_of_match[] = {
++	{ .compatible = "hisense,hlte556n-eink" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, a9_eink_of_match);
++
++static struct platform_driver a9_eink_driver = {
++	.probe = a9_eink_probe,
++	.remove = a9_eink_remove,
++	.shutdown = a9_eink_shutdown,
++	.driver = {
++		.name = "panel-hisense-hlte556n-eink",
++		.of_match_table = a9_eink_of_match,
++	},
++};
++module_platform_driver(a9_eink_driver);
++
++MODULE_DESCRIPTION("Hisense A9 E Ink transport panel (skeleton)");
++MODULE_LICENSE("GPL");

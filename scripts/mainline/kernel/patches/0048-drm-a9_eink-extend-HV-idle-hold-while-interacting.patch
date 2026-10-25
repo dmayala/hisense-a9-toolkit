@@ -1,0 +1,144 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: dmayala <dmayala@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 22:04:08 -0700
+Subject: [PATCH 0048] drm/a9_eink: extend the HV idle hold while interacting
+
+POWER-PATH CANDIDATE. NOT IN THE SERIES. NOT FOR PHONE USE until an
+independent power review (re-review after review 66) signs it off.
+
+When a real update ends less than hv_interactive_window_ms (10 s) after the
+previous real update, the idle hold of THAT power session becomes
+max(hv_hold_ms, hv_hold_interactive_ms, clamp 10 s). OPT-IN: the parameter
+defaults to 0 (off); hv_hold_ms 0 is never extended.
+
+v2 (review 66): the idle wait is clipped to the remaining continuous-on budget
+min(hv_max_ms, 15000) so the worker closes the session orderly >= 5 s before
+the unchanged FP9929A 20 s hard cap, without another kick. The boost is bound
+to the session (tx.on_since): it is recomputed at every real output, ignored
+once the pipeline is off or a new session started (hv_max_ms shutdown, idle,
+abort, fault, rollover all covered because no flag survives a new on_since),
+and history is cleared on suspend and on hv_fault. Output history may cross a
+session boundary (the next tap after a power-down can qualify); the boost never
+does. Unchanged: hv_max_ms between-job check, max_on_ms, min_off_ms, PG latch,
+VCOM, sequencing.
+---
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c | 69 +++++++++++++++++++++++++--
+ 1 file changed, 64 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index 34808c20e..01b3e80df 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -127,6 +127,14 @@ static unsigned int hv_hold_ms = 3000;
+ module_param(hv_hold_ms, uint, 0644);
+ MODULE_PARM_DESC(hv_hold_ms, "Power the pipeline (HV) down this long after the last update; stock: 2-3 s (default 3000, 0 = right after each update)");
+ 
++static unsigned int hv_hold_interactive_ms;
++module_param(hv_hold_interactive_ms, uint, 0644);
++MODULE_PARM_DESC(hv_hold_interactive_ms, "Idle hold while interacting (a real update ended less than hv_interactive_window_ms after the previous real update); never below hv_hold_ms, clamped to 10000, 0 = off (default 0, opt-in)");
++
++static unsigned int hv_interactive_window_ms = 10000;
++module_param(hv_interactive_window_ms, uint, 0644);
++MODULE_PARM_DESC(hv_interactive_window_ms, "Two real updates this close together count as interaction (default 10000)");
++
+ static unsigned int hv_max_ms = 60000;
+ module_param(hv_max_ms, uint, 0644);
+ MODULE_PARM_DESC(hv_max_ms, "Power down between updates after this much continuous HV-on time; stock has no cap, 33 s seen (default 60000)");
+@@ -1907,6 +1915,40 @@ static unsigned int a9_hold_ms(void)
+ 	return min(READ_ONCE(hv_hold_ms), 10000u);
+ }
+ 
++/* Orderly-close budget for the idle wait: hv_max_ms (0 = unset), never above
++ * 15 s, i.e. 5 s inside the FP9929A 20 s hard cap (fp9929a.max_on_ms, which is
++ * neither changed nor consulted here). The between-job hv_max_ms check is
++ * unchanged.
++ */
++#define A9_IDLE_BUDGET_MS 15000u
++
++static long a9_idle_clip(bool on, ktime_t on_since, long tmo)
++{
++	unsigned int cap = READ_ONCE(hv_max_ms);
++	s64 left;
++
++	if (!on)
++		return tmo;
++	cap = cap ? min(cap, A9_IDLE_BUDGET_MS) : A9_IDLE_BUDGET_MS;
++	left = (s64)cap - ktime_ms_delta(ktime_get(), on_since);
++	if (left <= 0)
++		return 0;
++	return min(tmo, (long)msecs_to_jiffies(left));
++}
++
++/* Idle hold for the CURRENT power session: the base hold, raised to the
++ * interactive hold only when the boost was earned in this very session
++ * (same on_since) and the pipeline is still on. A zero base hold is never
++ * extended.
++ */
++static unsigned int a9_session_hold(unsigned int hold, bool on, ktime_t on_since,
++				    bool boosted, ktime_t boost_since)
++{
++	if (!hold || !boosted || !on || boost_since != on_since)
++		return hold;
++	return max(hold, min(READ_ONCE(hv_hold_interactive_ms), 10000u));
++}
++
+ /* Remaining soft idle hold, independent of the absolute HV-on origins. */
+ static long a9_idle_timeout(unsigned int hold, ktime_t idle_since)
+ {
+@@ -1919,16 +1961,19 @@ static int a9_thread(void *data)
+ {
+ 	struct a9_eink *a9 = data;
+ 	struct a9_job job;
+-	ktime_t idle_since = 0;
++	ktime_t idle_since = 0, prev_output = 0, boost_since = 0;
++	bool boosted = false, have_prev = false;
+ 
+ 	while (!kthread_should_stop()) {
+-		unsigned int hold = a9_hold_ms();
++		unsigned int hold = a9_session_hold(a9_hold_ms(), a9->tx.on, a9->tx.on_since,
++						    boosted, boost_since);
+ 		bool physical = false;
+ 		long tmo;
+ 
+ 		if (READ_ONCE(a9->suspending)) {
+ 			/* system suspend: rails down, history kept, wait for resume */
+ 			a9_power_off(a9);
++			have_prev = boosted = false;	/* no interaction across suspend */
+ 			smp_store_release(&a9->parked, true);
+ 			wake_up_all(&a9->wq);
+ 			wait_event_interruptible(a9->wq, !READ_ONCE(a9->suspending) ||
+@@ -1936,10 +1981,12 @@ static int a9_thread(void *data)
+ 			smp_store_release(&a9->parked, false);
+ 			continue;
+ 		}
+-		if (a9->hv_fault)
++		if (a9->hv_fault) {
+ 			tmo = HZ;			/* retry the power-down, no busy loop */
+-		else if (a9->tx.on)
+-			tmo = a9_idle_timeout(hold, idle_since);
++			have_prev = boosted = false;	/* a fault ends the interaction */
++		} else if (a9->tx.on)
++			tmo = a9_idle_clip(true, a9->tx.on_since,
++					   a9_idle_timeout(hold, idle_since));
+ 		else
+ 			tmo = MAX_SCHEDULE_TIMEOUT;
+ 		if (tmo)
+@@ -1977,6 +2024,18 @@ static int a9_thread(void *data)
+ 				if (!job.dry && a9->tx.on && a9->tx.frames != frames0) {
+ 					idle_since = ktime_get();
+ 					physical = true;
++					/* Output history may cross a session boundary (that is
++					 * the point: the next tap after a power-down), but the
++					 * boost is recomputed from it at every output, never
++					 * carried by a flag, and is bound to this session.
++					 */
++					boosted = have_prev && ktime_ms_delta(idle_since, prev_output) <
++						  min(READ_ONCE(hv_interactive_window_ms), 60000u);
++					boost_since = a9->tx.on_since;
++					prev_output = idle_since;
++					have_prev = true;
++					hold = a9_session_hold(a9_hold_ms(), a9->tx.on, a9->tx.on_since,
++							       boosted, boost_since);
+ 				}
+ 			}
+ 		}

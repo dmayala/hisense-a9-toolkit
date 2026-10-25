@@ -1,0 +1,158 @@
+--- a/drivers/media/platform/qcom/venus/venc.c
++++ b/drivers/media/platform/qcom/venus/venc.c
+@@ -32,12 +32,21 @@
+ module_param(a9_mapped_eos, bool, 0644);
+ MODULE_PARM_DESC(a9_mapped_eos, "Use mapped EOS on SM6115 FW 6.0.39 (new instances)");
+ 
++static bool a9_output_size;
++module_param(a9_output_size, bool, 0644);
++MODULE_PARM_DESC(a9_output_size, "Send stock output size on SM6115 FW 6.0.39 (new instances)");
++static bool a9_stock_work_mode;
++module_param(a9_stock_work_mode, bool, 0644);
++MODULE_PARM_DESC(a9_stock_work_mode, "Use stock AVC/HEVC RC work mode on SM6115 FW 6.0.39 (new instances)");
++
+ /* Keep exported venus_inst and its module ABI unchanged. */
+ struct a9_venc_inst {
+ 	struct venus_inst inst;
+ 	void *eos_cpu;
+ 	dma_addr_t eos_dma;
+ 	bool mapped_eos;
++	bool output_size;
++	bool stock_work_mode;
+ };
+ 
+ /*
+@@ -717,6 +726,69 @@
+ 	pm_runtime_mark_last_busy(inst->core->dev_enc);
+ }
+ 
++/* These experiments change only the selected stock firmware's AVC/HEVC path. */
++static bool a9_venc_variants_supported(struct venus_inst *inst)
++{
++	struct venus_core *core = inst->core;
++
++	return IS_V4(core) && IS_AR50_LITE(core) &&
++		of_device_is_compatible(core->dev->of_node, "qcom,sm6115-venus") &&
++		core->venus_ver.major == 6 && core->venus_ver.minor == 0 &&
++		core->venus_ver.rev == 39 &&
++		(inst->hfi_codec == HFI_VIDEO_CODEC_H264 ||
++		 inst->hfi_codec == HFI_VIDEO_CODEC_HEVC);
++}
++
++/* Baseline stays at the start of properties. Stock decides mode after RC and
++ * the other properties, before requirements/internal buffers and LOAD/START.
++ */
++static int a9_venc_set_work_mode(struct venus_inst *inst, bool after_properties)
++{
++	struct a9_venc_inst *priv = container_of(inst, struct a9_venc_inst, inst);
++	struct venc_controls *ctr = &inst->controls.enc;
++	struct hfi_video_work_mode wm;
++	struct hfi_enable en = { .enable = 1 };
++	bool stock = priv->stock_work_mode && a9_venc_variants_supported(inst);
++	const char *op;
++	int ret;
++
++	if (stock != after_properties)
++		return 0;
++	if (!stock)
++		return venus_helper_set_work_mode(inst);
++
++	if (!ctr->rc_enable) {
++		wm.video_work_mode = VIDC_WORK_MODE_1;
++		op = "a9_stock_work_mode_off";
++	} else if (ctr->bitrate_mode == V4L2_MPEG_VIDEO_BITRATE_MODE_CBR) {
++		wm.video_work_mode = VIDC_WORK_MODE_1;
++		op = "a9_stock_work_mode_cbr";
++	} else {
++		wm.video_work_mode = VIDC_WORK_MODE_2;
++		op = "a9_stock_work_mode_2";
++	}
++	a9_enc_trace(inst, op, "begin", 0);
++	ret = hfi_session_set_property(inst, HFI_PROPERTY_PARAM_WORK_MODE, &wm);
++	if (!ret && wm.video_work_mode == VIDC_WORK_MODE_1)
++		ret = hfi_session_set_property(inst,
++			HFI_PROPERTY_PARAM_VENC_LOW_LATENCY_MODE, &en);
++	a9_enc_trace(inst, op, "end", ret);
++	return ret;
++}
++
++static int a9_venc_set_output_size(struct venus_inst *inst)
++{
++	struct a9_venc_inst *priv = container_of(inst, struct a9_venc_inst, inst);
++	int ret;
++
++	if (!priv->output_size || !a9_venc_variants_supported(inst))
++		return 0;
++	a9_enc_trace(inst, "a9_output_size", "begin", 0);
++	ret = venus_helper_set_bufsize(inst, inst->output_buf_size, HFI_BUFFER_OUTPUT);
++	a9_enc_trace(inst, "a9_output_size", "end", ret);
++	return ret;
++}
++
+ static int venc_set_properties(struct venus_inst *inst)
+ {
+ 	struct venc_controls *ctr = &inst->controls.enc;
+@@ -734,7 +806,7 @@
+ 	u32 profile, level;
+ 	int ret;
+ 
+-	ret = venus_helper_set_work_mode(inst);
++	ret = a9_venc_set_work_mode(inst, false);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -1080,7 +1152,7 @@
+ 			return ret;
+ 	}
+ 
+-	return 0;
++	return a9_venc_set_work_mode(inst, true);
+ }
+ 
+ static int venc_init_session(struct venus_inst *inst)
+@@ -1358,6 +1430,10 @@
+ 	if (ret)
+ 		goto error;
+ 
++	ret = a9_venc_set_output_size(inst);
++	if (ret)
++		goto error;
++
+ 	a9_enc_trace(inst, "venus_helper_set_num_bufs", "begin", 0);
+ 	ret = venus_helper_set_num_bufs(inst, inst->num_input_bufs,
+ 					inst->num_output_bufs, 0);
+@@ -1550,6 +1626,8 @@
+ 		return -ENOMEM;
+ 	inst = &priv->inst;
+ 	priv->mapped_eos = READ_ONCE(a9_mapped_eos);
++	priv->output_size = READ_ONCE(a9_output_size);
++	priv->stock_work_mode = READ_ONCE(a9_stock_work_mode);
+ 
+ 	INIT_LIST_HEAD(&inst->dpbbufs);
+ 	INIT_LIST_HEAD(&inst->registeredbufs);
+--- a/drivers/media/platform/qcom/venus/hfi_cmds.c
++++ b/drivers/media/platform/qcom/venus/hfi_cmds.c
+@@ -1225,6 +1225,13 @@
+ 		pkt->shdr.hdr.size += sizeof(u32) + sizeof(*wm);
+ 		break;
+ 	}
++	case HFI_PROPERTY_PARAM_VENC_LOW_LATENCY_MODE: {
++		struct hfi_enable *in = pdata, *en = prop_data;
++
++		en->enable = in->enable;
++		pkt->shdr.hdr.size += sizeof(u32) + sizeof(*en);
++		break;
++	}
+ 	case HFI_PROPERTY_CONFIG_VIDEOCORES_USAGE: {
+ 		struct hfi_videocores_usage_type *in = pdata, *cu = prop_data;
+ 
+--- a/drivers/media/platform/qcom/venus/hfi_helper.h
++++ b/drivers/media/platform/qcom/venus/hfi_helper.h
+@@ -515,6 +515,7 @@
+ #define HFI_PROPERTY_PARAM_VENC_H264_VUI_TIMING_INFO		0x200501e
+ #define HFI_PROPERTY_PARAM_VENC_VC1_PERF_CFG			0x200501f
+ #define HFI_PROPERTY_PARAM_VENC_MAX_NUM_B_FRAMES		0x2005020
++#define HFI_PROPERTY_PARAM_VENC_LOW_LATENCY_MODE		0x2005022
+ #define HFI_PROPERTY_PARAM_VENC_H264_VUI_BITSTREAM_RESTRC	0x2005021
+ #define HFI_PROPERTY_PARAM_VENC_PRESERVE_TEXT_QUALITY		0x2005023
+ #define HFI_PROPERTY_PARAM_VENC_H264_TRANSFORM_8X8			0x2005025

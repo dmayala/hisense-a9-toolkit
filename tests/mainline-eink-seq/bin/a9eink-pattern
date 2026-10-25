@@ -1,0 +1,18 @@
+#!/bin/sh
+# fake: one commit -> one asynchronous update, like the real driver
+. "$SIM_LIB"
+while [ "${1#-}" != "$1" ]; do shift 2; done
+echo "$1" >> $S/launch.log
+echo "committed $1 on crtc 1 connector 2; holding 1 s"
+scen pattern-fails && exit 1
+# a9_eink kicks an update only for pixels that changed against its shadow
+# (white at probe, then every commit): the same image twice = no update
+# (boot 13: e3t "white" after e3b "white" never powered up)
+img="$*"; prev=$(cat $S/shadow 2>/dev/null || echo white); echo "$img" > $S/shadow
+if [ "$img" = "$prev" ]; then
+	echo "$img" >> $S/nochange.log
+else
+	setsid sh "$SIM_DIR/sim-update.sh" "$1" </dev/null >>$S/update.log 2>&1 &
+fi
+# pattern-block: the client stays alive (blocked) far beyond the session cap
+if scen pattern-block; then sleep 20; else sleep 1; fi

@@ -1,0 +1,104 @@
+{
+  "source": "golden lun0/kdebuginfo.bin, /kmon_log/kexmlog_0 (sanitized selected charger lines only)",
+  "logs": [
+    {
+      "log": "kmonlog_1970_0101_175433",
+      "entries": [
+        {
+          "line": 185,
+          "text": "9, PmicDxe:: EFI_PmicSchgInit fv=4500, fcc=1000"
+        },
+        {
+          "line": 186,
+          "text": "9, PmicDxe:: EFI_PmicSchgEnableHWJeita jeitafvhot=105, jeitafvcold=105, jeitafcchot=500, jeitafcccold=500"
+        },
+        {
+          "line": 187,
+          "text": "9, 9, QcomChargerDxe:: ChargerPlatform_Init Enabled WDOG."
+        },
+        {
+          "line": 1238,
+          "text": "[    1.559129] [79:kworker/5:1]--PM-PMIC: pmi632_charger: smblib_get_charge_param: fast charge current = 2000000 (0x28)"
+        },
+        {
+          "line": 1239,
+          "text": "[    1.559144] [79:kworker/5:1]--PM-PMIC: pmi632_charger: smblib_get_charge_param: float voltage = 4500000 (0x5a)"
+        },
+        {
+          "line": 1241,
+          "text": "[    1.559185] [79:kworker/5:1]--PM-PMIC: pmi632_charger: smblib_get_charge_param: usb input current limit = 1500000 (0x1e)"
+        },
+        {
+          "line": 1477,
+          "text": "[    1.691599] [350:kworker/5:5]--PM-PMIC: pmi632_charger: smblib_set_charge_param: float voltage = 4450000 (0x55)"
+        }
+      ]
+    },
+    {
+      "log": "kmonlog_2026_0811_100601",
+      "entries": [
+        {
+          "line": 189,
+          "text": "2, PmicDxe:: EFI_PmicSchgInit fv=4500, fcc=1000"
+        },
+        {
+          "line": 190,
+          "text": "2, PmicDxe:: EFI_PmicSchgEnableHWJeita jeitafvhot=105, jeitafvcold=105, jeitafcchot=500, jeitafcccold=500"
+        },
+        {
+          "line": 191,
+          "text": "2, 2, QcomChargerDxe:: ChargerPlatform_Init Enabled WDOG."
+        },
+        {
+          "line": 1239,
+          "text": "[    1.517300] [86:kworker/3:1]--PM-PMIC: pmi632_charger: smblib_get_charge_param: fast charge current = 2000000 (0x28)"
+        },
+        {
+          "line": 1240,
+          "text": "[    1.517317] [86:kworker/3:1]--PM-PMIC: pmi632_charger: smblib_get_charge_param: float voltage = 4500000 (0x5a)"
+        },
+        {
+          "line": 1242,
+          "text": "[    1.517364] [86:kworker/3:1]--PM-PMIC: pmi632_charger: smblib_get_charge_param: usb input current limit = 1500000 (0x1e)"
+        },
+        {
+          "line": 1479,
+          "text": "[    1.662746] [343:kworker/3:3]--PM-PMIC: pmi632_charger: smblib_set_charge_param: float voltage = 4450000 (0x55)"
+        }
+      ]
+    },
+    {
+      "log": "kmonlog_2026_0811_105015",
+      "entries": [
+        {
+          "line": 189,
+          "text": "2, PmicDxe:: EFI_PmicSchgInit fv=4500, fcc=1000"
+        },
+        {
+          "line": 190,
+          "text": "2, PmicDxe:: EFI_PmicSchgEnableHWJeita jeitafvhot=105, jeitafvcold=105, jeitafcchot=500, jeitafcccold=500"
+        },
+        {
+          "line": 191,
+          "text": "2, 2, QcomChargerDxe:: ChargerPlatform_Init Enabled WDOG."
+        },
+        {
+          "line": 1234,
+          "text": "[    1.519430] [86:kworker/5:1]--PM-PMIC: pmi632_charger: smblib_get_charge_param: fast charge current = 2000000 (0x28)"
+        },
+        {
+          "line": 1235,
+          "text": "[    1.519444] [86:kworker/5:1]--PM-PMIC: pmi632_charger: smblib_get_charge_param: float voltage = 4500000 (0x5a)"
+        },
+        {
+          "line": 1237,
+          "text": "[    1.519485] [86:kworker/5:1]--PM-PMIC: pmi632_charger: smblib_get_charge_param: usb input current limit = 1500000 (0x1e)"
+        },
+        {
+          "line": 1472,
+          "text": "[    1.672330] [332:kworker/5:2]--PM-PMIC: pmi632_charger: smblib_set_charge_param: float voltage = 4450000 (0x55)"
+        }
+      ]
+    }
+  ]
+}

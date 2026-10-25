@@ -1,0 +1,208 @@
+From: eink-latency r2
+Subject: [PATCH] drm/a9_eink: stock-style same-target skip before the prepare (skip_same_target, default N)
+
+See runs/eink-latency-r2.md section next (b); reviews 88, 89 (default N until its A/B). Stacks on 0058z (eink-settle-f6 e632520).
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index 2290cf3..aea6ccc 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -238,6 +238,7 @@ struct a9_eink {
+ 	bool dry_init_pending, dry_force_clear;	/* dry-run model */
+ 	u8 *dry_save_old, *dry_levels;
+ 	u8 *prep_save_old;			/* levels before a9e_prepare (real path) */
++	struct a9e_same same;			/* stock-style same-target skip (eink-latency r2), eng_lock */
+ 	u32 dry_save_pre;
+ 	int dry_save_have_pre;
+ 	bool hv_fault;				/* forced HV off, state unknown */
+@@ -327,6 +328,7 @@ struct a9_eink {
+ 	struct notifier_block pm_nb;
+ 	struct task_struct *thread;
+ 
++
+ 	/* render-ahead (0033): the producer thread renders a real update's frames */
+ 	struct a9_ring ring;
+ 	struct task_struct *rthread;
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_damage.c b/drivers/gpu/drm/a9_eink/a9_eink_damage.c
+index 405fce3..d22bea4 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_damage.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_damage.c
+@@ -195,14 +195,53 @@ static int cond_kind(uint32_t mode)
+ 	}
+ }
+ 
+-static void sig_make(const struct a9e_engine *e, struct a9e_cond_sig *s)
++static void sig_of(uint32_t mode, const struct a9t_state *st, struct a9e_cond_sig *s)
+ {
+ 	memset(s, 0, sizeof(*s));
+-	s->mode16 = e->mode & 0xffffu;
+-	s->clear_shadow = (uint32_t)e->st.clear_shadow;
+-	memcpy(s->g2, e->st.g2, 256);
+-	memcpy(s->g16, e->st.g16, 256);
+-	memcpy(s->g16s, e->st.g16s, 256);
++	s->mode16 = mode & 0xffffu;
++	s->clear_shadow = (uint32_t)st->clear_shadow;
++	memcpy(s->g2, st->g2, 256);
++	memcpy(s->g16, st->g16, 256);
++	memcpy(s->g16s, st->g16s, 256);
++}
++
++static void sig_make(const struct a9e_engine *e, struct a9e_cond_sig *s)
++{
++	sig_of(e->mode, &e->st, s);
++}
++
++/* ---- stock-style same-target skip (see a9_eink_engine.h) -------------------------- */
++void a9e_same_record(const struct a9e_engine *e, struct a9e_same *s)
++{
++	if (!s->grey || !s->old) {
++		s->valid = 0;
++		return;
++	}
++	/* after a9e_end(): old == nlv == condition(grey, sig of e->mode) */
++	memcpy(s->grey, e->grey, A9T_N);
++	memcpy(s->old, e->old, A9T_N);
++	sig_make(e, &s->sig);
++	s->valid = e->have_pre && !e->init;
++}
++
++int a9e_same_target(const struct a9e_engine *e, struct a9e_same *s, uint32_t mode, int clear)
++{
++	struct a9e_cond_sig sg;	/* about 780 bytes: fine on the kernel worker stack */
++
++	if (!s->valid || clear || !e->have_pre || !e->flag_6c7 || e->init)
++		return 0;
++	/* a steady request: a9t_request_build() returns mode unchanged (flag_6c7), no steps */
++	if ((e->pre_mode & 0xffu) != (mode & 0xffu) || e->pre_mode != (mode & ~0x100u))
++		return 0;
++	/* the signature the prepare would condition with: mode word + the current LUTs */
++	sig_of(mode, &e->st, &sg);
++	if (memcmp(&sg, &s->sig, sizeof(sg)))
++		return 0;
++	s->checks++;
++	if (memcmp(e->grey, s->grey, A9T_N) || memcmp(e->old, s->old, A9T_N))
++		return 0;
++	s->hits++;
++	return 1;
+ }
+ 
+ /* ---- per-pixel kinds over a rectangle ------------------------------------------ */
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index 023b7d1..b0cf2ac 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -103,6 +103,10 @@ static bool damage_prep;
+ module_param(damage_prep, bool, 0644);
+ MODULE_PARM_DESC(damage_prep, "Damage-limited prepare: condition, diff and pack only the tiles whose grey changed (bit-identical engine state, tests/damage-equiv). 0 = the reference full pass (default). Runtime");
+ 
++static bool skip_same_target;
++module_param(skip_same_target, bool, 0644);
++MODULE_PARM_DESC(skip_same_target, "Stock-style no-change skip (composer 0x1a6ee4): a steady job whose grey AND starting levels equal those of the last completed update is dropped before its prepare (it would be prepared as unchanged and send nothing). Default N (review 89: default-on is a separate decision after its A/B) = always prepare, the 0054 behaviour. Runtime");
++
+ static bool convert_bounce = true;
+ module_param(convert_bounce, bool, 0644);
+ MODULE_PARM_DESC(convert_bounce, "Convert the plane through a cached bounce band read in storage order (same output as the direct per-pixel path; the source is write-combined). 0 = direct path, for A/B. Runtime");
+@@ -1081,10 +1085,12 @@ static DEVICE_ATTR_RO(input_stats);
+ static ssize_t damage_stats_show(struct device *kdev, struct device_attribute *attr, char *buf)
+ {
+ 	struct a9_eink *a9 = kdev_to_a9(kdev);
+-	u64 inc, full, tiles, rows, capped;
++	u64 inc, full, tiles, rows, capped, sc, sh;
+ 	u32 last_inc, lt, lr;
+ 
+ 	mutex_lock(&a9->eng_lock);
++	sc = a9->same.checks;
++	sh = a9->same.hits;
+ 	inc = a9->e.inc_prepares;
+ 	full = a9->e.full_prepares;
+ 	capped = a9->e.inc_capped;
+@@ -1094,8 +1100,9 @@ static ssize_t damage_stats_show(struct device *kdev, struct device_attribute *a
+ 	lt = a9->e.last_tiles;
+ 	lr = a9->e.last_rows;
+ 	mutex_unlock(&a9->eng_lock);
+-	return sysfs_emit(buf, "enabled %d ee %d inc %llu full %llu capped %llu tiles %llu px %llu last_inc %u last_tiles %u last_px %u\n",
+-			  READ_ONCE(damage_prep), a9->e.ee != NULL, inc, full, capped, tiles, rows, last_inc, lt, lr);
++	return sysfs_emit(buf, "enabled %d ee %d inc %llu full %llu capped %llu tiles %llu px %llu last_inc %u last_tiles %u last_px %u same_enabled %d same_checks %llu same_skips %llu\n",
++			  READ_ONCE(damage_prep), a9->e.ee != NULL, inc, full, capped, tiles, rows, last_inc, lt, lr,
++			  READ_ONCE(skip_same_target) && a9->same.grey, sc, sh);
+ }
+ static DEVICE_ATTR_RO(damage_stats);
+ 
+@@ -2153,6 +2160,21 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 		ktime_t p0 = ktime_get();
+ 
+ 		mutex_lock(&a9->eng_lock);
++		/*
++		 * eink-latency r2, stock 0x1a6ee4: the same target as the last
++		 * completed update, from the levels it left, is a guaranteed
++		 * "unchanged" prepare (a9e_same_target compares grey AND old):
++		 * drop it before conditioning, exactly as the unchanged path below
++		 * drops it after. Nothing is sent, nothing is consumed or renewed.
++		 */
++		if (!dry && !*init_pending && !*force_clear && !job->clear &&
++		    READ_ONCE(skip_same_target) &&
++		    a9e_same_target(&a9->e, &a9->same, job->mode, 0)) {
++			mutex_unlock(&a9->eng_lock);
++			if (a9_check_live_rails(a9))
++				a9->aborts++;
++			return;
++		}
+ 		if (dry) {
+ 			/* a dry run must not change what the real pipeline believes */
+ 			memcpy(a9->dry_save_old, a9->e.old, A9T_N);
+@@ -2327,6 +2349,8 @@ static void __a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 			goto abort;
+ 	}
+ 	a9e_end(&a9->e);
++	if (!dry)
++		a9e_same_record(&a9->e, &a9->same);	/* old == nlv now; a dry run keeps the real record */
+ 
+ 	a9->last.mode = a9->e.mode;
+ 	a9->last.clear = a9->e.clear;
+@@ -2893,6 +2917,11 @@ static int a9_probe(struct platform_device *pdev)
+ 	a9->trace_old = a9_vzalloc(dev, A9T_N);
+ 	a9->dry_save_old = a9_vzalloc(dev, A9T_N);
+ 	a9->prep_save_old = a9_vzalloc(dev, A9T_N);
++	/* optional: without the two buffers the same-target skip stays off */
++	a9->same.grey = a9_vzalloc(dev, A9T_N);
++	a9->same.old = a9->same.grey ? a9_vzalloc(dev, A9T_N) : NULL;
++	if (!a9->same.old)
++		a9->same.grey = NULL;
+ 	a9r_init(&a9->ring, a9_vzalloc(dev, A9R_SLOTS * A9R_DATA));	/* ~10.9 MB */
+ 	init_waitqueue_head(&a9->rwq);
+ 	a9->dry_levels = a9_vzalloc(dev, A9T_N);
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_engine.h b/drivers/gpu/drm/a9_eink/a9_eink_engine.h
+index 16c719f..1aab412 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_engine.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink_engine.h
+@@ -231,6 +231,30 @@ struct a9e_rect a9e_tiles_bbox(const uint8_t *tm);
+  * next prepare is the reference full pass. Always safe to call. */
+ void a9e_inc_invalidate(struct a9e_engine *e);
+ 
++/*
++ * Stock-style same-target skip (eink-latency r2). The stock composer compares each
++ * promoted target with the previous one before any conditioning and starts no
++ * update when they are equal (memcmp of 0x14b880 bytes, composer 0x1a6ee4..0x1a6ef8).
++ * Here: a9e_same_record() after a COMPLETED real update (a9e_end) keeps that
++ * update's grey and the levels it left (old == nlv); a9e_same_target() then says,
++ * without running a9e_prepare(), that a steady request for the same grey would be
++ * prepared as unchanged: same conditioning signature (mode word, LUTs,
++ * clear_shadow), a steady request (have_pre, flag_6c7, pre_mode == mode without
++ * bit 8, no clear), and BOTH grey and old byte-equal to the record. Because old is
++ * compared too, no invalidation site is needed for correctness: anything that
++ * changed the levels since the record (abort restore, init, clear, dry run) makes
++ * the check fail and the normal prepare decides. Soundness (skip => prepare finds
++ * unchanged) is tested in test/same-equiv.c. The caller owns the two A9T_N buffers.
++ */
++struct a9e_same {
++	uint8_t *grey, *old;		/* A9T_N each (caller-allocated) */
++	struct a9e_cond_sig sig;
++	int valid;
++	uint64_t checks, hits;		/* statistics, never acted on */
++};
++void a9e_same_record(const struct a9e_engine *e, struct a9e_same *s);
++int a9e_same_target(const struct a9e_engine *e, struct a9e_same *s, uint32_t mode, int clear);
++
+ /* Internal hooks of a9e_prepare (a9_eink_damage.c), reached only with inc_enable. */
+ int a9d_prepare(struct a9e_engine *e, int mask);	/* 1 = prepared incrementally */
+ void a9d_condition_full(struct a9e_engine *e);		/* conditioning, writes the carry checkpoints */

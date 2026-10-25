@@ -1,0 +1,419 @@
+From 1bbe8563815248ca591c0a79efea1352cd7b22ce Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 05:26:26 -0700
+Subject: [PATCH 0043] thermal: core: optional time-separated confirmation of
+ critical crossings (Hisense A9)
+
+CONFIG_THERMAL_CRITICAL_CONFIRM_SAMPLES (default 1 = unchanged) makes the
+thermal core require N consecutive samples at or above a zone's lowest
+critical trip, each counted only if taken at least THERMAL_RECHECK_DELAY
+(250 ms) after the previous counted one, before it crosses that trip.
+Updates arriving sooner (sensor interrupt threads, sysfs reads, polling)
+are discarded uncounted. While confirming, the driver's trip window is set
+to (trip - 1, INT_MAX), so a level-triggered threshold interrupt is cleared
+and cannot storm, and the zone is re-read when the next sample is due. A
+sample below the trip, a failed read, an invalid-temperature sentinel, a
+mode change and zone (re)initialisation (registration, resume) restart the
+count. Genuine heat acts after (N - 1) * 250 ms plus scheduling delay.
+
+KUnit (drivers/thermal/.kunitconfig): a scripted zone through
+thermal_zone_device_update(): an interrupt storm of 50 identical high
+samples counts once; sustained heat acts once within 500..1500 ms; the
+sentinel, errno and mode-change resets. Reviews 24/28 (sensors).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/thermal/.kunitconfig            |   4 +
+ drivers/thermal/Kconfig                 |  30 ++++
+ drivers/thermal/Makefile                |   1 +
+ drivers/thermal/thermal_confirm_kunit.c | 195 ++++++++++++++++++++++++
+ drivers/thermal/thermal_core.c          |  65 ++++++++
+ drivers/thermal/thermal_core.h          |   2 +
+ 6 files changed, 297 insertions(+)
+ create mode 100644 drivers/thermal/.kunitconfig
+ create mode 100644 drivers/thermal/thermal_confirm_kunit.c
+
+diff --git a/drivers/thermal/.kunitconfig b/drivers/thermal/.kunitconfig
+new file mode 100644
+index 000000000..a0f39cad3
+--- /dev/null
++++ b/drivers/thermal/.kunitconfig
+@@ -0,0 +1,4 @@
++CONFIG_KUNIT=y
++CONFIG_THERMAL=y
++CONFIG_THERMAL_CRITICAL_CONFIRM_SAMPLES=3
++CONFIG_THERMAL_CRITICAL_CONFIRM_KUNIT_TEST=y
+diff --git a/drivers/thermal/Kconfig b/drivers/thermal/Kconfig
+index 810eecced..ee5709bab 100644
+--- a/drivers/thermal/Kconfig
++++ b/drivers/thermal/Kconfig
+@@ -49,6 +49,36 @@ config THERMAL_CORE_TESTING
+ 	  with trip points in order to exercise the thermal core
+ 	  functionality in a controlled way.
+ 
++config THERMAL_CRITICAL_CONFIRM_SAMPLES
++	int "Time-separated samples needed before a critical trip acts"
++	range 1 10
++	default 1
++	help
++	  Number of consecutive temperature samples, each at or above the
++	  lowest critical trip of a zone and each taken at least 250 ms after
++	  the previous counted one, that the thermal core requires before it
++	  crosses that trip (and so before a critical trip starts the
++	  hardware-protection shutdown). Updates arriving sooner (polling,
++	  sensor interrupts, sysfs reads of the zone) are discarded without
++	  counting; while confirming, the sensor's trip window is reprogrammed
++	  around the current value so a level interrupt cannot storm, and the
++	  zone is re-read when the next sample is due. A sample below the trip,
++	  a failed read, an invalid-temperature sentinel, a mode change or a
++	  zone (re)initialisation (e.g. resume) restarts the count. A genuine
++	  over-temperature acts after (N - 1) * 250 ms plus scheduling delay;
++	  one corrupted successful sample can no longer power the system off.
++
++	  1 = upstream behaviour (every sample acts at once).
++
++config THERMAL_CRITICAL_CONFIRM_KUNIT_TEST
++	tristate "KUnit test for critical-trip confirmation" if !KUNIT_ALL_TESTS
++	depends on KUNIT && THERMAL
++	default KUNIT_ALL_TESTS
++	help
++	  Drives a scripted thermal zone through thermal_zone_device_update()
++	  (the polling and interrupt entry point) and checks the confirmation
++	  policy of THERMAL_CRITICAL_CONFIRM_SAMPLES.
++
+ config THERMAL_EMERGENCY_POWEROFF_DELAY_MS
+ 	int "Emergency poweroff delay in milli-seconds"
+ 	default 0
+diff --git a/drivers/thermal/Makefile b/drivers/thermal/Makefile
+index 3b249195c..0df99d003 100644
+--- a/drivers/thermal/Makefile
++++ b/drivers/thermal/Makefile
+@@ -70,3 +70,4 @@ obj-$(CONFIG_SPRD_THERMAL)	+= sprd_thermal.o
+ obj-$(CONFIG_KHADAS_MCU_FAN_THERMAL)	+= khadas_mcu_fan.o
+ obj-$(CONFIG_LOONGSON2_THERMAL)	+= loongson2_thermal.o
+ obj-$(CONFIG_THERMAL_CORE_TESTING)	+= testing/
++obj-$(CONFIG_THERMAL_CRITICAL_CONFIRM_KUNIT_TEST) += thermal_confirm_kunit.o
+diff --git a/drivers/thermal/thermal_confirm_kunit.c b/drivers/thermal/thermal_confirm_kunit.c
+new file mode 100644
+index 000000000..164d9ec32
+--- /dev/null
++++ b/drivers/thermal/thermal_confirm_kunit.c
+@@ -0,0 +1,195 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * KUnit test of CONFIG_THERMAL_CRITICAL_CONFIRM_SAMPLES through the real
++ * entry point thermal_zone_device_update() (used by polling work, sensor
++ * interrupt threads and sysfs). A scripted zone with one critical trip at
++ * 110 C; its .critical op only counts (no shutdown). Hisense A9 bring-up.
++ */
++#include <kunit/test.h>
++#include <linux/delay.h>
++#include <linux/jiffies.h>
++#include <linux/thermal.h>
++
++struct kt_zone {
++	int temp, err;
++	int crit_calls;
++	unsigned long crit_at;
++	int set_trips_calls, last_low, last_high;
++	struct thermal_zone_device *tz;
++};
++
++static int kt_get_temp(struct thermal_zone_device *tz, int *temp)
++{
++	struct kt_zone *z = thermal_zone_device_priv(tz);
++
++	*temp = READ_ONCE(z->temp);
++	return READ_ONCE(z->err);
++}
++
++static int kt_set_trips(struct thermal_zone_device *tz, int low, int high)
++{
++	struct kt_zone *z = thermal_zone_device_priv(tz);
++
++	z->set_trips_calls++;
++	z->last_low = low;
++	z->last_high = high;
++	return 0;
++}
++
++static void kt_critical(struct thermal_zone_device *tz)
++{
++	struct kt_zone *z = thermal_zone_device_priv(tz);
++
++	z->crit_calls++;
++	z->crit_at = jiffies;
++}
++
++static const struct thermal_zone_device_ops kt_ops = {
++	.get_temp = kt_get_temp,
++	.set_trips = kt_set_trips,
++	.critical = kt_critical,
++};
++
++static const struct thermal_trip kt_trips[] = {
++	{ .temperature = 110000, .hysteresis = 1000, .type = THERMAL_TRIP_CRITICAL },
++};
++
++static int kt_init(struct kunit *test)
++{
++	struct kt_zone *z = kunit_kzalloc(test, sizeof(*z), GFP_KERNEL);
++
++	if (CONFIG_THERMAL_CRITICAL_CONFIRM_SAMPLES != 3)
++		kunit_skip(test, "needs CONFIG_THERMAL_CRITICAL_CONFIRM_SAMPLES=3");
++	KUNIT_ASSERT_NOT_NULL(test, z);
++	z->temp = 40000;
++	z->tz = thermal_zone_device_register_with_trips("kt-confirm", kt_trips, ARRAY_SIZE(kt_trips),
++							z, &kt_ops, NULL, 0, 0);
++	KUNIT_ASSERT_FALSE(test, IS_ERR(z->tz));
++	KUNIT_ASSERT_EQ(test, thermal_zone_device_enable(z->tz), 0);
++	test->priv = z;
++	return 0;
++}
++
++static void kt_exit(struct kunit *test)
++{
++	struct kt_zone *z = test->priv;
++
++	if (z && !IS_ERR_OR_NULL(z->tz))
++		thermal_zone_device_unregister(z->tz);
++}
++
++/* an interrupt storm of identical high samples counts as ONE sample */
++static void kt_storm_does_not_confirm(struct kunit *test)
++{
++	struct kt_zone *z = test->priv;
++	int i;
++
++	WRITE_ONCE(z->temp, 120000);
++	for (i = 0; i < 50; i++)
++		thermal_zone_device_update(z->tz, THERMAL_EVENT_UNSPECIFIED);
++	KUNIT_EXPECT_EQ(test, z->crit_calls, 0);
++	/* trip window reprogrammed so a level interrupt clears: (trip - 1, INT_MAX) */
++	KUNIT_EXPECT_EQ(test, z->last_low, 109999);
++	KUNIT_EXPECT_EQ(test, z->last_high, INT_MAX);
++	WRITE_ONCE(z->temp, 40000);	/* cools before the next sample is due */
++	msleep(800);
++	KUNIT_EXPECT_EQ(test, z->crit_calls, 0);
++}
++
++/* sustained heat acts once, no sooner than 2 * 250 ms, within a bound */
++static void kt_sustained_confirms_bounded(struct kunit *test)
++{
++	struct kt_zone *z = test->priv;
++	unsigned long t0;
++	int i;
++
++	WRITE_ONCE(z->temp, 120000);
++	t0 = jiffies;
++	thermal_zone_device_update(z->tz, THERMAL_EVENT_UNSPECIFIED);
++	for (i = 0; i < 30 && !z->crit_calls; i++)
++		msleep(100);
++	KUNIT_ASSERT_EQ(test, z->crit_calls, 1);
++	KUNIT_EXPECT_GE(test, jiffies_to_msecs(z->crit_at - t0), 500U);
++	KUNIT_EXPECT_LE(test, jiffies_to_msecs(z->crit_at - t0), 1500U);
++	/* crossing done: further high updates do not act again */
++	for (i = 0; i < 5; i++)
++		thermal_zone_device_update(z->tz, THERMAL_EVENT_UNSPECIFIED);
++	msleep(600);
++	KUNIT_EXPECT_EQ(test, z->crit_calls, 1);
++}
++
++/* high, high, invalid sentinel, high: the sentinel restarts the count */
++static void kt_sentinel_resets(struct kunit *test)
++{
++	struct kt_zone *z = test->priv;
++
++	WRITE_ONCE(z->temp, 120000);
++	thermal_zone_device_update(z->tz, THERMAL_EVENT_UNSPECIFIED);	/* 1 */
++	msleep(300);							/* recheck counted 2 */
++	KUNIT_EXPECT_EQ(test, z->crit_calls, 0);
++	WRITE_ONCE(z->temp, THERMAL_TEMP_INVALID);
++	thermal_zone_device_update(z->tz, THERMAL_EVENT_UNSPECIFIED);	/* reset */
++	msleep(300);
++	WRITE_ONCE(z->temp, 120000);
++	thermal_zone_device_update(z->tz, THERMAL_EVENT_UNSPECIFIED);	/* 1 again */
++	KUNIT_EXPECT_EQ(test, z->crit_calls, 0);
++	WRITE_ONCE(z->temp, 40000);
++	msleep(600);
++	KUNIT_EXPECT_EQ(test, z->crit_calls, 0);
++}
++
++/* high, high, read error, high: the error restarts the count */
++static void kt_error_resets(struct kunit *test)
++{
++	struct kt_zone *z = test->priv;
++
++	WRITE_ONCE(z->temp, 120000);
++	thermal_zone_device_update(z->tz, THERMAL_EVENT_UNSPECIFIED);
++	msleep(300);
++	WRITE_ONCE(z->err, -EIO);
++	thermal_zone_device_update(z->tz, THERMAL_EVENT_UNSPECIFIED);
++	msleep(300);
++	WRITE_ONCE(z->err, 0);
++	thermal_zone_device_update(z->tz, THERMAL_EVENT_UNSPECIFIED);
++	KUNIT_EXPECT_EQ(test, z->crit_calls, 0);
++	WRITE_ONCE(z->temp, 40000);
++	msleep(600);
++	KUNIT_EXPECT_EQ(test, z->crit_calls, 0);
++}
++
++/* two counted highs, disable + enable (episode boundary), one high: no action */
++static void kt_mode_change_resets(struct kunit *test)
++{
++	struct kt_zone *z = test->priv;
++
++	WRITE_ONCE(z->temp, 120000);
++	thermal_zone_device_update(z->tz, THERMAL_EVENT_UNSPECIFIED);
++	msleep(300);
++	KUNIT_ASSERT_EQ(test, thermal_zone_device_disable(z->tz), 0);
++	msleep(300);
++	KUNIT_ASSERT_EQ(test, thermal_zone_device_enable(z->tz), 0);	/* updates: 1 */
++	KUNIT_EXPECT_EQ(test, z->crit_calls, 0);
++	WRITE_ONCE(z->temp, 40000);
++	msleep(600);
++	KUNIT_EXPECT_EQ(test, z->crit_calls, 0);
++}
++
++static struct kunit_case kt_cases[] = {
++	KUNIT_CASE_SLOW(kt_storm_does_not_confirm),
++	KUNIT_CASE_SLOW(kt_sustained_confirms_bounded),
++	KUNIT_CASE_SLOW(kt_sentinel_resets),
++	KUNIT_CASE_SLOW(kt_error_resets),
++	KUNIT_CASE_SLOW(kt_mode_change_resets),
++	{}
++};
++
++static struct kunit_suite kt_suite = {
++	.name = "thermal-critical-confirm",
++	.init = kt_init,
++	.exit = kt_exit,
++	.test_cases = kt_cases,
++};
++kunit_test_suite(kt_suite);
++
++MODULE_DESCRIPTION("KUnit test of thermal critical-trip confirmation");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/thermal/thermal_core.c b/drivers/thermal/thermal_core.c
+index 28a20d4b4..496ead408 100644
+--- a/drivers/thermal/thermal_core.c
++++ b/drivers/thermal/thermal_core.c
+@@ -548,6 +548,63 @@ static void thermal_zone_handle_trips(struct thermal_zone_device *tz,
+ 	}
+ }
+ 
++/* Critical-trip confirmation state (CONFIG_THERMAL_CRITICAL_CONFIRM_SAMPLES) */
++static void thermal_zone_critical_reset(struct thermal_zone_device *tz)
++{
++	tz->crit_confirm = 0;
++}
++
++/*
++ * Returns true while a NEW crossing of the zone's lowest critical trip still
++ * needs more samples at or above it. Only samples taken at least
++ * THERMAL_RECHECK_DELAY after the previously counted one count; sooner
++ * updates (interrupts, sysfs reads, polling) are discarded uncounted. While
++ * pending, the driver's trip window is set to (trip - 1, INT_MAX) so that a
++ * level-triggered threshold interrupt is cleared and only fires again if the
++ * value drops below the trip, and the zone is re-read when the next sample
++ * is due. The caller discards the sample (it is not stored, no trip acts).
++ * A zone already above the trip (crossing done) is not held back.
++ */
++static bool thermal_zone_critical_unconfirmed(struct thermal_zone_device *tz,
++					      int temp)
++{
++	const struct thermal_trip_desc *td;
++	unsigned long due;
++	int crit = INT_MAX;
++
++	if (CONFIG_THERMAL_CRITICAL_CONFIRM_SAMPLES <= 1)
++		return false;
++
++	for_each_trip_desc(tz, td)
++		if (td->trip.type == THERMAL_TRIP_CRITICAL &&
++		    td->trip.temperature != THERMAL_TEMP_INVALID)
++			crit = min(crit, td->trip.temperature);
++
++	if (crit == INT_MAX || temp < crit) {
++		thermal_zone_critical_reset(tz);
++		return false;
++	}
++	if (tz->temperature >= crit && tz->temperature != THERMAL_TEMP_INIT)
++		return false;	/* already crossed: nothing new to confirm */
++
++	if (tz->crit_confirm == 0 ||
++	    time_after_eq(jiffies, tz->crit_last + THERMAL_RECHECK_DELAY)) {
++		tz->crit_confirm++;
++		tz->crit_last = jiffies;
++		if (tz->crit_confirm >= CONFIG_THERMAL_CRITICAL_CONFIRM_SAMPLES) {
++			thermal_zone_critical_reset(tz);
++			return false;
++		}
++		dev_warn(&tz->device,
++			 "critical sample %d mC (%d/%d), confirming\n", temp,
++			 tz->crit_confirm, CONFIG_THERMAL_CRITICAL_CONFIRM_SAMPLES);
++	}
++	thermal_zone_set_trips(tz, crit - 1, INT_MAX);
++	due = tz->crit_last + THERMAL_RECHECK_DELAY;
++	thermal_zone_device_set_polling(tz, time_after(due, jiffies) ? due - jiffies : 1);
++	return true;
++}
++
+ void __thermal_zone_device_update(struct thermal_zone_device *tz,
+ 				  enum thermal_notify_event event)
+ {
+@@ -560,9 +617,11 @@ void __thermal_zone_device_update(struct thermal_zone_device *tz,
+ 
+ 	ret = __thermal_zone_get_temp(tz, &temp);
+ 	if (ret) {
++		thermal_zone_critical_reset(tz);
+ 		thermal_zone_recheck(tz, ret);
+ 		return;
+ 	} else if (temp <= THERMAL_TEMP_INVALID) {
++		thermal_zone_critical_reset(tz);
+ 		/*
+ 		 * Special case: No valid temperature value is available, but
+ 		 * the zone owner does not want the core to do anything about
+@@ -574,6 +633,9 @@ void __thermal_zone_device_update(struct thermal_zone_device *tz,
+ 
+ 	tz->recheck_delay_jiffies = THERMAL_RECHECK_DELAY;
+ 
++	if (thermal_zone_critical_unconfirmed(tz, temp))
++		return;
++
+ 	tz->last_temperature = tz->temperature;
+ 	tz->temperature = temp;
+ 
+@@ -613,6 +675,8 @@ static int thermal_zone_device_set_mode(struct thermal_zone_device *tz,
+ 	if (ret)
+ 		return ret;
+ 
++	thermal_zone_critical_reset(tz);
++
+ 	__thermal_zone_device_update(tz, THERMAL_EVENT_UNSPECIFIED);
+ 
+ 	if (mode == THERMAL_DEVICE_ENABLED)
+@@ -1301,6 +1365,7 @@ static void thermal_zone_device_init(struct thermal_zone_device *tz)
+ 
+ 	tz->temperature = THERMAL_TEMP_INIT;
+ 	tz->passive = 0;
++	thermal_zone_critical_reset(tz);
+ 	tz->prev_low_trip = -INT_MAX;
+ 	tz->prev_high_trip = INT_MAX;
+ 	for_each_trip_desc(tz, td) {
+diff --git a/drivers/thermal/thermal_core.h b/drivers/thermal/thermal_core.h
+index e98b0aa5a..9e238d85d 100644
+--- a/drivers/thermal/thermal_core.h
++++ b/drivers/thermal/thermal_core.h
+@@ -136,6 +136,8 @@ struct thermal_zone_device {
+ 	int last_temperature;
+ 	int emul_temperature;
+ 	int passive;
++	int crit_confirm;		/* counted samples, CONFIG_THERMAL_CRITICAL_CONFIRM_SAMPLES */
++	unsigned long crit_last;	/* jiffies of the last counted sample */
+ 	int prev_low_trip;
+ 	int prev_high_trip;
+ 	struct thermal_zone_device_ops ops;
+-- 
+2.51.0
+

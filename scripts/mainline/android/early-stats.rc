@@ -1,0 +1,9 @@
+# The packaged Cuttlefish APEXes declare IPowerStats/Memtrack but have no lazy-start
+# interface line. SystemServer requests it before the boot class_start hal.
+# Start the existing read-only reporting services after APEX configs are parsed,
+# in the current post-fs-data event, before the queued zygote-start event.
+on post-fs-data
+    start vendor.power.stats-default
+    # Stock memtrack has an interface line for early discovery. The packaged
+    # AIDL example lacks it; SystemServer.startMemtrackProxyService waits here.
+    start vendor.memtrack-default

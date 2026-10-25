@@ -1,0 +1,7 @@
+# Raw FRP block, like stock. Never add a mount/formattable fstab row.
+# PersistentDataBlockService owns normal FRP reads/writes, including PIN updates.
+# Our scripts only wait/configure permissions; never wipe or repair FRP contents.
+on fs
+    wait /dev/block/bootdevice/by-name/frp 5
+    # ueventd assigns stock system:system 0600 and frp_block_device at creation.
+    # vendor_init must not gain raw FRP access (AOSP neverallow).

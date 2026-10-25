@@ -1,0 +1,61 @@
+From: A9 development <dmayala@users.noreply.github.com>
+Subject: [PATCH] drm/msm: retain DPU completion errors for E Ink recovery admission
+
+Do not treat an outer DRM return of zero as proof that void wait_flush
+succeeded. Keep a boot latch, read-only to E Ink, for genuine wait errors.
+
+--- a/drivers/gpu/drm/msm/msm_atomic.c
++++ b/drivers/gpu/drm/msm/msm_atomic.c
+@@ -12,6 +12,21 @@
+ #include "msm_drv.h"
+ #include "msm_gem.h"
+ #include "msm_kms.h"
++
++/* Boot latch: wait_flush is void, so these errors do not reach the DRM
++ * return value. Recovery may read but never acknowledge this hard stop. */
++static atomic_t msm_a9_wait_fault = ATOMIC_INIT(0);
++
++void msm_a9_commit_fault(void)
++{
++	atomic_set(&msm_a9_wait_fault, 1);
++}
++
++bool msm_a9_commit_faulted(void)
++{
++	return atomic_read(&msm_a9_wait_fault);
++}
++EXPORT_SYMBOL_GPL(msm_a9_commit_faulted);
+ 
+ /*
+  * Helpers to control vblanks while we flush.. basically just to ensure
+--- a/drivers/gpu/drm/msm/msm_kms.h
++++ b/drivers/gpu/drm/msm/msm_kms.h
+@@ -22,6 +22,10 @@
+  * implementation is loaded at runtime.  The kms module is responsible
+  * for constructing the appropriate planes/crtcs/encoders/connectors.
+  */
++/* DPU completion failures are not returned by the void wait_flush hook. */
++void msm_a9_commit_fault(void);
++bool msm_a9_commit_faulted(void);
++
+ struct msm_kms_funcs {
+ 	/* hw initialization: */
+ 	int (*hw_init)(struct msm_kms *kms);
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
+@@ -497,6 +497,7 @@
+ 	int ret;
+ 
+ 	if (!kms || !crtc || !crtc->state) {
++		msm_a9_commit_fault();
+ 		DPU_ERROR("invalid params\n");
+ 		return;
+ 	}
+@@ -524,6 +525,7 @@
+ 		trace_dpu_kms_wait_for_commit_done(DRMID(crtc));
+ 		ret = dpu_encoder_wait_for_commit_done(encoder);
+ 		if (ret && ret != -EWOULDBLOCK) {
++			msm_a9_commit_fault();
+ 			DPU_ERROR("wait for commit done returned %d\n", ret);
+ 			break;
+ 		}

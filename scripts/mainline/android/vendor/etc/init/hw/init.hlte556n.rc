@@ -1,0 +1,182 @@
+# /vendor/etc/init/hw/init.hlte556n.rc -- Hisense A9, mainline 7.2 kernel + A16 GSI
+# (DRAFT 2026-10-15, not yet booted). Imported by the GSI's init.rc line 10
+# ("import /vendor/etc/init/hw/init.${ro.hardware}.rc"; ro.hardware comes from
+# androidboot.hardware=hlte556n on our boot header cmdline).
+#
+# Safety model (details in the design report):
+#  * PON beacon: every reset after the kernel's PON probe lands in BOOTLOADER
+#    fastboot; re-asserted here first thing.
+#  * Nothing on UFS is opened for writing: no userdata/metadata/misc/persist in
+#    any fstab, /data is a RAM disk, /metadata a tmpfs (GSI 00-fix-metadata.rc),
+#    /cache a tmpfs, no rmtfs/qseecomd/boot-control HAL in this vendor.
+#  * Dead-man: reboot to the bootloader after a9ml.deadman s (default 2400) if
+#    sys.boot_completed never comes; after boot_completed hold a9ml.hold s
+#    (default 1200), then reboot to the bootloader. /data/local/tmp/a9-stay
+#    (RAM, gone at reboot) holds it while present.
+# Actions in this file run in the vendor_init subcontext; the helper services
+# run /system/bin/sh as u:r:phhsu_daemon:s0, a domain the GSI's own
+# system_ext_sepolicy.cil declares and marks typepermissive (MEASURED, v7), so
+# they do not depend on this vendor's policy.
+
+on early-init
+    # belt and braces: the kernel armed it at PON probe (qcom_pon.beacon=2)
+    write /sys/module/qcom_pon/parameters/beacon 2
+    write /dev/kmsg "a9ml: early-init, beacon re-asserted (reason 2 = fastboot)"
+
+on init
+    # phh rw-system.sh (vndk.rc, on post-fs) resets ro.debuggable=0/ro.secure=1
+    # unless this file exists; /metadata is the GSI's tmpfs by now (its
+    # 00-fix-metadata.rc runs at early-init, after this file's early-init).
+    write /metadata/securize_disable 1
+    start a9ml_deadman
+    write /dev/kmsg "a9ml: init, dead-man started"
+
+on fs
+    # /cache is a directory on the read-only system root; a tmpfs keeps
+    # recovery-persist/uncrypt quiet and guarantees twrp.sh (phh) finds no
+    # /cache/phh/flash and never runs its dd-to-system path.
+    mount tmpfs tmpfs /cache nosuid nodev noexec mode=0770,uid=1000,gid=2001
+    restorecon_recursive /cache
+    write /dev/kmsg "a9ml: fs"
+
+on late-fs
+    # /data = /dev/block/ram0 (formattable, latemount). --late queues the
+    # "nonencrypted" trigger (ro.crypto.state=unsupported).
+    mount_all /vendor/etc/fstab.hlte556n --late
+    write /dev/kmsg "a9ml: late-fs mount_all done"
+
+on post-fs
+    # again, in case /metadata was remounted between init and post-fs
+    write /metadata/securize_disable 1
+
+on post-fs-data
+    write /dev/kmsg "a9ml: post-fs-data, /data is RAM"
+    # adbd (USER build) always requires keys. /data/misc/adb is created by the
+    # GSI init.usb.rc (post-fs-data, 02750 system shell); create it here too in
+    # case ordering differs. /vendor/etc/adb_keys = main's ~/.android/adbkey.pub,
+    # copied in at pack time, never committed.
+    mkdir /data/misc 01771 system misc
+    mkdir /data/misc/adb 02750 system shell
+    copy /vendor/etc/adb_keys /data/misc/adb/adb_keys
+    chown system shell /data/misc/adb/adb_keys
+    chmod 0640 /data/misc/adb/adb_keys
+    restorecon /data/misc/adb/adb_keys
+    mkdir /data/local/tmp 0771 shell shell
+
+    # drm_hwcomposer must open the KMS card FIRST: the first opener becomes DRM
+    # master, and minigbm (allocator, mappers) opens the vkms card node too
+    # (vkms has no render node). Boot 4 ran headless ("DRM/KMS master access
+    # required" -> null-display) because the allocator won (INFERRED from the
+    # composer strings + `- Display on: null-display`). Phase 2 sets
+    # vendor.hwc.drm.device in its own early-boot exec and starts the composer
+    # itself (init.a9ml-eink.rc), so this start is for the vkms image only.
+on early-boot && property:ro.boot.a9ml.eink=0
+    start vendor.hwcomposer-3
+
+on boot
+    # USB gadget, configfs layout expected by the GSI's init.usb.configfs.rc
+    # (g1, configs/b.1, functions/ffs.adb). Extra functions acm.gs9 + ncm.gs8 are
+    # linked as f8/f9, which the GSI's "none" handler (rm f1 f2 f3) leaves alone:
+    # a root shell on ttyGS0 and a network link even if adbd never comes up.
+    mkdir /config/usb_gadget/g1 0770 shell shell
+    write /config/usb_gadget/g1/idVendor 0x18d1
+    write /config/usb_gadget/g1/idProduct 0x4ee7
+    write /config/usb_gadget/g1/bcdUSB 0x0200
+    write /config/usb_gadget/g1/bcdDevice 0x0223
+    mkdir /config/usb_gadget/g1/strings/0x409 0770 shell shell
+    write /config/usb_gadget/g1/strings/0x409/serialnumber ${ro.serialno}
+    write /config/usb_gadget/g1/strings/0x409/manufacturer "Hisense"
+    write /config/usb_gadget/g1/strings/0x409/product "A9 mainline Android"
+    mkdir /config/usb_gadget/g1/configs/b.1 0770 shell shell
+    mkdir /config/usb_gadget/g1/configs/b.1/strings/0x409 0770 shell shell
+    write /config/usb_gadget/g1/configs/b.1/MaxPower 500
+    mkdir /config/usb_gadget/g1/functions/ffs.adb
+    mkdir /config/usb_gadget/g1/functions/acm.gs9
+    mkdir /config/usb_gadget/g1/functions/ncm.gs8
+    write /config/usb_gadget/g1/functions/ncm.gs8/dev_addr 02:a9:00:00:00:01
+    write /config/usb_gadget/g1/functions/ncm.gs8/host_addr 02:a9:00:00:00:02
+    symlink /config/usb_gadget/g1/functions/acm.gs9 /config/usb_gadget/g1/configs/b.1/f9
+    symlink /config/usb_gadget/g1/functions/ncm.gs8 /config/usb_gadget/g1/configs/b.1/f8
+    mkdir /dev/usb-ffs 0775 shell shell
+    mkdir /dev/usb-ffs/adb 0770 shell shell
+    mount functionfs adb /dev/usb-ffs/adb rmode=0770,fmode=0660,uid=2000,gid=2000
+    # mainline dwc3 UDC = dev_name of usb@4e00000 (INFERRED; a9ml-usb.sh
+    # corrects it from /sys/class/udc if different)
+    setprop sys.usb.controller ${ro.boot.usbcontroller:-4e00000.usb}
+    setprop sys.usb.configfs 1
+    start a9ml_usb
+    write /dev/kmsg "a9ml: boot, USB gadget g1 prepared"
+
+on property:sys.usb.ffs.ready=1
+    write /dev/kmsg "a9ml: adbd functionfs ready"
+
+on property:sys.usb.state=*
+    write /dev/kmsg "a9ml: sys.usb.state=${sys.usb.state}"
+
+on property:sys.boot_completed=1
+    write /sys/module/a9_boot_deadline/parameters/boot_completed 1
+    write /dev/kmsg "a9ml: sys.boot_completed=1"
+
+on property:init.svc.zygote=*
+    write /dev/kmsg "a9ml: zygote ${init.svc.zygote}"
+
+on property:ro.crypto.state=*
+    write /dev/kmsg "a9ml: ro.crypto.state=${ro.crypto.state}"
+
+on shutdown
+    write /dev/kmsg "a9ml: shutdown (${sys.powerctl})"
+
+service a9ml_deadman /system/bin/sh /vendor/bin/a9ml-deadman.sh
+    user root
+    group root system shell
+    seclabel u:r:phhsu_daemon:s0
+    oneshot
+    disabled
+
+service a9ml_usb /system/bin/sh /vendor/bin/a9ml-usb.sh
+    user root
+    group root system shell
+    seclabel u:r:phhsu_daemon:s0
+    oneshot
+    disabled
+
+# ---- development root shell (MAINLINE TEST VENDOR ONLY: slot B, RAM /data) ----
+# Primary route: adbd itself runs as root. The v7 system build.prop carries
+# ro.secure=0 / ro.debuggable=1 (MEASURED), which phh's rw-system.sh would
+# reset at post-fs unless /metadata/securize_disable exists (written above),
+# and the GSI's plat policy keeps the `su` domain adbd switches to. So
+# `adb shell id` should say uid=0, `adb root` works if it does not.
+# Fallback: a root shell on loopback TCP 2324 for `adb shell`:
+#   adb shell 'echo id | nc 127.0.0.1 2324'      (or: adb forward tcp:2324 tcp:2324)
+# Never part of the daily slot-A ROM (stock vendor) or any release image.
+# setprop vendor.a9ml.rootsh 0 stops it.
+service a9ml_rootsh /system/bin/sh -c "while :; do nc -s 127.0.0.1 -p 2324 -L /system/bin/sh; sleep 1; done"
+    user root
+    group root shell system
+    seclabel u:r:phhsu_daemon:s0
+    disabled
+
+on property:sys.boot_completed=1 && property:ro.a9ml.vendor=1
+    start a9ml_rootsh
+
+on property:vendor.a9ml.rootsh=0
+    stop a9ml_rootsh
+
+on property:vendor.a9ml.rootsh=1
+    start a9ml_rootsh
+
+# ---- test-build housekeeping (MAINLINE TEST VENDOR ONLY) ----
+# Eink run 5: ~5 min after boot the screen timeout let the kernel suspend; USB
+# never came back (the gadget does not survive suspend/resume yet). Hold a
+# kernel wakelock from early boot (system_suspend then never gets past
+# wakeup_count) and keep the screen on while plugged in.
+on boot && property:ro.a9ml.vendor=1
+    write /sys/power/wake_lock a9ml_test_awake
+    write /dev/kmsg "a9ml: wakelock a9ml_test_awake held (no system suspend on the test build)"
+
+on property:sys.boot_completed=1 && property:ro.a9ml.vendor=1
+    exec_background u:r:phhsu_daemon:s0 root -- /system/bin/settings put global stay_on_while_plugged_in 7
+    # frontlight came up at maximum in run 5: start dim and manual (a9service
+    # maps the screen brightness to the frontlight properties the shim applies)
+    exec_background u:r:phhsu_daemon:s0 root -- /system/bin/settings put system screen_brightness_mode 0
+    exec_background u:r:phhsu_daemon:s0 root -- /system/bin/settings put system screen_brightness 40

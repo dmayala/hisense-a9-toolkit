@@ -1,0 +1,16 @@
+; R9 OBS comm=sh already in each HAL SID, denied its own native entrypoint.
+; SRC wifi/android/a9-wifi-android.rc starts sh with the explicit HAL seclabel;
+; a9ml-wifi-android-start.sh validates the opt-in/readiness/phy gates, then execs
+; these correctly labelled binaries. Init has already selected the final domain.
+; This is a same-domain exec, not a missing init->HAL transition or wrong label.
+; Retain the wrappers and round5 noatsecure/LD_LIBRARY_PATH handling. Admit only
+; each STA HAL's own executable, never a generic HAL/vendor execute_no_trans.
+(allow hal_wifi_default hal_wifi_default_exec (file (execute_no_trans)))
+(allow hal_wifi_supplicant_default hal_wifi_supplicant_default_exec (file (execute_no_trans)))
+
+; SRC matching GSI plat_property_contexts: sys. -> system_prop, no more-specific
+; sys.linevibrator_type rule. R9 named setup reached setprop and failed; its
+; default_prop permission cannot authorize this prefix. Same legacy sentinel
+; and context as a9ml_compat's existing writer; preserve the framework label.
+(allow a9ml_key_aod system_prop_202504 (file (read open getattr map)))
+(allow a9ml_key_aod system_prop_202504 (property_service (set)))

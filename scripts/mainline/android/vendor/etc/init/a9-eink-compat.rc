@@ -1,0 +1,30 @@
+# /vendor/etc/init/a9-eink-compat.rc -- vendor integration of the E Ink compat
+# shim (scripts/mainline/eink-compat). A16 init rejects a vendor `override` of
+# a system service across the Treble boundary (boot 4: the ROM's own
+# /system/bin/a9_eink_server ran), so the shim is its own service.
+#
+# Handoff without a gap (shim review, runs/sol-einkcompat-report.md Follow-up 2):
+# the shim starts EARLY, at `on boot`, long before the ROM starts its server at
+# sys.boot_completed, so it already owns the abstract socket when a9service
+# first connects; no write-only command can reach the stock server. When the
+# ROM starts a9_eink_server anyway, it cannot bind the socket; it is stopped
+# (once, explicitly, so init does not restart it) and the shim keeps running.
+# If the shim is not running at that moment (crashed, restarting), it is
+# started only after the stock service has reached `stopped`.
+service a9_eink_compat /vendor/bin/a9-eink-compat
+    disabled
+    user root
+    group root system
+    seclabel u:r:phhsu_daemon:s0
+    restart_period 5
+
+on boot
+    start a9_eink_compat
+
+on property:init.svc.a9_eink_server=running
+    setprop vendor.a9ml.shim.handoff 1
+    stop a9_eink_server
+
+on property:init.svc.a9_eink_server=stopped && property:vendor.a9ml.shim.handoff=1
+    setprop vendor.a9ml.shim.handoff 2
+    start a9_eink_compat

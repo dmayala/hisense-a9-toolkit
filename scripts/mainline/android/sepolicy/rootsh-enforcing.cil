@@ -1,0 +1,79 @@
+; Integ9: observed development-console operations, replacing permissive rootsh.
+; Fixed type/class grants only; no new permissive type, dontaudit, block writes
+; or wildcard file/domain attributes. Sysfs file creation is deliberately absent.
+(allow a9ml_rootsh self (process (setfscreate)))
+(allow a9ml_rootsh anr_data_file (dir (getattr open read search)))
+(allow a9ml_rootsh anr_data_file (file (getattr)))
+(allow a9ml_rootsh tombstone_data_file (dir (getattr open read search)))
+(allow a9ml_rootsh rootfs (dir (open read)))
+(allow a9ml_rootsh unlabeled (dir (relabelfrom search)))
+(allow a9ml_rootsh unlabeled (file (relabelfrom)))
+(allow a9ml_rootsh vendor_data_file (dir (relabelfrom relabelto)))
+(allow a9ml_rootsh vendor_data_file (file (relabelfrom relabelto rename)))
+(allow a9ml_rootsh vold_metadata_file (dir (getattr search)))
+; Same-key TEE reopen diagnostics retain only the existing encrypted key inputs.
+; No metadata key/secure-storage write or block-device permission is added.
+(allow a9ml_rootsh vold_metadata_file (file (getattr open read)))
+; Publish truthful crypto status only after the wrapped worker verifies its
+; one real f2fs mount. No encryption configuration or key permissions added.
+(allow a9ml_rootsh vold_status_prop (property_service (set)))
+; Restore the preexisting RAM diagnostic mount only after a failed vold call
+; leaves /data unmounted. Successful real /data gets no tmpfs underlay.
+(allow a9ml_rootsh system_data_root_file (dir (mounton)))
+(allow a9ml_rootsh metadata_file (dir (getattr relabelfrom search setattr)))
+(allow a9ml_rootsh tee_data_file (dir (getattr open read relabelto search setattr)))
+(allow a9ml_rootsh mnt_vendor_file (dir (add_name create getattr mounton search write)))
+(allow a9ml_rootsh labeledfs (filesystem (mount)))
+(allow a9ml_rootsh block_device (dir (search)))
+(allow a9ml_rootsh file_contexts_file (file (getattr open read)))
+(allow a9ml_rootsh input_device (dir (watch)))
+(allow a9ml_rootsh kernel (dir (search)))
+(allow a9ml_rootsh kernel (file (read)))
+(allow a9ml_rootsh kernel (lnk_file (read)))
+(allow a9ml_rootsh kernel (process (setsched)))
+(allow a9ml_rootsh kernel (security (read_policy)))
+(allow a9ml_rootsh selinuxfs (file (open read)))
+(allow a9ml_rootsh logcat_exec (file (execute execute_no_trans getattr map open read)))
+(allow a9ml_rootsh vdc_exec (file (execute execute_no_trans getattr map open read)))
+; Native WLAN observation needs only the ifindex, never an address or a write.
+(allow a9ml_rootsh sysfs_net (dir (getattr search)))
+(allow a9ml_rootsh sysfs_net (file (getattr open read)))
+; The fixed 20 dBm nl80211 cap runs in this domain before credential lookup.
+; NET_ADMIN is already granted by the base diagnostic policy; libnl also
+; needs its own generic-netlink socket. No owner restart or RF-cap bypass.
+(allow a9ml_rootsh self (netlink_generic_socket (create bind read write getattr getopt setopt)))
+; iw's musl if_nametoindex uses SIOCGIFINDEX on an AF_UNIX datagram socket.
+; Android's default Unix-socket ioctl allowlist contains only tty operations;
+; add the same read-only interface lookup already granted to a9_wifi_radio.
+(allowx a9ml_rootsh self (ioctl unix_dgram_socket (0x8933)))
+; Boot94: the pre-switch-root logger must reach Android through /proc/1/root.
+; Read-only proc inspection uses FILE__READ, not PROCESS__PTRACE attachment.
+(allow a9ml_rootsh init (dir (search getattr)))
+(allow a9ml_rootsh init (lnk_file (read getattr)))
+(allow a9ml_rootsh init (file (read)))
+; Sweep-owned ANR headers/stacks are summarized before export; no trace writes.
+(allow a9ml_rootsh anr_data_file (file (open read)))
+; Retain sanitized native stack symbols as well as ANR Java methods.
+(allow a9ml_rootsh tombstone_data_file (file (getattr open read)))
+; Scrub crash-tag dropbox prefixes into the private per-boot evidence stream.
+; No dropbox writes, arbitrary app-data reads, or crash_dump ptrace expansion.
+(allow a9ml_rootsh system_data_file (dir (getattr search)))
+(allow a9ml_rootsh dropbox_data_file (dir (getattr open read search)))
+(allow a9ml_rootsh dropbox_data_file (file (getattr open read)))
+; Boot114 logcat also mmap()s the public event-tag dictionary. Read/open alone
+; still loses events; no dictionary writes or permissive domain are needed.
+(allow shell runtime_event_log_tags_file (file (getattr map open read)))
+; FP13: observed native lshal enumeration denial. canList checks the manager's
+; process context, separately from per-interface add/find permissions.
+(allow a9ml_rootsh hwservicemanager (hwservice_manager (list)))
+; Opt-in standby drain: read real power telemetry/wakeup residency, and write
+; only the dedicated USER input-pause node. No generic battery sysfs writes.
+(allow a9ml_rootsh sysfs_batteryinfo (dir (getattr open read search)))
+(allow a9ml_rootsh sysfs_batteryinfo (file (getattr open read)))
+(allow a9ml_rootsh debugfs_wakeup_sources (file (getattr open read)))
+(type a9ml_sysfs_drain_control)
+(roletype object_r a9ml_sysfs_drain_control)
+(typeattributeset fs_type (a9ml_sysfs_drain_control))
+(typeattributeset sysfs_type (a9ml_sysfs_drain_control))
+(genfscon sysfs "/devices/platform/soc@0/1c40000.spmi/spmi-0/0-02/1c40000.spmi:pmic@2:charger@1000/power_supply/a9-usb/input_suspend" (u object_r a9ml_sysfs_drain_control ((s0) (s0))))
+(allow a9ml_rootsh a9ml_sysfs_drain_control (file (getattr open read write)))

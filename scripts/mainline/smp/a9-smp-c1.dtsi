@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
+/* Stage C1 only. Include LAST in a private copy of the A9 board DTS.
+ * Keep CPU PSCI domain states (0x40000003) and request OSI normally, but
+ * do not select shared cluster GDHS/power-collapse states in the first test.
+ */
+&cluster_0_pd {
+	/delete-property/ domain-idle-states;
+};
+
+&cluster_1_pd {
+	/delete-property/ domain-idle-states;
+};

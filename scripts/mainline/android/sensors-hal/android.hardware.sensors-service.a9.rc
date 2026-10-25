@@ -1,0 +1,10 @@
+# A9 mainline sensors HAL (scripts/mainline/android/sensors-hal). Always registered; it
+# exposes sensors only when persist.a9.sensors=1 and a9-sensors.sh reports
+# vendor.a9.sensors.ready=1 within 20 s of the HAL's start (it stops waiting early on
+# vendor.a9.sensors.state=fail:*). Switch off: registers at once. Switch on: registration
+# (and so system_server's sensor service start, which waits for the declared HAL) is delayed
+# by up to ~20 s + SNS lookup + discovery, about 31 s worst case (review 79k N5; S2c measures it).
+service vendor.sensors-a9 /vendor/bin/hw/android.hardware.sensors-service.a9
+    class hal
+    user system
+    group system

@@ -1,0 +1,6 @@
+id=a9-bootlog
+name=A9 boot log (kdebuginfo)
+version=1.5
+versionCode=6
+author=A9 project
+description=Keeps kernel log, logcat and power-on reasons of the last 15 boots on the Hisense kdebuginfo partition (sda9), so a crashed or hung boot leaves evidence. Never formats anything.

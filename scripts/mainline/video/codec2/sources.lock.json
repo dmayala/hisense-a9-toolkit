@@ -1,0 +1,142 @@
+{
+  "codec2": {
+    "url": "https://android.googlesource.com/platform/frameworks/av/+archive/refs/heads/android16-release/media/codec2.tar.gz",
+    "sha256": "17890422bd8a5da4b55f2612e88966268317b6d7075f3de72b87d10d578236a2",
+    "tree_sha256": "2e7c01566269ca89360ae4d5bdc089c4377474148e9152ad6f9eae60019d2385"
+  },
+  "native-libs": {
+    "url": "https://android.googlesource.com/platform/frameworks/native/+archive/refs/heads/android16-release/libs.tar.gz",
+    "sha256": "20c828b03e82c47ae3f0bc14800d4013ba68cf84e1a0c70737edf5dbb3d470e1",
+    "tree_sha256": "5ecf521ee342087e709956592526b7964bc1b59f4c590dec555048dd939ab0a4"
+  },
+  "native-opengl": {
+    "url": "https://android.googlesource.com/platform/frameworks/native/+archive/refs/heads/android16-release/opengl/include.tar.gz",
+    "sha256": "65b2abb1745024f6dbcfb6297614a5750262a2c67a5543df2b300a37ccd303a3",
+    "tree_sha256": "2bd91b37dcb068635f2785615fc7d02ee74781b72c1f191f502d04d0d7204509"
+  },
+  "utils": {
+    "url": "https://android.googlesource.com/platform/system/core/+archive/refs/heads/android16-release/libutils.tar.gz",
+    "sha256": "679e418baa50c7621b98c292b7db7588382bef9209e88ed0245df76518cf349d",
+    "tree_sha256": "cdc22fe6c3d42ada6d33ad027257bad6e05651517a5dc68cf41992fc945074ef"
+  },
+  "cutils": {
+    "url": "https://android.googlesource.com/platform/system/core/+archive/refs/heads/android16-release/libcutils.tar.gz",
+    "sha256": "789a8aba32c2a08b7fcea97ed9f6821a44442033bd313096013eb098a10966d8",
+    "tree_sha256": "8e018b2f7af99a98b11ea06956c1f9b0a629ad744583c66458f9e4672f71bd68"
+  },
+  "system": {
+    "url": "https://android.googlesource.com/platform/system/core/+archive/refs/heads/android16-release/libsystem.tar.gz",
+    "sha256": "150d2d0a11f6950518ef5f0789c36b902fb7cb230693e4729abe499f1247f07b",
+    "tree_sha256": "d5aee10300e08d7825449e7e9d4956cc9aa913c16e5a8b1c16765c376ce91cf1"
+  },
+  "log": {
+    "url": "https://android.googlesource.com/platform/system/logging/+archive/refs/heads/android16-release/liblog.tar.gz",
+    "sha256": "d54d870278c38bbe913ccf777e1c11cff09cf880cd03b58d5bd4a5220bee5021",
+    "tree_sha256": "9a071ae9ea42e7b3afd034b873a1343c94d046ec6b4dbc922053f4c6ba72ab12"
+  },
+  "av-include": {
+    "url": "https://android.googlesource.com/platform/frameworks/av/+archive/refs/heads/android16-release/include.tar.gz",
+    "sha256": "85fc16c9b6dbcc86348acfc2491bb72299b220c9c47e572c609063615da2e09e",
+    "tree_sha256": "6d4554084a93b6c526fba500a111127ff734501db4813ebaa948aadec06b4188"
+  },
+  "vndk-generated": {
+    "url": "https://android.googlesource.com/platform/prebuilts/vndk/v34/+archive/refs/heads/main/arm64/include/generated-headers.tar.gz",
+    "sha256": "43f9995573ad00004ebf932e307c5a29c455be02e8c86f50066eec7e4556de5d",
+    "tree_sha256": "eecadc2273a8fd1bb6ca40b2c28ce55123b29a3d2d291dcf8099327da3fe3e28"
+  },
+  "av-foundation": {
+    "url": "https://android.googlesource.com/platform/frameworks/av/+archive/refs/tags/android-16.0.0_r2/media/module/foundation.tar.gz",
+    "sha256": "19886c48799c4351ccee53e02b339e011f0cbd428febed1e856ec661a9849d09",
+    "tree_sha256": "fc3537bc3f2610cac9a70c35d06dbee596c12dfe67c53fe7d2b192b6235c181b"
+  },
+  "bufferpool": {
+    "url": "https://android.googlesource.com/platform/frameworks/av/+archive/refs/tags/android-16.0.0_r2/media/module/bufferpool.tar.gz",
+    "sha256": "45e10b9996f8b3ce7d67f490c4d8e82b94319a52b0bd8f18906b2a7b7f19fa80",
+    "tree_sha256": "e273cca5d638a023b215d2c25a598aaeea9483079f6e1507e689df9234477a5c"
+  },
+  "base": {
+    "url": "https://android.googlesource.com/platform/system/libbase/+archive/refs/tags/android-16.0.0_r2.tar.gz",
+    "sha256": "475f48ba82b8597332289ef30d968bb7c261b3ae2b6e97c19d3138bec9c8aa19",
+    "tree_sha256": "26d892545e87bea6f2d8a71872f01723d598e98c364c3440b2a3777c879f8db1"
+  },
+  "hidl": {
+    "url": "https://android.googlesource.com/platform/system/libhidl/+archive/refs/tags/android-16.0.0_r2.tar.gz",
+    "sha256": "3144471fdccb78045ec716567124dccec669a7942fa72c82a20f16af758b32c2",
+    "tree_sha256": "9ee65b6f6cf496b69fcea52fd57d84befda6f192379520723bd767a5da27f1a5"
+  },
+  "chrome": {
+    "url": "https://android.googlesource.com/platform/external/libchrome/+archive/refs/tags/android-16.0.0_r2.tar.gz",
+    "sha256": "61e8b5818c2d4e089b6503a1e47eac2523ba5aa4dd4bba2c468166f8deeb9baa",
+    "tree_sha256": "8db5cf2d4e38c84f6bf2b086aef17fb19696cc3c5dd2956a8a498fbe551a0ea0"
+  },
+  "yuv": {
+    "url": "https://android.googlesource.com/platform/external/libyuv/+archive/refs/tags/android-16.0.0_r2.tar.gz",
+    "sha256": "5bcc2eea723b31f0d390d7d8eb10fdf082520bda52ac04607ab648f635926e3b",
+    "tree_sha256": "edee05d62760ac87c2e870c92ba1dff5429bc3df1646327a05ddb7015a4d0e8c"
+  },
+  "hardware-all": {
+    "url": "https://android.googlesource.com/platform/hardware/libhardware/+archive/refs/tags/android-16.0.0_r2/include_all.tar.gz",
+    "sha256": "ccf07ad4aed39078f144a5b6219c16ebf9b7e48fd30de27f31be081b6bec7917",
+    "tree_sha256": "5528afb7e46b3f5f15a4df98579164da145385d6ec126062982fc78f28f29716"
+  },
+  "hidl-tools": {
+    "url": "https://android.googlesource.com/platform/system/tools/hidl/+archive/refs/tags/android-16.0.0_r2.tar.gz",
+    "sha256": "4885ecd0c77b8c23f851aac0f36b0a3075a998d606c740e84ae94cee0d34e782",
+    "tree_sha256": "5b67a31af4d364a6052f29847e24594bef442b007d8681de688f38dace7c9dbc"
+  },
+  "hwbinder": {
+    "url": "https://android.googlesource.com/platform/system/libhwbinder/+archive/refs/tags/android-16.0.0_r2.tar.gz",
+    "sha256": "3e2324d43c622d9d28926456b41f96a2dc7b99a079d930072ddfceea790a6dc5",
+    "tree_sha256": "45b24cdbdac055698b1b277f4439039e7a3ca5f723716ab671cc7417cddbe1c2"
+  },
+  "jsoncpp": {
+    "url": "https://android.googlesource.com/platform/external/jsoncpp/+archive/refs/tags/android-16.0.0_r2.tar.gz",
+    "sha256": "41ddb2734926d8be969024dbde1f363942aef49c9a5d7a22a3aea33f08da77b9",
+    "tree_sha256": "f5886abd9c36682ff93e87205094162c3909a2c82228103beab6dda9c327fe19"
+  },
+  "googletest": {
+    "url": "https://android.googlesource.com/platform/external/googletest/+archive/refs/tags/android-16.0.0_r2/googletest/include.tar.gz",
+    "sha256": "af743d168c235b98893a69f2e83d2d309781604222c1659f9c2ba107a4d47096",
+    "tree_sha256": "141ec9ec94ca5f5b44778650aeb62487825ad9386cf947a3f4309334b1e9129f"
+  },
+  "media-hardware": {
+    "url": "https://android.googlesource.com/platform/frameworks/av/+archive/refs/tags/android-16.0.0_r2/media/libstagefright/omx/include.tar.gz",
+    "sha256": "c03423645a137a01897b8c1bce6ac48a73fb5fdd4fb0f5a666ebee1800e77342",
+    "tree_sha256": "cddb108a0f2721e3fb5e550f0257d21c3420913055047f264c0f9bb6abe802d9"
+  },
+  "openmax": {
+    "url": "https://android.googlesource.com/platform/frameworks/native/+archive/refs/tags/android-16.0.0_r2/headers/media_plugin.tar.gz",
+    "sha256": "1020088a8a1d071bbb9175eb94b7b8a28e771c36d18b68a71b08cff4df2a1c24",
+    "tree_sha256": "6740189245a4ce43c82e2711f6c9832b4da0d68636b735098d42e07c6deaeb1b"
+  },
+  "gralloc-types": {
+    "url": "https://android.googlesource.com/platform/frameworks/native/+archive/refs/tags/android-16.0.0_r2/libs/gralloc/types.tar.gz",
+    "sha256": "fa547ffe28e30f7bc5c7f1affced62d2f0953c99da140a43229fef6e2b304e37",
+    "tree_sha256": "ef5d54d5b50e607e62ce0444de524a8ff077145af353055c04225a7b6012d2d9"
+  },
+  "hal-media": {
+    "url": "https://android.googlesource.com/platform/hardware/interfaces/+archive/refs/tags/android-16.0.0_r2/media.tar.gz",
+    "sha256": "2cd8951d023234b045bd5f9a2f97d3aec74f6bee795649c0b16161dfcc4096d8",
+    "tree_sha256": "520253125f90cd0e2941149b3387ae3ce236ecd3ed8fc81d0a71bbc0e9efff92"
+  },
+  "hal-graphics": {
+    "url": "https://android.googlesource.com/platform/hardware/interfaces/+archive/refs/tags/android-16.0.0_r2/graphics.tar.gz",
+    "sha256": "ad7486e3285ea60590a7c7365af26c718233a51fc4026a4aab4b1a939bb38775",
+    "tree_sha256": "f765dcdb2259936a142254b3e8ff986cef980381a5895903bc6e852eac7533f7"
+  },
+  "av-minijail-header": {
+    "url": "https://android.googlesource.com/platform/frameworks/av/+archive/refs/tags/android-16.0.0_r2/media/module/minijail.tar.gz",
+    "sha256": "a277e8867d6322820e22a45d463461bb2087bdd8ec9236315efec903ed3f4203",
+    "tree_sha256": "def3f5a0ff4e44fd5126e2c7f1f4ef4111e4ffdf453edb931350b7287fdcb527"
+  },
+  "libfmq": {
+    "url": "https://android.googlesource.com/platform/system/libfmq/+archive/refs/heads/android16-release.tar.gz",
+    "sha256": "456c5711a02d5bed7b1e0c4fa2e6f2c5e9a87470760aedce65c06db9e5bf8757",
+    "tree_sha256": "a95c967dcbb593d86dbb405432dcf030df1bc135a95bdd98b1c53e194925d77e"
+  },
+  "v4l2_codec2": {
+    "url": "https://android.googlesource.com/platform/external/v4l2_codec2/+archive/refs/heads/android16-release.tar.gz",
+    "sha256": "464126a5ce8b0a3681854da94dcc3c861af8bafb0097cbfb7758c5d14dd166de",
+    "tree_sha256": "62eea438d8a7a2999b7d944dd7ef8bbbe1bfae9af289a2599becca1dce346086"
+  }
+}

@@ -1,0 +1,4 @@
+{
+    global: open; openat; creat; stat; readlink;
+    local: *;
+};

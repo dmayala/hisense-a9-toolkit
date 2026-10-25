@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
+/* Include after a9-adsp-d1.dtsi. The sole DT delta against measured D1 is
+ * publishing the existing upstream ADSP FastRPC channel and its five compute
+ * context banks. No SID, carveout, rail, pin, clock or sensor node is invented.
+ *
+ * CONFIG_QCOM_FASTRPC=m is sidecar-only: no installed/autoloaded FastRPC module.
+ * Its S1 module parameter a9_sensor_fastrpc defaults false and registers no
+ * driver unless explicitly supplied at the independently admitted load.
+ * ADSP PAS manual-start and every display/power gate remain as in D1.
+ */
+&remoteproc_adsp {
+	glink-edge {
+		fastrpc {
+			status = "okay";
+		};
+	};
+};

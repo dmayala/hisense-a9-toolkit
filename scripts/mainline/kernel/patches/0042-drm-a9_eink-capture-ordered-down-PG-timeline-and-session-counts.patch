@@ -1,0 +1,371 @@
+From 616c9ef6e3507503062ba0c737d62c7e47b81a6a Mon Sep 17 00:00:00 2001
+From: dmayala <dmayala@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 10:00:00 +0000
+Subject: [PATCH 0042] drm/a9_eink: capture ordered-down PG timeline and
+ power-session counts
+
+Diagnostic follow-up to 0039 for run12, rebased onto 0040b and 0041.
+Preserve the failed admission sample, rail latch, forced Clear and all
+existing caps. Sample PG without sleeping GPIO reads inside the existing
+ordered-down deadlines; report only after the existing shutdown returns,
+from 0040b's shared rail validator. Add passive accepted-frame and
+full-rectangle job counts. No debounce, retry, HV extension, heavy-frame cap
+or new power-cycle policy. Apply after 0039, 0040 and 0041.
+---
+ drivers/gpu/drm/a9_eink/a9_eink.h     |  18 ++++
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c | 124 ++++++++++++++++++++++++--
+ drivers/regulator/fp9929a.c           |  36 +++++++-
+ include/linux/regulator/fp9929a.h     |  16 ++++
+ 4 files changed, 187 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index 8d46446741fe418b7b53925cbeccbc7bdbb7150a..385ff5b5a5065c3ff0150d5e3bec7e919d4ccdaf 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -165,6 +165,15 @@ void a9x_emergency_off(struct a9x_transport *t, const char *why);
+ int a9x_idle_refresh(struct a9x_transport *t);	/* one idle (template) frame, always */
+ bool a9x_attached(struct a9x_transport *t);
+ 
++/* Diagnostic only: counts software waveform jobs/accepted slots, not energy. */
++struct a9_session_stats {
++	u64 id, frame0;
++	u64 full_frames; /* accepted slots (incl. init/null) of full-rect jobs */
++	u64 waveforms, waveforms_done;
++	u64 full_started, full_done;
++	u64 clears, clears_done, transitions, transitions_done;
++};
++
+ struct a9_eink {
+ 	struct drm_device drm;
+ 	struct drm_plane plane;
+@@ -210,6 +219,7 @@ struct a9_eink {
+ 	/* patch 0039: end of the last real waveform run (0 = none) and its result */
+ 	ktime_t wf_end;
+ 	int wf_ret;
++	struct a9_session_stats session; /* reset only after fresh PG-qualified power-up */
+ 	/* patch 0039: state captured at the last rail fault, BEFORE its power-down */
+ 	struct {
+ 		u64 count;			/* rail faults this boot */
+@@ -221,6 +231,14 @@ struct a9_eink {
+ 		s64 session_ms;			/* since the transport power-up, -1 off */
+ 		s64 since_wf_ms;		/* since the last waveform run, -1 none */
+ 		int wf_ret;			/* that run's result */
++		s64 pg_at_us; /* completion time of the ORIGINAL failed PG read */
++		struct a9_session_stats session; /* frozen before shutdown */
++		u64 session_frames; /* includes zero_test; excludes shutdown neutral */
++		u64 pd_seq_before, pd_seq;
++		bool pd_off_confirmed, pd_valid;
++		int pd_getter; /* -ENODATA: no post-off lookup was attempted */
++		s64 pd_at_us[3]; /* normal shutdown: entry, VCOM-low, PWRUP-low */
++		int pd_pg_raw[3];
+ 	} rail;
+ 	struct notifier_block pm_nb;
+ 	struct task_struct *thread;
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index 2daa4d0a97d8c6e2eac15dbe6b00a51b6309f4b6..b3fbd8e9a74455421e12cd1dbb95d3d0f5ba1a45 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -658,6 +658,14 @@ static ssize_t test_pattern_store(struct device *kdev, struct device_attribute *
+ }
+ static DEVICE_ATTR(test_pattern, 0600, test_pattern_show, test_pattern_store);
+ 
++/* Accepted transport slots since this PG-qualified power session began.
++ * Includes zero_test slots; power-on/shutdown template refreshes are excluded
++ * by the existing transport frames counter. No analog-delivery claim. */
++static u64 a9_session_frames(const struct a9_eink *a9)
++{
++	return a9->tx.frames - a9->session.frame0;
++}
++
+ /* read-only status (not part of the contract) */
+ static ssize_t status_show(struct device *kdev, struct device_attribute *attr, char *buf)
+ {
+@@ -689,7 +697,16 @@ static ssize_t status_show(struct device *kdev, struct device_attribute *attr, c
+ 		"rail_fault %d rail_faults %llu rail_at_ms %lld rail_getter %d rail_pg_raw %d rail_on %d"
+ 		" rail_energized %d rail_forced %d rail_emergency %d rail_pg_valid %d rail_tx_on %d"
+ 		" rail_gone %d rail_front_null %d rail_armed %d rail_session_ms %lld rail_since_wf_ms %lld"
+-		" rail_wf_ret %d force_clear %d\n",
++		" rail_wf_ret %d force_clear %d\n"
++		"session id %llu frames %llu full_frames %llu waveforms %llu done %llu"
++		" full_started %llu full_done %llu clear_started %llu clear_done %llu"
++		" transition_started %llu transition_done %llu\n"
++		"rail_session id %llu frames %llu full_frames %llu waveforms %llu done %llu"
++		" full_started %llu full_done %llu clear_started %llu clear_done %llu"
++		" transition_started %llu transition_done %llu\n"
++		"rail_pg_at_us %lld pd_off_confirmed %d pd_valid %d pd_getter %d"
++		" pd_seq_before %llu pd_seq %llu pd_entry_at_us %lld pd_entry_pg %d"
++		" pd_vcom_at_us %lld pd_vcom_pg %d pd_pwrup_at_us %lld pd_pwrup_pg %d\n",
+ 		enable, a9->wf_loaded, a9x_attached(t), t->on, atomic_read(&a9x_stall_fault),
+ 		a9->ct_loaded,
+ 		a9->updates, a9->aborts, t->frames, t->late, t->vbl_skips, t->commits_failed,
+@@ -721,7 +738,20 @@ static ssize_t status_show(struct device *kdev, struct device_attribute *attr, c
+ 		a9->rail.pg_raw, a9->rail.on, a9->rail.energized, a9->rail.forced,
+ 		a9->rail.emergency, a9->rail.pg_valid, a9->rail.tx_on, a9->rail.tx_gone,
+ 		a9->rail.front_null, a9->rail.armed, a9->rail.session_ms, a9->rail.since_wf_ms,
+-		a9->rail.wf_ret, READ_ONCE(a9->force_clear));
++		a9->rail.wf_ret, READ_ONCE(a9->force_clear),
++		a9->session.id, a9_session_frames(a9), a9->session.full_frames,
++		a9->session.waveforms, a9->session.waveforms_done,
++		a9->session.full_started, a9->session.full_done, a9->session.clears,
++		a9->session.clears_done, a9->session.transitions, a9->session.transitions_done,
++		a9->rail.session.id, a9->rail.session_frames, a9->rail.session.full_frames,
++		a9->rail.session.waveforms, a9->rail.session.waveforms_done,
++		a9->rail.session.full_started, a9->rail.session.full_done, a9->rail.session.clears,
++		a9->rail.session.clears_done, a9->rail.session.transitions, a9->rail.session.transitions_done,
++		a9->rail.pg_at_us, a9->rail.pd_off_confirmed, a9->rail.pd_valid, a9->rail.pd_getter,
++		a9->rail.pd_seq_before, a9->rail.pd_seq,
++		a9->rail.pd_at_us[0], a9->rail.pd_pg_raw[0],
++		a9->rail.pd_at_us[1], a9->rail.pd_pg_raw[1],
++		a9->rail.pd_at_us[2], a9->rail.pd_pg_raw[2]);
+ }
+ static DEVICE_ATTR_RO(status);
+ 
+@@ -948,9 +978,19 @@ static void a9_rail_fault(struct a9_eink *a9, int ret, const struct fp9929a_stat
+ 	a9->rail.front_null = t->front_null;
+ 	a9->rail.armed = t->stall_armed;
+ 	a9->rail.session_ms = t->on ? ktime_ms_delta(now, t->on_since) : -1;
++	a9->rail.session = a9->session;
++	a9->rail.session_frames = a9_session_frames(a9);
+ 	mutex_unlock(&t->lock);
+ 	a9->rail.getter = ret;
+ 	a9->rail.pg_raw = st->pg_raw;
++	a9->rail.pg_at_us = st->pg_at_us;
++	a9->rail.pd_seq_before = st->pdtrace.seq;
++	a9->rail.pd_seq = 0;
++	a9->rail.pd_off_confirmed = false;
++	a9->rail.pd_valid = false;
++	a9->rail.pd_getter = -ENODATA;
++	memset(a9->rail.pd_at_us, 0, sizeof(a9->rail.pd_at_us));
++	a9->rail.pd_pg_raw[0] = a9->rail.pd_pg_raw[1] = a9->rail.pd_pg_raw[2] = -ENODATA;
+ 	a9->rail.on = st->on;
+ 	a9->rail.energized = st->energized;
+ 	a9->rail.forced = st->forced_off;
+@@ -965,13 +1005,50 @@ static void a9_rail_fault(struct a9_eink *a9, int ret, const struct fp9929a_stat
+ 	atomic_set(&a9x_rail_fault, 1);
+ 	WRITE_ONCE(enable, false);
+ 	a9->force_clear = true;	/* glass state unknown: full Clear first */
++	/* Reporting is deliberately deferred until the existing power-off returns. */
++}
++
++static void a9_rail_report(struct a9_eink *a9)
++{
++	struct fp9929a_status st;
++	int ret;
++
++	/* No new lookup, GPIO read or log was added ahead of rail removal.
++	 * An unknown/failed shutdown does not justify a diagnostic status read. */
++	a9->rail.pd_off_confirmed = !a9->tx.on && !a9->hv_fault;
+ 	dev_err(a9->dev, "FP9929A dropped out while the pipeline was on: rail fault latched"
+ 		" (getter %d pg_raw %d on %d energized %d forced %d emergency %d pg_valid %d"
+ 		" tx_on %d gone %d front_null %d armed %d session_ms %lld since_wf_ms %lld wf_ret %d);"
+ 		" write 1 to a9_eink.clear_fault, then a full Clear runs first\n",
+-		ret, st->pg_raw, st->on, st->energized, st->forced_off, st->emergency,
+-		st->pg_valid, a9->rail.tx_on, a9->rail.tx_gone, a9->rail.front_null,
+-		a9->rail.armed, a9->rail.session_ms, a9->rail.since_wf_ms, a9->wf_ret);
++		a9->rail.getter, a9->rail.pg_raw, a9->rail.on, a9->rail.energized,
++		a9->rail.forced, a9->rail.emergency, a9->rail.pg_valid,
++		a9->rail.tx_on, a9->rail.tx_gone, a9->rail.front_null,
++		a9->rail.armed, a9->rail.session_ms, a9->rail.since_wf_ms, a9->rail.wf_ret);
++	if (!a9->rail.pd_off_confirmed)
++		return;
++	ret = a9_hv_sample(a9, &st);
++	a9->rail.pd_getter = ret;
++	if (!ret && !a9->rail.getter && st.pdtrace.seq != a9->rail.pd_seq_before) {
++		a9->rail.pd_seq = st.pdtrace.seq;
++		a9->rail.pd_at_us[0] = st.pdtrace.entry.at_us;
++		a9->rail.pd_pg_raw[0] = st.pdtrace.entry.pg_raw;
++		a9->rail.pd_at_us[1] = st.pdtrace.vcom_low.at_us;
++		a9->rail.pd_pg_raw[1] = st.pdtrace.vcom_low.pg_raw;
++		a9->rail.pd_at_us[2] = st.pdtrace.pwrup_low.at_us;
++		a9->rail.pd_pg_raw[2] = st.pdtrace.pwrup_low.pg_raw;
++		a9->rail.pd_valid = true;
++	}
++	dev_info(a9->dev, "rail shutdown PG samples (normal path only, not PG edges/recovery):"
++		" fault %lld/%d valid %d getter %d seq %llu->%llu"
++		" entry %lld/%d vcom_low %lld/%d pwrup_low %lld/%d"
++		" session %llu frames %llu full_frames %llu full %llu/%llu\n",
++		a9->rail.pg_at_us, a9->rail.pg_raw, a9->rail.pd_valid, ret,
++		a9->rail.pd_seq_before, a9->rail.pd_seq,
++		a9->rail.pd_at_us[0], a9->rail.pd_pg_raw[0],
++		a9->rail.pd_at_us[1], a9->rail.pd_pg_raw[1],
++		a9->rail.pd_at_us[2], a9->rail.pd_pg_raw[2],
++		a9->rail.session.id, a9->rail.session_frames, a9->rail.session.full_frames,
++		a9->rail.session.full_started, a9->rail.session.full_done);
+ }
+ 
+ /* Consume the exact observed sample: a later good PG cannot erase dropout. */
+@@ -982,6 +1059,7 @@ static int a9_check_rail_sample(struct a9_eink *a9, bool was_on, int ret,
+ 		return 0;
+ 	a9_rail_fault(a9, ret, st);
+ 	a9_power_off(a9); /* ordered neutral; emergency HV off if that fails */
++	a9_rail_report(a9); /* original sample stays frozen, no recovery */
+ 	return -EIO;
+ }
+ 
+@@ -1029,6 +1107,15 @@ static int a9_power_on(struct a9_eink *a9)
+ 		a9_power_off(a9);
+ 		return -EIO;
+ 	}
++	/* Fresh, PG-qualified power-up only: a warm validation never resets these.
++	 * Keep id monotonic and the previous rail-fault capture frozen. */
++	{
++		u64 id = a9->session.id + 1;
++
++		memset(&a9->session, 0, sizeof(a9->session));
++		a9->session.id = id;
++		a9->session.frame0 = a9->tx.frames;
++	}
+ 	return 0;
+ }
+ 
+@@ -1166,10 +1253,24 @@ static int a9_run_ring(struct a9_eink *a9, bool init, int bin, struct sha256_ctx
+ 	u64 f0 = a9->tx.frames;
+ 	ktime_t p0 = ktime_get();
+ 	unsigned int watermark = READ_ONCE(prefill_frames);
++	bool full, clear, transition;
+ 	int ret;
+ 
+ 	if (a9x_fault_latched())
+ 		return -EIO;	/* writing enable alone cannot retry a failed trial */
++	/* FINAL prepared landscape rectangle, including forced mode/Clear expansion.
++	 * These are waveform-job counts, never a charge/PG-continuity estimate. */
++	full = a9->e.rect.x1 == 0 && a9->e.rect.y1 == 0 &&
++	       a9->e.rect.x2 == A9T_W && a9->e.rect.y2 == A9T_H;
++	clear = !!a9->e.clear;
++	transition = a9->e.req.kind == 1;
++	a9->session.waveforms++;
++	if (full)
++		a9->session.full_started++;
++	if (clear)
++		a9->session.clears++;
++	if (transition)
++		a9->session.transitions++;
+ 	a9r_reset(&a9->ring);
+ 	a9->ring_init_n = 0;
+ 	a9->rjob_init = init;
+@@ -1203,6 +1304,19 @@ static int a9_run_ring(struct a9_eink *a9, bool init, int bin, struct sha256_ctx
+ 		a9_power_off(a9);
+ 	}
+ 	a9r_stop(&a9->ring);	/* the producer has left the engine */
++	/* Include a failed/partial prefix, even when cleanup powered down before
++	 * joining. Diagnostic accounting must never move that safety ordering. */
++	if (full)
++		a9->session.full_frames += a9->tx.frames - f0;
++	if (!ret) {
++		a9->session.waveforms_done++;
++		if (full)
++			a9->session.full_done++;
++		if (clear)
++			a9->session.clears_done++;
++		if (transition)
++			a9->session.transitions_done++;
++	}
+ 	*init_shown = init && a9->ring_init_n && a9->tx.frames - f0 >= a9->ring_init_n;
+ 	return ret;
+ }
+diff --git a/drivers/regulator/fp9929a.c b/drivers/regulator/fp9929a.c
+index 48eb67e4840d88105ddc9f255090999936a7be4e..0530e33ad7758b2a9b5bcf77c4b7fbaef3046a8c 100644
+--- a/drivers/regulator/fp9929a.c
++++ b/drivers/regulator/fp9929a.c
+@@ -247,6 +247,7 @@ struct fp9929a {
+ 	struct notifier_block panic_nb;
+ 	bool have_temp;
+ 	int temp_c;
++	struct fp9929a_pd_trace pdtrace;	/* protected by lock; normal shutdown only */
+ };
+ 
+ /* the one FP9929A of the A9: lets the max_on_ms setter see "energized" */
+@@ -360,15 +361,44 @@ static void fp9929a_mark_off(struct fp9929a *fp)
+ 	WRITE_ONCE(fp->off_valid, true);
+ }
+ 
++/* No I2C, logging, new locks or sleeping GPIO reads in the shutdown trace. */
++static void fp9929a_pg_point(struct fp9929a *fp, struct fp9929a_pg_point *point)
++{
++	point->pg_raw = !fp->pg ? -ENOENT : gpiod_cansleep(fp->pg) ?
++		-EOPNOTSUPP : gpiod_get_value(fp->pg);
++	point->at_us = ktime_to_us(ktime_get());
++}
++
++/* Sampling consumes the existing dwell, rather than starting another one.
++ * Round the residual UP so timestamp precision never shortens the minimum.
++ */
++static void fp9929a_wait_until(ktime_t deadline)
++{
++	s64 left_ns = ktime_to_ns(ktime_sub(deadline, ktime_get()));
++	unsigned long us;
++
++	if (left_ns <= 0)
++		return;
++	us = (left_ns + NSEC_PER_USEC - 1) / NSEC_PER_USEC;
++	usleep_range(us, us + 100);
++}
++
+ static void fp9929a_power_down(struct fp9929a *fp)
+ {
+-	usleep_range(1000, 1100);
++	ktime_t start = ktime_get();
++
++	fp->pdtrace.seq++;
++	fp9929a_pg_point(fp, &fp->pdtrace.entry);
++	fp9929a_wait_until(ktime_add_ms(start, 1));
+ 	gpiod_set_value_cansleep(fp->vcom_en, 0);
+-	usleep_range(50000, 50100);
++	start = ktime_get();	/* after the actual VCOM-EN write completes */
++	fp9929a_pg_point(fp, &fp->pdtrace.vcom_low);
++	fp9929a_wait_until(ktime_add_ms(start, 50));
+ 	gpiod_set_value_cansleep(fp->pwrup, 0);
+ 	fp9929a_mark_off(fp);
+ 	fp->on = false;
+ 	WRITE_ONCE(fp->energized, false);
++	fp9929a_pg_point(fp, &fp->pdtrace.pwrup_low);
+ }
+ 
+ /*
+@@ -1066,7 +1096,9 @@ int fp9929a_get_status(struct device_node *np, struct fp9929a_status *st)
+ 		st->pg_valid = !!fp->pg;
+ 		/* one read: pg_good is derived from exactly the value reported */
+ 		st->pg_raw = fp->pg ? gpiod_get_value_cansleep(fp->pg) : -ENOENT;
++		st->pg_at_us = ktime_to_us(ktime_get());
+ 		st->pg_good = st->pg_raw == 1;
++		st->pdtrace = fp->pdtrace;
+ 		mutex_unlock(&fp->lock);
+ 	}
+ 	put_device(&client->dev);
+diff --git a/include/linux/regulator/fp9929a.h b/include/linux/regulator/fp9929a.h
+index 4d4a884789c5a7cec0b8eb8fb274f94094c015e0..28420a23135ccd4672d0f521f15cdbe01689f03f 100644
+--- a/include/linux/regulator/fp9929a.h
++++ b/include/linux/regulator/fp9929a.h
+@@ -7,6 +7,20 @@
+ 
+ struct device_node;
+ 
++/* Passive shutdown samples, monotonic completion time and logical PG/-errno. */
++struct fp9929a_pg_point {
++	s64 at_us;
++	int pg_raw;
++};
++
++/* Normal ordered power-down only; emergency/bypass paths do not advance seq. */
++struct fp9929a_pd_trace {
++	u64 seq;
++	struct fp9929a_pg_point entry;
++	struct fp9929a_pg_point vcom_low;
++	struct fp9929a_pg_point pwrup_low;
++};
++
+ struct fp9929a_status {
+ 	bool on;		/* rails up (power-up sequence completed) */
+ 	bool forced_off;	/* max_on_ms fault latched: power-up returns -EIO */
+@@ -17,6 +31,8 @@ struct fp9929a_status {
+ 				 * docs/mainline-fp9929a-pg.md */
+ 	int pg_raw;		/* the one gpiod read pg_good came from: 1, 0 or
+ 				 * -errno; -ENOENT when no PG line is wired */
++	s64 pg_at_us;		/* monotonic completion time of that same read */
++	struct fp9929a_pd_trace pdtrace;
+ 	bool energized;		/* PWRUP may be high (set before it is raised) */
+ 	bool temp_valid;	/* a TMST sample exists */
+ 	int temp_c;		/* TMST byte from the last power-up, unsigned deg C */
+-- 
+2.51.0
+

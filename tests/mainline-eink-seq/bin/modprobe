@@ -1,0 +1,10 @@
+#!/bin/sh
+. "$SIM_LIB"
+[ "$1" = a9_eink ] || exit 1
+P=$R/sys/module/a9_eink/parameters; mkdir -p $P $R/sys/class/drm/card1-DSI-1/eink; touch $R/dev/dri/card1
+echo N > $P/enable; echo 3000 > $P/hv_hold_ms; echo 60000 > $P/hv_max_ms; echo 0 > $P/zero_test
+echo Y > $P/init_flash; echo N > $P/trace; echo XR24 > $P/transport_format
+echo 0 > $P/bin_min; echo 13 > $P/bin_max   # patch 0026
+shift; for a in "$@"; do k=${a%%=*} v=${a#*=}; case $v in 1) [ $k = init_flash ] && v=Y;; 0) [ $k = trace ] && v=N;; esac; echo $v > $P/$k; done
+status
+klog 6 "a9-eink eink-display: E Ink KMS 824x1648; frames dry run (a9_eink.enable=0); transport XR24; HV hold $(cat $P/hv_hold_ms) ms"

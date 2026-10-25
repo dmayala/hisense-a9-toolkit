@@ -1,0 +1,139 @@
+; B4 static additions for the CURRENT integrated services, 2026-10-20.
+; SRC = inferred from source, awaiting permissive collection in THESE domains.
+; No typepermissive, no dontaudit. This is a runtime-linkable draft, not a
+; complete policy or an Android release/neverallow-compliant build.
+
+; Separate startup, expiry, USB and development-shell identities.
+(type a9ml_sensors) (roletype r a9ml_sensors)
+(type a9ml_deadman) (roletype r a9ml_deadman)
+(type a9ml_usb) (roletype r a9ml_usb)
+(type a9ml_rootsh) (roletype r a9ml_rootsh)
+(typeattributeset domain (a9ml_sensors a9ml_deadman a9ml_usb a9ml_rootsh))
+(typeattribute a9ml_script_domain)
+(typeattributeset a9ml_script_domain (a9ml_eink a9ml_gpu a9ml_bt a9ml_fw a9ml_sensors a9ml_deadman a9ml_usb a9ml_rootsh a9_wifi_radio))
+; Current rc uses /system/bin/sh explicitly: these entrypoint grants keep that
+; path operational for collection, but cross the Treble boundary. Replace with
+; vendor interpreter/tool copies before calling this a release policy.
+(allow init_202504 a9ml_script_domain (process (transition siginh rlimitinh)))
+(allow a9ml_script_domain shell_exec_202504 (file (entrypoint execute execute_no_trans read open getattr map)))
+(allow a9ml_script_domain toolbox_exec_202504 (file (execute execute_no_trans read open getattr map)))
+(allow a9ml_script_domain vendor_file_202504 (dir (read open getattr search)))
+(allow a9ml_script_domain vendor_file_202504 (file (read open getattr map execute execute_no_trans)))
+(allow a9ml_script_domain vendor_file_202504 (lnk_file (read getattr)))
+(allow a9ml_script_domain vendor_configs_file_202504 (dir (read open getattr search)))
+(allow a9ml_script_domain vendor_configs_file_202504 (file (read open getattr map)))
+(allow a9ml_script_domain self (process (fork sigchld signal sigkill getpgid setpgid)))
+(allow a9ml_script_domain self (fifo_file (read write open getattr ioctl)))
+(allow a9ml_script_domain kmsg_device_202504 (chr_file (write append open getattr)))
+(allow a9ml_script_domain proc_202504 (dir (read open getattr search)))
+(allow a9ml_script_domain proc_uptime_202504 (file (read open getattr)))
+(allow a9ml_script_domain proc_cmdline_202504 (file (read open getattr)))
+(allow a9ml_script_domain proc_mounts_202504 (file (read open getattr)))
+(allow a9ml_script_domain sysfs_202504 (dir (read open getattr search)))
+(allow a9ml_script_domain sysfs_202504 (lnk_file (read getattr)))
+(allow a9ml_script_domain sysfs_202504 (file (read open getattr)))
+(allow a9ml_script_domain bootloader_prop_202504 (file (read open getattr map)))
+(allow a9ml_script_domain vendor_default_prop_202504 (file (read open getattr map)))
+(allow a9ml_script_domain a9ml_prop (file (read open getattr map)))
+(allow a9ml_script_domain a9ml_prop (property_service (set)))
+(allow a9ml_script_domain property_socket_202504 (sock_file (write)))
+(allow a9ml_script_domain init_202504 (unix_stream_socket (connectto)))
+; SRC shell getprop also reads ro.a9ml.*, ro.vendor.a9.* and persist.a9.sensors.
+; Contexts assign these explicitly in the draft overlay.
+
+; Existing script execution of the separately labelled Wi-Fi helpers.
+(allow a9_wifi_radio a9_wifi_radio_exec (file (execute_no_trans)))
+(allow a9_wifi_radio a9_wifi_private_file (dir (read open getattr search)))
+(allow a9_wifi_radio a9_wifi_private_file (file (read open getattr map)))
+(allow a9ml_fw a9_wifi_radio_exec (file (read open getattr)))
+; Integrated BT setup invokes the bridge without changing its own domain.
+(allow a9ml_bt a9_wifi_radio_exec (file (execute execute_no_trans read open getattr map)))
+(allow a9ml_script_domain system_data_root_file_202504 (dir (search getattr)))
+; Keep the POC's firmware and hold-file paths for the collection phase.
+; This deliberately records the existing cross-Treble path, rather than
+; silently changing the Wi-Fi transport's script/tool hashes.
+(allow a9ml_script_domain shell_data_file_202504 (dir (read open search getattr)))
+(allow a9ml_script_domain shell_data_file_202504 (file (read open getattr)))
+(allow a9ml_fw shell_data_file_202504 (lnk_file (read getattr)))
+(allow a9ml_fw a9_wifi_ram_file (dir (write add_name)))
+(allow a9ml_fw a9_wifi_ram_file (lnk_file (create read getattr)))
+(allow a9ml_fw a9ml_firmware_file (file (read open getattr)))
+(allow a9ml_script_domain a9ml_firmware_file (dir (read open search getattr)))
+(allow a9ml_script_domain a9ml_firmware_file (file (read open getattr map)))
+(allow kernel_202504 shell_data_file_202504 (dir (search)))
+(allow kernel_202504 shell_data_file_202504 (file (read open getattr)))
+(allow kernel_202504 shell_data_file_202504 (system (firmware_load)))
+
+; SRC deadman: read current RAM hold file, PON beacon, reboot, sysrq fallback.
+(allow a9ml_deadman a9ml_sysfs_beacon (file (read write open getattr)))
+(allow a9ml_deadman powerctl_prop_202504 (property_service (set)))
+(allow a9ml_deadman proc_sysrq_202504 (file (write open getattr)))
+; USB/root-shell policy remains deliberately incomplete pending AVCs: no
+; catch-all sysfs/configfs writes, arbitrary device access or binder control.
+(allow a9ml_rootsh self (tcp_socket (create bind listen accept read write getopt setopt shutdown)))
+(allow a9ml_rootsh port_202504 (tcp_socket (name_bind)))
+(allow a9ml_rootsh node_202504 (tcp_socket (node_bind)))
+(allow a9ml_usb self (netlink_route_socket (create bind read write getattr nlmsg_read nlmsg_write)))
+(allow a9ml_usb self (capability (net_admin)))
+
+; SRC ADSP startup: module load, private tmpfs seed, chroot listener and QRTR.
+(allow a9ml_sensors vendor_kernel_modules_202504 (dir (read open search getattr)))
+(allow a9ml_sensors vendor_kernel_modules_202504 (file (read open getattr map)))
+(allow a9ml_sensors vendor_kernel_modules_202504 (system (module_load)))
+(allow a9ml_sensors self (capability (sys_module sys_admin sys_chroot chown fowner setuid setgid setpcap)))
+(allow a9ml_sensors self (qipcrtr_socket (create bind read write getattr getopt setopt)))
+(allow a9ml_sensors vendor_data_file_202504 (dir (read write create search open getattr add_name remove_name setattr)))
+(allow a9ml_sensors vendor_data_file_202504 (file (read write create open getattr setattr append unlink)))
+(allow a9ml_sensors a9ml_sysfs_param (dir (read search open getattr)))
+(allow a9ml_sensors a9ml_sysfs_param (file (read write open getattr)))
+; Remoteproc and fastrpc canonical target labels must come from fresh AVCs.
+; Do not grant generic sysfs write or every device ioctl as a substitute.
+
+; SRC session/controller: RAM mounts, module load, same-domain native servers,
+; strace and QRTR/netlink. Physical store block-device and mountpoint labels
+; intentionally await coordinator AVCs; the draft grants no disk writes.
+(allow a9_wifi_radio self (capability (sys_admin sys_chroot sys_ptrace sys_module net_admin net_raw chown fowner setuid setgid setpcap kill)))
+(allow a9_wifi_radio self (process (ptrace)))
+(allow a9_wifi_radio self (qipcrtr_socket (create bind read write getattr getopt setopt)))
+(allow a9_wifi_radio self (netlink_generic_socket (create bind read write getattr getopt setopt)))
+(allow a9_wifi_radio self (netlink_route_socket (create bind read write getattr getopt setopt nlmsg_read nlmsg_readpriv nlmsg_write)))
+(allow a9_wifi_radio tmpfs_202504 (filesystem (mount unmount getattr)))
+(allow a9_wifi_radio a9_wifi_ram_file (dir (read write create search open getattr add_name remove_name setattr mounton rmdir)))
+(allow a9_wifi_radio a9_wifi_ram_file (file (read write create open getattr setattr append unlink execute execute_no_trans map)))
+(allow a9_wifi_radio a9_wifi_ram_file (lnk_file (create read getattr unlink)))
+(allow a9_wifi_ram_file tmpfs_202504 (filesystem (associate)))
+(allow a9_wifi_radio vendor_kernel_modules_202504 (dir (read open search getattr)))
+(allow a9_wifi_radio vendor_kernel_modules_202504 (file (read open getattr map)))
+(allow a9_wifi_radio vendor_kernel_modules_202504 (system (module_load)))
+(allow a9_wifi_radio a9_wifi_rmtfs_device (chr_file (read write open getattr ioctl map)))
+(allow a9_wifi_radio kernel_202504 (system (syslog_read)))
+(allow a9_wifi_radio self (capability2 (syslog)))
+(allow a9_wifi_radio powerctl_prop_202504 (property_service (set)))
+(allow a9_wifi_radio proc_sysrq_202504 (file (write open getattr)))
+; SRC current launcher scripts wrap real HALs through /system/bin/sh.
+(typeattribute a9ml_wifi_hal)
+(typeattributeset a9ml_wifi_hal (hal_wifi_default hal_wifi_supplicant_default hal_wifi_hostapd_default))
+(allow a9ml_wifi_hal shell_exec_202504 (file (entrypoint execute execute_no_trans read open getattr map)))
+(allow a9ml_wifi_hal toolbox_exec_202504 (file (execute execute_no_trans read open getattr map)))
+(allow a9ml_wifi_hal a9ml_prop (file (read open getattr map)))
+
+; HAL additions. Existing Cuttlefish HAL attributes retain binder registration.
+(allow hal_sensors_default self (qipcrtr_socket (bind)))
+(allow hal_sensors_default a9ml_prop (file (read open getattr map)))
+(allow hal_thermal_default sysfs_202504 (dir (read open search getattr)))
+(allow hal_thermal_default sysfs_202504 (file (read open getattr)))
+(allow hal_thermal_default sysfs_202504 (lnk_file (read getattr)))
+; B1 vibrator searches evdev for aw8624, uploads FF_RUMBLE and writes EV_FF.
+(allow hal_vibrator_default input_device_202504 (dir (read open search getattr)))
+(allow hal_vibrator_default input_device_202504 (chr_file (read write open getattr ioctl)))
+(allowx hal_vibrator_default input_device_202504 (ioctl chr_file (0x4506 0x4580 0x4581)))
+; GNSS AIDL forks LOC helper, passes pipes, then LOC uses two QRTR sockets.
+(type a9ml_gnss_loc_exec) (roletype object_r a9ml_gnss_loc_exec)
+(typeattributeset file_type (a9ml_gnss_loc_exec))
+(typeattributeset exec_type (a9ml_gnss_loc_exec))
+(typeattributeset vendor_file_type (a9ml_gnss_loc_exec))
+(allow hal_gnss_default a9ml_gnss_loc_exec (file (execute execute_no_trans read open getattr map)))
+(allow hal_gnss_default self (process (fork sigchld signal sigkill)))
+(allow hal_gnss_default self (fifo_file (read write getattr ioctl)))
+(allow hal_gnss_default self (capability (kill setuid setgid setpcap)))
+(allow hal_gnss_default self (qipcrtr_socket (create bind read write getattr getopt setopt)))

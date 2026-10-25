@@ -1,0 +1,108 @@
+{
+  "repository": "platform/hardware/interfaces",
+  "revision": "5688f7eb1e117ed26e642a695de300b7683acb87",
+  "files": [
+    {
+      "path": "bluetooth/aidl/default/Android.bp",
+      "url": "https://android.googlesource.com/platform/hardware/interfaces/+/5688f7eb1e117ed26e642a695de300b7683acb87/bluetooth/aidl/default/Android.bp?format=TEXT",
+      "sha256": "0b3cbda899fee728bbb57deb5469b4bdc92d30a20a148e908e0ec7d50610690d",
+      "size": 1516
+    },
+    {
+      "path": "bluetooth/aidl/default/BluetoothHci.cpp",
+      "url": "https://android.googlesource.com/platform/hardware/interfaces/+/5688f7eb1e117ed26e642a695de300b7683acb87/bluetooth/aidl/default/BluetoothHci.cpp?format=TEXT",
+      "sha256": "90d38045e585a169fd43b443cd005a7d2d934c37cda6947366fe00b04155fc0a",
+      "size": 8917
+    },
+    {
+      "path": "bluetooth/aidl/default/BluetoothHci.h",
+      "url": "https://android.googlesource.com/platform/hardware/interfaces/+/5688f7eb1e117ed26e642a695de300b7683acb87/bluetooth/aidl/default/BluetoothHci.h?format=TEXT",
+      "sha256": "c413e66480208dfafd9495e736c0c65fe716521119dde90b8417d00c04e45f86",
+      "size": 2304
+    },
+    {
+      "path": "bluetooth/aidl/default/bluetooth-service-default.rc",
+      "url": "https://android.googlesource.com/platform/hardware/interfaces/+/5688f7eb1e117ed26e642a695de300b7683acb87/bluetooth/aidl/default/bluetooth-service-default.rc?format=TEXT",
+      "sha256": "cc28dbff649cf1f6191e5a508a0aa0af9b24db4f3a26184d5e7aa49044c972b2",
+      "size": 228
+    },
+    {
+      "path": "bluetooth/aidl/default/bluetooth-service-default.xml",
+      "url": "https://android.googlesource.com/platform/hardware/interfaces/+/5688f7eb1e117ed26e642a695de300b7683acb87/bluetooth/aidl/default/bluetooth-service-default.xml?format=TEXT",
+      "sha256": "cf4b35c2b6a04bf034c4185ea17e0dcabef709b91b33378c11863203a37bf738",
+      "size": 181
+    },
+    {
+      "path": "bluetooth/aidl/default/net_bluetooth_mgmt.cpp",
+      "url": "https://android.googlesource.com/platform/hardware/interfaces/+/5688f7eb1e117ed26e642a695de300b7683acb87/bluetooth/aidl/default/net_bluetooth_mgmt.cpp?format=TEXT",
+      "sha256": "1237e1858eb288f79d713f59cee1dcd53ecc7d24117f41c2889da765d2d96840",
+      "size": 7789
+    },
+    {
+      "path": "bluetooth/aidl/default/net_bluetooth_mgmt.h",
+      "url": "https://android.googlesource.com/platform/hardware/interfaces/+/5688f7eb1e117ed26e642a695de300b7683acb87/bluetooth/aidl/default/net_bluetooth_mgmt.h?format=TEXT",
+      "sha256": "97a82b6b014683dc3046ffe30cfe0c1653ac5ba4e569dcb25217e812397a5d1e",
+      "size": 1274
+    },
+    {
+      "path": "bluetooth/aidl/default/service.cpp",
+      "url": "https://android.googlesource.com/platform/hardware/interfaces/+/5688f7eb1e117ed26e642a695de300b7683acb87/bluetooth/aidl/default/service.cpp?format=TEXT",
+      "sha256": "463641f36676774943663e801d7a81bd638a5fae0ac70a29996e5a9a1b3d21e2",
+      "size": 1400
+    },
+    {
+      "path": "bluetooth/aidl/aidl_api/android.hardware.bluetooth/1/.hash",
+      "url": "https://android.googlesource.com/platform/hardware/interfaces/+/5688f7eb1e117ed26e642a695de300b7683acb87/bluetooth/aidl/aidl_api/android.hardware.bluetooth/1/.hash?format=TEXT",
+      "sha256": "ea64aa8de5e2f288bda32e28a9116749544e44f164fc097986b7aa335fdbf9bc",
+      "size": 41
+    },
+    {
+      "path": "bluetooth/aidl/aidl_api/android.hardware.bluetooth/1/android/hardware/bluetooth/IBluetoothHci.aidl",
+      "url": "https://android.googlesource.com/platform/hardware/interfaces/+/5688f7eb1e117ed26e642a695de300b7683acb87/bluetooth/aidl/aidl_api/android.hardware.bluetooth/1/android/hardware/bluetooth/IBluetoothHci.aidl?format=TEXT",
+      "sha256": "7b25a64281da7b50f2c301cadeadb9262ff29cdac5edafe9fadc16d04bff88ca",
+      "size": 2030
+    },
+    {
+      "path": "bluetooth/aidl/aidl_api/android.hardware.bluetooth/1/android/hardware/bluetooth/IBluetoothHciCallbacks.aidl",
+      "url": "https://android.googlesource.com/platform/hardware/interfaces/+/5688f7eb1e117ed26e642a695de300b7683acb87/bluetooth/aidl/aidl_api/android.hardware.bluetooth/1/android/hardware/bluetooth/IBluetoothHciCallbacks.aidl?format=TEXT",
+      "sha256": "180b79be8d0640c57fea922244f7b7ac9581eccdbedf35411a8c02c632a8d8e5",
+      "size": 2029
+    },
+    {
+      "path": "bluetooth/aidl/aidl_api/android.hardware.bluetooth/1/android/hardware/bluetooth/Status.aidl",
+      "url": "https://android.googlesource.com/platform/hardware/interfaces/+/5688f7eb1e117ed26e642a695de300b7683acb87/bluetooth/aidl/aidl_api/android.hardware.bluetooth/1/android/hardware/bluetooth/Status.aidl?format=TEXT",
+      "sha256": "18f7fedca617438ee5cc424a8099365339ab012c52468343f1db990af4fe5b35",
+      "size": 1897
+    },
+    {
+      "path": "bluetooth/aidl/Android.bp",
+      "url": "https://android.googlesource.com/platform/hardware/interfaces/+/5688f7eb1e117ed26e642a695de300b7683acb87/bluetooth/aidl/Android.bp?format=TEXT",
+      "sha256": "44dc1e7b90547218fb596a8c7f9ff7f202610d9663f026a0582d4ff06b0d48ea",
+      "size": 1321
+    },
+    {
+      "repository": "platform/frameworks/native",
+      "revision": "2827a4a16b0340ecd07c2d5a6c89991799b362bb",
+      "path": "libs/binder/ndk/include_platform/android/binder_manager.h",
+      "url": "https://android.googlesource.com/platform/frameworks/native/+/2827a4a16b0340ecd07c2d5a6c89991799b362bb/libs/binder/ndk/include_platform/android/binder_manager.h?format=TEXT",
+      "sha256": "8421f0e031b078d9161a692ccda2e3acd145db2f1fb37aa97bb41e97d636f066",
+      "size": 13625
+    },
+    {
+      "repository": "platform/frameworks/native",
+      "revision": "2827a4a16b0340ecd07c2d5a6c89991799b362bb",
+      "path": "libs/binder/ndk/include_platform/android/binder_process.h",
+      "url": "https://android.googlesource.com/platform/frameworks/native/+/2827a4a16b0340ecd07c2d5a6c89991799b362bb/libs/binder/ndk/include_platform/android/binder_process.h?format=TEXT",
+      "sha256": "fe9626e20b24d32cfc1c0dc1dc5de1cb80c07489cbb38afc563fa5082bf4a00a",
+      "size": 4958
+    },
+    {
+      "repository": "platform/frameworks/native",
+      "revision": "2827a4a16b0340ecd07c2d5a6c89991799b362bb",
+      "path": "libs/binder/ndk/include_platform/android/binder_stability.h",
+      "url": "https://android.googlesource.com/platform/frameworks/native/+/2827a4a16b0340ecd07c2d5a6c89991799b362bb/libs/binder/ndk/include_platform/android/binder_stability.h?format=TEXT",
+      "sha256": "f62817c8812f73e006675cd3b9ba0293cfa1a36c14cfbe5ea8d38c9f27c0882a",
+      "size": 4241
+    }
+  ]
+}

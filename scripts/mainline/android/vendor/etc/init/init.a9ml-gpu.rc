@@ -1,0 +1,51 @@
+# /vendor/etc/init/init.a9ml-gpu.rc -- GPU mode (Adreno 610, Mesa freedreno).
+# INERT unless the vendor was built with build-vendor.sh --gpu
+# (ro.vendor.a9ml.gpu=1 in its build.prop). Parsed after init.a9ml-eink.rc, so
+# at early-boot the E Ink setup (which loads msm) runs first. runs/gpu.md.
+
+on post-fs-data && property:ro.vendor.a9ml.gpu=1
+    # verified prerequisites (firmware, vkms.map_wc=Y before the allocator
+    # creates any buffer); vkms image: GPU modules + the qualification, before
+    # the composer (early-boot) opens vkms. The script's own deadline guard
+    # (75 s) is below timeout_period, so init cannot kill it first.
+    exec_start a9ml_gpu_setup
+
+on early-boot && property:ro.vendor.a9ml.gpu=1
+    # before class_start core (on boot) starts SurfaceFlinger: EGL = mesa only
+    # if every prerequisite and probe (info, render, shared dma-buf) passed;
+    # otherwise persist.graphics.egl=angle, read back (fail closed)
+    exec_start a9ml_gpu_select
+    # ro.hardware.egl is NOT in the GPU vendor's build.prop (apps would load ANGLE on
+    # SwiftShader whenever it reads "angle"): the script sets it once. This is the
+    # fail-closed default for every path where it did not (script killed by its
+    # timeout, setprop denied under enforcing): a no-op when already set (ro. is
+    # write-once; init logs the refusal), ANGLE when not.
+    setprop ro.hardware.egl angle
+    # Report the app driver's GLES level before system_server starts. If the
+    # helper cannot run, keep the existing ANGLE-compatible 3.1 default.
+    exec_start a9ml_gles_version
+    setprop ro.opengles.version 196609
+
+service a9ml_gpu_setup /system/bin/sh /vendor/bin/a9ml-gpu.sh setup
+    user root
+    group root system graphics
+    seclabel u:r:phhsu_daemon:s0
+    oneshot
+    disabled
+    timeout_period 120
+
+service a9ml_gpu_select /system/bin/sh /vendor/bin/a9ml-gpu.sh select
+    user root
+    group root system graphics
+    seclabel u:r:phhsu_daemon:s0
+    oneshot
+    disabled
+    timeout_period 120
+
+service a9ml_gles_version /system/bin/sh /vendor/bin/a9ml-gles-version.sh
+    user root
+    group root
+    seclabel u:r:phhsu_daemon:s0
+    oneshot
+    disabled
+    timeout_period 5

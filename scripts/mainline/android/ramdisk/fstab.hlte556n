@@ -1,0 +1,25 @@
+# First-stage fstab for the Hisense A9 mainline-kernel Android boot (DRAFT 2026-10-15).
+# Lives in the boot ramdisk root as /fstab.hlte556n. Found by the stock A11
+# first-stage init via GetFstabPath(): androidboot.fstab_suffix, then
+# androidboot.hardware, then hardware.platform, prefixes /odm/etc/fstab.,
+# /vendor/etc/fstab., /fstab. (system/core android-11.0.0_r48
+# fs_mgr/fs_mgr_fstab.cpp:408). Our header cmdline sets fstab_suffix=hlte556n
+# BEFORE the ABL's own "androidboot.fstab_suffix=default"; the first occurrence
+# wins (fs_mgr_boot_config.cpp fs_mgr_get_boot_config_from_kernel).
+#
+# Rules (see the report):
+#  - ONLY the two logical partitions system and vendor of slot _b
+#    (androidboot.slot_suffix=_b is pinned on our cmdline, first occurrence wins).
+#  - read-only; super metadata marks both "readonly" (lpdump of the golden
+#    super.bin, MEASURED), so fs_mgr loads the dm-linear tables read-only
+#    (fs_mgr_dm_linear.cpp:124) and dm opens super without write access.
+#  - no avb / avb_keys (AVB is off on this phone), no "check" (no e2fsck run),
+#    no "discard", no "formattable".
+#  - NOTHING else: no userdata, metadata, misc, persist, modem, dsp, bluetooth,
+#    SD card. product/system_ext are NOT mounted: the GSI's own
+#    /system/product and /system/system_ext are used (root symlinks), unlike
+#    today's stock fstab which overmounts stock A11 product_b/system_ext_b.
+#
+#<src>  <mnt_point>  <type>  <mnt_flags>          <fs_mgr_flags>
+system  /system      ext4    ro,barrier=1         wait,slotselect,logical,first_stage_mount
+vendor  /vendor      ext4    ro,barrier=1         wait,slotselect,logical,first_stage_mount

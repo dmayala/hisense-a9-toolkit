@@ -1,0 +1,413 @@
+From b41bd430948edbc76418383f022bd78a22d67717 Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 06:17:07 -0700
+Subject: [PATCH] regulator: fp9929a: energized state, gate interlock,
+ quiescence, startup max_on
+
+Review blocker 2 of the A9 E3 power-up (runs/sol-e3-review.md in the A9
+work repo): the panic backstop and the max_on_ms timer only knew about
+fp->on, which is set after VCOM-EN, so a panic or stall between PWRUP and
+VCOM-EN left the rails up with no backstop; and allow_power_on was only
+checked at enable entry, so an enable stalled in I2C could raise VCOM-EN
+after userspace had closed the gate and lowered the pins itself.
+
+- energized: set before PWRUP is first raised, cleared by every error path
+  and by fp9929a_power_down(). fp->on keeps its meaning (sequence done).
+- Panic notifier: drives VCOM-EN low, 50 ms, PWRUP low UNCONDITIONALLY
+  (non-sleeping gpiod_set_value; TLMM does not sleep), also closes the
+  gate; it logs only if the rails were energized or on. No locks.
+- Gate interlock: a module-wide gate lock (taken inside fp->lock).
+  allow_power_on is now module_param_cb; its set op takes the gate lock.
+  fp9929a_enable re-checks allow_power_on under the gate lock immediately
+  before raising PWRUP and again before raising VCOM-EN, and raises each
+  pin while holding it. Closed gate: normal power-down, -EPERM, logged.
+- Quiescence: enables in flight are counted. Writing 0 to allow_power_on
+  closes the gate, drops the lock and waits up to 2 s until none is in
+  flight; on timeout the write fails with -EBUSY (the gate stays closed).
+  So once "echo 0 > allow_power_on" has succeeded, no enable is in flight
+  and none can raise a pin afterwards. Rails that were already fully on
+  stay on: closing the gate is not a power-down.
+- max_on_ms: armed when the rails are energized (before PWRUP), so the
+  limit also covers a stalled power-up. The work powers down if on or
+  energized and its deadline has passed (a stale run from an earlier
+  power-up does nothing). If it cannot take fp->lock (a power-up holds
+  it), it drops the pins itself in the stock order under the gate lock and
+  marks the power-up expired; that power-up then refuses VCOM-EN, powers
+  down, latches the fault and returns -EIO. Enable error paths cancel the
+  work with the non-sync cancel_delayed_work (enable holds fp->lock, which
+  the work takes).
+
+VCOM write retries, the temperature read, the delays and the log lines are
+unchanged. Host fault tests of this file against a userspace shim of the
+kernel APIs: tests/mainline-fp9929a/run.sh in the A9 work repo.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/regulator/fp9929a.c | 228 +++++++++++++++++++++++++++++++-----
+ 1 file changed, 201 insertions(+), 27 deletions(-)
+
+diff --git a/drivers/regulator/fp9929a.c b/drivers/regulator/fp9929a.c
+index f8db7e432..fa43d073f 100644
+--- a/drivers/regulator/fp9929a.c
++++ b/drivers/regulator/fp9929a.c
+@@ -26,11 +26,27 @@
+  *  - probe never talks I2C; it only takes the GPIOs and, if the bootloader left
+  *    the rails up, runs the power-DOWN sequence above;
+  *  - shutdown/remove always power down;
+- *  - hard on-time limit: fp9929a.max_on_ms (default 20000, 0 = off). If the
+- *    rails are still up that long after a power-up, the work below runs the
+- *    stock power-down and LATCHES a fault: every power-up returns -EIO until
+- *    the consumer completes a normal disable, or 1 is written to
+- *    /sys/module/fp9929a/parameters/clear_fault.
++ *  - hard on-time limit: fp9929a.max_on_ms (default 20000, 0 = off), counted
++ *    from the moment PWRUP is first raised (so it also covers a power-up
++ *    that stalls, e.g. in I2C). If the rails are still energized that long
++ *    afterwards, the work below runs the stock power-down and LATCHES a
++ *    fault: every power-up returns -EIO until the consumer completes a
++ *    normal disable, or 1 is written to
++ *    /sys/module/fp9929a/parameters/clear_fault. If a power-up is still
++ *    running (holding the lock), the work drops the pins itself under the
++ *    gate lock and that power-up fails instead of raising VCOM-EN;
++ *  - gate interlock: allow_power_on is re-checked under a module-wide gate
++ *    lock immediately before PWRUP and again immediately before VCOM-EN are
++ *    raised, and each pin is raised while that lock is held. A power-up that
++ *    finds the gate closed runs the power-down and fails with -EPERM.
++ *    Writing 0 to allow_power_on closes the gate under the same lock and then
++ *    waits (up to 2 s) until no power-up is in flight; the write fails with
++ *    -EBUSY (gate still closed) if one is. So once "echo 0 >
++ *    allow_power_on" has returned success, no power-up is in flight and none
++ *    can raise either pin afterwards. Rails that were already fully on stay
++ *    on: closing the gate is not a power-down;
++ *  - panic: the notifier drives VCOM-EN low, waits 50 ms and drives PWRUP low
++ *    unconditionally, also in the middle of a power-up.
+  *
+  * Modelled on drivers/regulator/fp9931.c (Andreas Kemnade), which drives the
+  * related FP9931 with a different register map.
+@@ -51,6 +67,7 @@
+ #include <linux/regulator/fp9929a.h>
+ #include <linux/regulator/of_regulator.h>
+ #include <linux/string.h>
++#include <linux/wait_bit.h>
+ #include <linux/workqueue.h>
+ 
+ #define FP9929A_REG_TMST	0x00	/* temperature, unsigned deg C */
+@@ -61,10 +78,58 @@
+ #define FP9929A_VCOM_MAX_MV	5002	/* exclusive, as in the vendor driver */
+ #define FP9929A_I2C_TRIES	5
+ 
++/*
++ * Gate interlock (see the SAFETY notes above). fp9929a_gate_lock is taken
++ * inside fp->lock, never the other way round, and nothing sleeps for long
++ * while holding it (a GPIO write, or the max_on work's 50 ms power-down).
++ */
++static DEFINE_MUTEX(fp9929a_gate_lock);
+ static bool allow_power_on;
+-module_param(allow_power_on, bool, 0644);
++/* power-ups between entry and return; allow_power_on=0 waits for 0 */
++static atomic_t fp9929a_inflight = ATOMIC_INIT(0);
++
++#define FP9929A_QUIESCE_MS	2000
++
++static int fp9929a_allow_set(const char *val, const struct kernel_param *kp)
++{
++	bool allow;
++	long left;
++	int ret;
++
++	/* a bare "fp9929a.allow_power_on" on the command line means 1 */
++	ret = kstrtobool(val ? val : "1", &allow);
++	if (ret)
++		return ret;
++
++	mutex_lock(&fp9929a_gate_lock);
++	WRITE_ONCE(allow_power_on, allow);
++	mutex_unlock(&fp9929a_gate_lock);
++	if (allow)
++		return 0;
++
++	/*
++	 * Gate closed: from here no power-up can raise a pin. Wait until the
++	 * ones already running have powered down and returned.
++	 */
++	left = wait_var_event_timeout(&fp9929a_inflight,
++				      !atomic_read(&fp9929a_inflight),
++				      msecs_to_jiffies(FP9929A_QUIESCE_MS));
++	if (!left) {
++		pr_err("fp9929a: allow_power_on=0: gate closed, but a power-up is still in flight after %d ms\n",
++		       FP9929A_QUIESCE_MS);
++		return -EBUSY;
++	}
++	return 0;
++}
++
++static const struct kernel_param_ops fp9929a_allow_ops = {
++	.flags = KERNEL_PARAM_OPS_FL_NOARG,
++	.set = fp9929a_allow_set,
++	.get = param_get_bool,
++};
++module_param_cb(allow_power_on, &fp9929a_allow_ops, &allow_power_on, 0644);
+ MODULE_PARM_DESC(allow_power_on,
+-		 "Allow the E Ink high-voltage rails to be switched on (default: no)");
++		 "Allow the E Ink high-voltage rails to be switched on (default: no). Writing 0 returns once no power-up is in flight (-EBUSY after 2 s)");
+ 
+ static unsigned int max_on_ms = 20000;
+ module_param(max_on_ms, uint, 0644);
+@@ -104,7 +169,10 @@ struct fp9929a {
+ 	unsigned int vcom_mv;
+ 	u8 vcom_code;
+ 	const char *vcom_src;	/* "cmdline", "dt" or "default" */
+-	bool on;
++	bool on;		/* power-up sequence completed */
++	bool energized;		/* PWRUP may be high: set before it is raised */
++	bool expired;		/* max_on work dropped the pins mid power-up */
++	unsigned long deadline;	/* jiffies: max_on_ms limit of this power-up */
+ 	bool forced_off;	/* max_on_ms fault latched */
+ 	int forced_gen;		/* fp9929a_clear_gen when it latched */
+ 	unsigned int max_on_ms;	/* limit armed by the current power-up */
+@@ -152,6 +220,18 @@ static void fp9929a_power_down(struct fp9929a *fp)
+ 	usleep_range(50000, 50100);
+ 	gpiod_set_value_cansleep(fp->pwrup, 0);
+ 	fp->on = false;
++	WRITE_ONCE(fp->energized, false);
++}
++
++/*
++ * called with lock held: a power-up that will not complete. The max_on work
++ * may already be waiting for the lock; it finds nothing energized then, so a
++ * plain (non-sync) cancel is enough and must not wait for it.
++ */
++static void fp9929a_abort_power_up(struct fp9929a *fp)
++{
++	fp9929a_power_down(fp);
++	cancel_delayed_work(&fp->max_on_work);
+ }
+ 
+ /* called with lock held: whether a max_on_ms fault is still latched */
+@@ -168,19 +248,46 @@ static bool fp9929a_fault_latched(struct fp9929a *fp)
+  * max_on_ms expired. Takes the lock itself, so it must never be cancelled
+  * synchronously with the lock held.
+  */
++static bool fp9929a_expired(struct fp9929a *fp)
++{
++	return READ_ONCE(fp->energized) &&
++	       time_after_eq(jiffies, READ_ONCE(fp->deadline));
++}
++
+ static void fp9929a_max_on_work(struct work_struct *work)
+ {
+ 	struct fp9929a *fp = container_of(to_delayed_work(work), struct fp9929a,
+ 					  max_on_work);
+ 
+-	mutex_lock(&fp->lock);
+-	if (fp->on) {
++	if (!mutex_trylock(&fp->lock)) {
++		/*
++		 * A power-up (or a status read) holds the lock; a power-up may
++		 * be stalled in I2C. Drop the pins now, in the stock order, and
++		 * mark it expired under the gate lock: the power-up re-checks
++		 * that flag under the same lock before raising VCOM-EN.
++		 */
++		mutex_lock(&fp9929a_gate_lock);
++		if (fp9929a_expired(fp)) {
++			WRITE_ONCE(fp->expired, true);
++			gpiod_set_value_cansleep(fp->vcom_en, 0);
++			msleep(50);
++			gpiod_set_value_cansleep(fp->pwrup, 0);
++			dev_crit(fp->dev, "max_on_ms %u expired with the lock held: E Ink pins dropped\n",
++				 fp->max_on_ms);
++		}
++		mutex_unlock(&fp9929a_gate_lock);
++		mutex_lock(&fp->lock);
++	}
++	/* the deadline check ignores a stale run from an earlier power-up */
++	if ((fp->on || fp->energized) && fp9929a_expired(fp)) {
+ 		fp9929a_power_down(fp);
+ 		fp->forced_off = true;
+ 		fp->forced_gen = atomic_read(&fp9929a_clear_gen);
+ 		dev_crit(fp->dev, "max_on_ms %u expired: E Ink rails forced down\n",
+ 			 fp->max_on_ms);
+ 	}
++	if (!fp->energized)
++		WRITE_ONCE(fp->expired, false);
+ 	mutex_unlock(&fp->lock);
+ }
+ 
+@@ -198,12 +305,44 @@ static int fp9929a_write_vcom(struct fp9929a *fp)
+ 	return ret;
+ }
+ 
+-static int fp9929a_enable(struct regulator_dev *rdev)
++/*
++ * Called with fp->lock held, immediately before raising a pin: whether the
++ * gate is still open. On success the gate lock is HELD and the caller raises
++ * the pin and then unlocks it.
++ */
++static bool fp9929a_gate_open(struct fp9929a *fp)
++{
++	mutex_lock(&fp9929a_gate_lock);
++	if (READ_ONCE(allow_power_on) && !READ_ONCE(fp->expired))
++		return true;
++	mutex_unlock(&fp9929a_gate_lock);
++	return false;
++}
++
++/* called with fp->lock held, gate lock NOT held: the gate closed mid power-up */
++static int fp9929a_gate_closed(struct fp9929a *fp, const char *before)
++{
++	bool expired = READ_ONCE(fp->expired);
++
++	fp9929a_abort_power_up(fp);
++	if (expired) {
++		fp->forced_off = true;
++		fp->forced_gen = atomic_read(&fp9929a_clear_gen);
++		WRITE_ONCE(fp->expired, false);
++		dev_crit(fp->dev, "power-up aborted before %s: max_on_ms %u expired, rails down\n",
++			 before, fp->max_on_ms);
++		return -EIO;
++	}
++	dev_warn(fp->dev, "power-up aborted before %s: allow_power_on closed, rails down\n",
++		 before);
++	return -EPERM;
++}
++
++static int __fp9929a_enable(struct fp9929a *fp)
+ {
+-	struct fp9929a *fp = rdev_get_drvdata(rdev);
+ 	int ret;
+ 
+-	if (!allow_power_on) {
++	if (!READ_ONCE(allow_power_on)) {
+ 		dev_warn(fp->dev,
+ 			 "power-up refused: boot with fp9929a.allow_power_on=1 to allow it\n");
+ 		return -EPERM;
+@@ -231,14 +370,29 @@ static int fp9929a_enable(struct regulator_dev *rdev)
+ 	}
+ 
+ 	fp->have_temp = false;	/* only this power-up's sample counts */
++	WRITE_ONCE(fp->expired, false);	/* nothing is energized here */
++	if (!fp9929a_gate_open(fp)) {
++		mutex_unlock(&fp->lock);
++		dev_warn(fp->dev, "power-up refused: allow_power_on closed\n");
++		return -EPERM;
++	}
++	/* energized, and the on-time limit running, before PWRUP rises */
++	fp->max_on_ms = READ_ONCE(max_on_ms);
++	WRITE_ONCE(fp->deadline, jiffies + (fp->max_on_ms ?
++			msecs_to_jiffies(fp->max_on_ms) : MAX_JIFFY_OFFSET));
++	WRITE_ONCE(fp->energized, true);
++	if (fp->max_on_ms)
++		mod_delayed_work(system_wq, &fp->max_on_work,
++				 msecs_to_jiffies(fp->max_on_ms));
+ 	gpiod_set_value_cansleep(fp->pwrup, 1);
++	mutex_unlock(&fp9929a_gate_lock);
+ 	usleep_range(5000, 5100);
+ 
+ 	ret = fp9929a_write_vcom(fp);
+ 	if (ret) {
+ 		/* never leave the rails up with an unknown VCOM */
+ 		dev_err(fp->dev, "VCOM write failed (%d), powering down\n", ret);
+-		fp9929a_power_down(fp);
++		fp9929a_abort_power_up(fp);
+ 		mutex_unlock(&fp->lock);
+ 		return ret;
+ 	}
+@@ -250,12 +404,14 @@ static int fp9929a_enable(struct regulator_dev *rdev)
+ 	}
+ 	usleep_range(20000, 20100);
+ 
++	if (!fp9929a_gate_open(fp)) {
++		ret = fp9929a_gate_closed(fp, "VCOM-EN");
++		mutex_unlock(&fp->lock);
++		return ret;
++	}
+ 	gpiod_set_value_cansleep(fp->vcom_en, 1);
++	mutex_unlock(&fp9929a_gate_lock);
+ 	fp->on = true;
+-	fp->max_on_ms = READ_ONCE(max_on_ms);
+-	if (fp->max_on_ms)
+-		mod_delayed_work(system_wq, &fp->max_on_work,
+-				 msecs_to_jiffies(fp->max_on_ms));
+ 	dev_info(fp->dev, "on: VCOM %u mV (code 0x%02x), temp %d C, PG %d\n",
+ 		 fp->vcom_mv, fp->vcom_code, fp->have_temp ? fp->temp_c : -1,
+ 		 fp->pg ? gpiod_get_value_cansleep(fp->pg) : -1);
+@@ -263,6 +419,18 @@ static int fp9929a_enable(struct regulator_dev *rdev)
+ 	return 0;
+ }
+ 
++static int fp9929a_enable(struct regulator_dev *rdev)
++{
++	struct fp9929a *fp = rdev_get_drvdata(rdev);
++	int ret;
++
++	atomic_inc(&fp9929a_inflight);
++	ret = __fp9929a_enable(fp);
++	if (atomic_dec_and_test(&fp9929a_inflight))
++		wake_up_var(&fp9929a_inflight);
++	return ret;
++}
++
+ static int fp9929a_disable(struct regulator_dev *rdev)
+ {
+ 	struct fp9929a *fp = rdev_get_drvdata(rdev);
+@@ -270,8 +438,9 @@ static int fp9929a_disable(struct regulator_dev *rdev)
+ 	/* outside the lock: the work takes it */
+ 	cancel_delayed_work_sync(&fp->max_on_work);
+ 	mutex_lock(&fp->lock);
+-	if (fp->on)
++	if (fp->on || fp->energized)
+ 		fp9929a_power_down(fp);
++	WRITE_ONCE(fp->expired, false);
+ 	/* a normal disable is the consumer acknowledging the fault */
+ 	if (fp->forced_off)
+ 		dev_info(fp->dev, "max_on_ms fault cleared (disable)\n");
+@@ -340,22 +509,26 @@ static const struct hwmon_chip_info fp9929a_chip_info = {
+ };
+ 
+ /*
+- * Panic with the rails up (G9): a dying kernel stops the TCON mid-update
+- * and the panel would sit under drive voltage. Drop VCOM-EN, wait as the
+- * stock power-down does, then PWRUP. Panic context: no locks, no sleeping
+- * (TLMM GPIOs do not sleep; mdelay is fine here).
++ * Panic (G9): a dying kernel stops the TCON mid-update and the panel would
++ * sit under drive voltage. Drop VCOM-EN, wait as the stock power-down does,
++ * then PWRUP - UNCONDITIONALLY: a panic in the middle of a power-up (PWRUP
++ * up, VCOM-EN not yet, fp->on still false) must drop the rails too, and the
++ * pins are ours whatever the state says. Panic context: no locks, no
++ * sleeping (TLMM GPIOs do not sleep; mdelay is fine here).
+  */
+ static int fp9929a_panic(struct notifier_block *nb, unsigned long ev, void *p)
+ {
+ 	struct fp9929a *fp = container_of(nb, struct fp9929a, panic_nb);
++	bool was = READ_ONCE(fp->on) || READ_ONCE(fp->energized);
+ 
+-	if (!READ_ONCE(fp->on))
+-		return NOTIFY_DONE;
++	WRITE_ONCE(allow_power_on, false);
+ 	gpiod_set_value(fp->vcom_en, 0);
+ 	mdelay(50);
+ 	gpiod_set_value(fp->pwrup, 0);
+ 	WRITE_ONCE(fp->on, false);
+-	pr_emerg("fp9929a: panic: E Ink rails powered down\n");
++	WRITE_ONCE(fp->energized, false);
++	if (was)
++		pr_emerg("fp9929a: panic: E Ink rails powered down\n");
+ 	return NOTIFY_DONE;
+ }
+ 
+@@ -419,6 +592,7 @@ static int fp9929a_probe(struct i2c_client *client)
+ 	}
+ 	gpiod_direction_output(fp->pwrup, 0);
+ 	fp->on = false;
++	fp->energized = false;
+ 
+ 	fp->vcom_src = "cmdline";
+ 	mv = fp9929a_vcom_from_cmdline();
+@@ -511,7 +685,7 @@ static void fp9929a_shutdown(struct i2c_client *client)
+ 		return;
+ 	cancel_delayed_work_sync(&fp->max_on_work);	/* outside the lock */
+ 	mutex_lock(&fp->lock);
+-	if (fp->on)
++	if (fp->on || fp->energized)
+ 		fp9929a_power_down(fp);
+ 	mutex_unlock(&fp->lock);
+ }

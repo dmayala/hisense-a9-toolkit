@@ -1,0 +1,698 @@
+From 91419a7e9bc9c8ad70e93a35979942fe1e9a6971 Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 11:35:05 -0700
+Subject: [PATCH] drm/a9_eink: control template in bytes 1..3 of every
+ transport word
+
+Boot 12 (E5c, first non-zero drive): the glass did not change. Stock drive
+words carry the panel's control signals in bytes 1..3 (byte 1 gate clocks
+and per-word source strobes, byte 2 0x00, byte 3 0xff): a fixed CONTROL
+TEMPLATE that stock builds once at TCON start (composer
+HWCDisplay::SetPowerMode, librecovery_ui.so Init_Eink_SWTcon) and never
+overwrites; byte 0 is the 2-bit drive data. The transport zero-filled
+bytes 1..3, so the gate/source drivers were never clocked. MEASURED: 16
+live stock ring buffers equal the template in bytes 1..3 on all 371,392
+words; one buffer per set equals it entirely (stock's idle frame).
+
+- request_firmware("hisense/a9-ctrl-template.bin"): 80-byte header +
+  one frame, made from the user's own composer by a host tool (vendor
+  data, never in the source). Accepted only if the header is exact, the
+  payload SHA-256 equals the header's AND the compiled-in A9E_CT_SHA256
+  (a88ae8ef...), and every word has byte 0 = 0, byte 2 = 0, byte 3 = 0xff
+  (a9e_ct_check). Without it no update runs (dry or real) and the
+  transport refuses to power up (-ENODATA).
+- Both transport buffers hold the template from attach on. A frame is
+  composed in one pass as (frame & byte-0 lanes) | template, so bytes
+  1..3 always come from the validated template; the null decision is made
+  on the byte 0 that went into the buffer (frame-progress interlock
+  semantics unchanged). Every "zero" frame (power-on idle refreshes,
+  power-off and blank, zero_test) is now the template itself (byte 0 =
+  0): stock's idle frame, gates scanning, nothing driven.
+- a9tcon core: the null frames of a table pass clear byte 0 only
+  (clear_codes) instead of memset, as stock; the staging frame and the
+  hold cache carry the template.
+- transport_format: XR24 only (stock BA24 = data on the B lane, control
+  on G = XRGB8888's layout, MEASURED); XB24 refused at probe.
+- status line 1: " template %d"; zero test log: "template frames".
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/a9_eink/a9_eink.h             |  13 +-
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c         |  87 ++++++++++++--
+ drivers/gpu/drm/a9_eink/a9_eink_engine.c      |  30 +++++
+ drivers/gpu/drm/a9_eink/a9_eink_engine.h      |  44 ++++++-
+ drivers/gpu/drm/a9_eink/a9_eink_transport.c   | 113 ++++++++++++++----
+ drivers/gpu/drm/a9_eink/a9tcon.c              |  13 +-
+ drivers/gpu/drm/a9_eink/a9tcon.h              |  10 ++
+ .../drm/panel/panel-hisense-hlte556n-eink.c   |  15 ++-
+ 8 files changed, 280 insertions(+), 45 deletions(-)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index 950ea24d3..c86c3f9ac 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -44,6 +44,13 @@ struct a9x_transport {
+ 	struct drm_client_buffer *buf[2];
+ 	struct iosys_map map[2];
+ 	u32 pitch;
++	/*
++	 * Control template (validated, A9T_FRAME_BYTES, byte 0 = 0), owned by
++	 * the driver; set under ->lock before the first attach. Every buffer
++	 * the panel scans is template | byte 0 of a frame; the idle (null)
++	 * frame is the template itself. NULL: nothing is ever driven.
++	 */
++	const u8 *tmpl;
+ 	int front;			/* buffer being scanned out */
+ 	bool front_null;		/* it carries no drive */
+ 	bool on;			/* CRTC active: HV may be up */
+@@ -90,7 +97,7 @@ void a9x_fini(struct a9x_transport *t);	/* after a9x_detach, process context */
+ int a9x_attach(struct a9x_transport *t);	/* -EAGAIN: msm not there yet */
+ void a9x_detach(struct a9x_transport *t);
+ int a9x_power_on(struct a9x_transport *t);
+-int a9x_show(struct a9x_transport *t, const u8 *frame);
++int a9x_show(struct a9x_transport *t, const u8 *frame);	/* uses byte 0 of each word only */
+ int a9x_power_off(struct a9x_transport *t);
+ int a9x_blank(struct a9x_transport *t);
+ bool a9x_attached(struct a9x_transport *t);
+@@ -122,9 +129,11 @@ struct a9_eink {
+ 	struct mutex eng_lock;
+ 	struct a9e_engine e;
+ 	struct a9t_tables *tables;
++	u8 *ct;				/* control template, A9T_FRAME_BYTES */
++	bool ct_loaded;			/* validated (a9_load_template) */
+ 	bool wf_loaded;
+ 	u8 wf_src_sha[32];
+-	u8 *frame;			/* staging frame, A9T_FRAME_BYTES */
++	u8 *frame;			/* staging frame, A9T_FRAME_BYTES; bytes 1..3 = template */
+ 	u8 *trace_old;			/* levels before the last update (trace) */
+ 	bool init_pending, force_clear;		/* real pipeline */
+ 	bool dry_init_pending, dry_force_clear;	/* dry-run model */
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index ca304693a..eef09d2c0 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -18,6 +18,12 @@
+  *
+  * Waveform tables: request_firmware("hisense/a9-waveform.bin"), made by
+  * scripts/mainline/eink/tools/a9wf-extract from the user's own composer.
++ * Control template: request_firmware("hisense/a9-ctrl-template.bin"), made
++ * from the same composer (scripts/mainline/eink/tools): bytes 1..3 of every
++ * transport word, the panel's gate/source control signals, which stock builds
++ * once and never overwrites. Accepted only with the one known SHA-256; without
++ * it nothing is driven and no update (dry or real) runs. Every "zero" frame
++ * (power-on/off, blank, zero_test) is the template with byte 0 = 0.
+  *
+  * SAFETY GATES (all default off):
+  *   a9_eink.enable=1                        this driver sends frames at all;
+@@ -47,6 +53,7 @@
+ #include <linux/delay.h>
+ #include <linux/dma-mapping.h>
+ #include <linux/firmware.h>
++#include <linux/hex.h>
+ #include <linux/iio/consumer.h>
+ #include <linux/kthread.h>
+ #include <linux/module.h>
+@@ -109,9 +116,15 @@ static bool trace;
+ module_param(trace, bool, 0644);
+ MODULE_PARM_DESC(trace, "SHA-256 every update's frames and keep the inputs in debugfs (always on in dry run)");
+ 
++/*
++ * XR24 only: stock's BA24 puts byte 0 (data) on the B lane and byte 1
++ * (control) on G, which is XRGB8888's layout (MEASURED 2026-10-15); XB24
++ * would move the data to the R lane. Kept as a read-only parameter for the
++ * log line and the sequencer's read-back.
++ */
+ static char *transport_format = "XR24";
+ module_param(transport_format, charp, 0444);
+-MODULE_PARM_DESC(transport_format, "fourcc of the 448x829 transport buffers: XR24 or XB24 (default XR24)");
++MODULE_PARM_DESC(transport_format, "fourcc of the 448x829 transport buffers: XR24 only (MEASURED lane mapping)");
+ 
+ static int temp_fallback = 28;
+ module_param(temp_fallback, int, 0644);
+@@ -130,6 +143,7 @@ module_param(any_mode, bool, 0644);
+ MODULE_PARM_DESC(any_mode, "Testing: accept any stock mode word in sysfs mode, not only 513/515/518/521");
+ 
+ #define A9_FW_NAME "hisense/a9-waveform.bin"
++#define A9_CT_NAME "hisense/a9-ctrl-template.bin"
+ #define A9_MODE_DEFAULT 518	/* Smooth, the compat contract default */
+ #define A9_MODE_CLEAR 0x203	/* force_clear: Clear + clear flag = type-2 table */
+ #define A9_DRAIN_MS 15000
+@@ -429,11 +443,12 @@ static ssize_t status_show(struct device *kdev, struct device_attribute *attr, c
+ 	struct a9x_transport *t = &a9->tx;
+ 
+ 	return sysfs_emit(buf,
+-		"enable %d waveform %d transport %d hv_on %d stall_fault %d\n"
++		"enable %d waveform %d transport %d hv_on %d stall_fault %d template %d\n"
+ 		"updates %llu aborts %llu frames %llu late %llu vbl_skips %llu commit_fail %llu max_gap_us %u\n"
+ 		"last mode %#x pre %#x clear %d type %u bin %d t1 %d t2 %d frames %u steps %u dry %d aborted %d"
+ 		" rect %d,%d-%d,%d begin_us %u total_us %u\n",
+ 		enable, a9->wf_loaded, a9x_attached(t), t->on, atomic_read(&a9x_stall_fault),
++		a9->ct_loaded,
+ 		a9->updates, a9->aborts, t->frames, t->late, t->vbl_skips, t->commits_failed,
+ 		t->max_gap_us, a9->last.mode, a9->last.pre, a9->last.clear, a9->last.type,
+ 		a9->last.bin, a9->last.t1, a9->last.t2, a9->last.frames, a9->last.steps,
+@@ -457,6 +472,51 @@ static const struct attribute_group a9_eink_group = {
+ 	.attrs = a9_eink_attrs,
+ };
+ 
++/* ---- control template ------------------------------------------------------- */
++static int a9_load_template(struct a9_eink *a9)
++{
++	const struct a9e_ct_header *h;
++	const struct firmware *fw;
++	const u8 *payload;
++	u8 want[SHA256_DIGEST_SIZE], d[SHA256_DIGEST_SIZE];
++	int ret;
++
++	if (a9->ct_loaded)
++		return 0;
++	ret = hex2bin(want, A9E_CT_SHA256, sizeof(want));
++	if (ret)
++		return ret;
++	ret = request_firmware(&fw, A9_CT_NAME, a9->dev);
++	if (ret) {
++		dev_err_once(a9->dev, "no valid control template (%d): refusing to drive (no %s)\n",
++			     ret, A9_CT_NAME);
++		return ret;
++	}
++	ret = a9e_ct_check(fw->data, fw->size, &payload);
++	if (!ret) {
++		h = (const struct a9e_ct_header *)fw->data;
++		sha256(payload, A9T_FRAME_BYTES, d);
++		if (memcmp(d, h->payload_sha256, sizeof(d)) || memcmp(d, want, sizeof(d)))
++			ret = -EBADMSG;
++	}
++	if (ret) {
++		dev_err(a9->dev, "no valid control template (%d): refusing to drive (%s rejected)\n",
++			ret, A9_CT_NAME);
++		release_firmware(fw);
++		return -EINVAL;
++	}
++	memcpy(a9->ct, payload, A9T_FRAME_BYTES);
++	release_firmware(fw);
++	/* the staging frame carries the template; the engine writes byte 0 only */
++	memcpy(a9->frame, a9->ct, A9T_FRAME_BYTES);
++	mutex_lock(&a9->tx.lock);
++	a9->tx.tmpl = a9->ct;
++	mutex_unlock(&a9->tx.lock);
++	a9->ct_loaded = true;
++	dev_info(a9->dev, "control template loaded (sha256 %*phN...)\n", 4, d);
++	return 0;
++}
++
+ /* ---- waveform ------------------------------------------------------------------ */
+ static int a9_load_waveform(struct a9_eink *a9)
+ {
+@@ -465,6 +525,11 @@ static int a9_load_waveform(struct a9_eink *a9)
+ 	u8 d[SHA256_DIGEST_SIZE];
+ 	int ret;
+ 
++	/* no template, no frames at all (not even a dry run: it would hash
++	 * frames the panel never gets) */
++	ret = a9_load_template(a9);
++	if (ret)
++		return ret;
+ 	if (a9->wf_loaded)
+ 		return 0;
+ 	ret = request_firmware(&fw, A9_FW_NAME, a9->dev);
+@@ -493,6 +558,7 @@ static int a9_load_waveform(struct a9_eink *a9)
+ 	a9->e.t = a9->tables;
+ 	a9->e.flag_6c7 = flag_6c7;
+ 	a9e_setup(&a9->e);
++	memcpy(a9->e.cache, a9->ct, A9T_FRAME_BYTES);	/* hold cache: template too */
+ 	mutex_unlock(&a9->eng_lock);
+ 	a9->wf_loaded = true;
+ 	a9->init_pending = a9->dry_init_pending = init_flash;
+@@ -734,7 +800,8 @@ static void a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 	if (!dry && zt) {
+ 		unsigned int i, n = min(zt, 850U);	/* <= 10 s at 85 Hz */
+ 
+-		memset(a9->frame, 0, A9T_FRAME_BYTES);
++		/* the idle frame: template, byte 0 = 0 (gates scan, nothing driven) */
++		memcpy(a9->frame, a9->ct, A9T_FRAME_BYTES);
+ 		for (i = 0; i < n; i++) {
+ 			ret = READ_ONCE(enable) ? a9x_show(&a9->tx, a9->frame) : -ECANCELED;
+ 			if (ret)
+@@ -759,7 +826,7 @@ static void a9_update(struct a9_eink *a9, const struct a9_job *job)
+ 		else
+ 			a9->updates++;
+ 		mutex_unlock(&a9->eng_lock);
+-		dev_info(a9->dev, "zero test: %u/%u all-zero frames with HV on (%d)\n", i, n, ret);
++		dev_info(a9->dev, "zero test: %u/%u template frames with HV on (%d)\n", i, n, ret);
+ 		if (ret)
+ 			a9_power_off(a9);
+ 		return;
+@@ -1095,8 +1162,8 @@ static int a9_probe(struct platform_device *pdev)
+ 	const char *f = transport_format;
+ 	int ret, k;
+ 
+-	if (!f || strlen(f) != 4 || (strcmp(f, "XR24") && strcmp(f, "XB24")))
+-		return dev_err_probe(dev, -EINVAL, "transport_format must be XR24 or XB24\n");
++	if (!f || strcmp(f, "XR24"))
++		return dev_err_probe(dev, -EINVAL, "transport_format must be XR24 (data on B, control on G)\n");
+ 
+ 	a9 = devm_drm_dev_alloc(dev, &a9_drm_driver, struct a9_eink, drm);
+ 	if (IS_ERR(a9))
+@@ -1140,7 +1207,7 @@ static int a9_probe(struct platform_device *pdev)
+ 
+ 	a9->tx.dev = dev;
+ 	a9->tx.wq = &a9->wq;
+-	a9->tx.fourcc = strcmp(f, "XB24") ? DRM_FORMAT_XRGB8888 : DRM_FORMAT_XBGR8888;
++	a9->tx.fourcc = DRM_FORMAT_XRGB8888;
+ 	mutex_init(&a9->tx.lock);
+ 	a9->tx.fault = a9_tx_fault;
+ 	a9x_init(&a9->tx);
+@@ -1155,14 +1222,15 @@ static int a9_probe(struct platform_device *pdev)
+ 		a9->e.arr[k] = a9_vzalloc(dev, (size_t)A9T_N * 2);
+ 	a9->e.work = a9_vzalloc(dev, sizeof(*a9->e.work));
+ 	a9->e.cache = a9_vzalloc(dev, A9T_FRAME_BYTES);
+-	a9->frame = a9_vzalloc(dev, A9T_FRAME_BYTES);	/* bytes 1..3 stay zero */
++	a9->frame = a9_vzalloc(dev, A9T_FRAME_BYTES);	/* bytes 1..3 := template at load */
++	a9->ct = a9_vzalloc(dev, A9T_FRAME_BYTES);
+ 	a9->trace_old = a9_vzalloc(dev, A9T_N);
+ 	a9->dry_save_old = a9_vzalloc(dev, A9T_N);
+ 	a9->dry_levels = a9_vzalloc(dev, A9T_N);
+ 	if (!a9->tables || !a9->shadow || !a9->e.grey || !a9->e.old || !a9->e.nlv ||
+ 	    !a9->e.pairs || !a9->e.arr[4] || !a9->e.arr[0] || !a9->e.arr[1] ||
+ 	    !a9->e.arr[2] || !a9->e.arr[3] || !a9->e.work || !a9->e.cache ||
+-	    !a9->frame || !a9->trace_old || !a9->dry_save_old || !a9->dry_levels)
++	    !a9->frame || !a9->ct || !a9->trace_old || !a9->dry_save_old || !a9->dry_levels)
+ 		return -ENOMEM;
+ 	memset(a9->shadow, 0xff, A9T_N);	/* white, like the levels */
+ 
+@@ -1257,5 +1325,6 @@ static struct platform_driver a9_driver = {
+ module_platform_driver(a9_driver);
+ 
+ MODULE_FIRMWARE(A9_FW_NAME);
++MODULE_FIRMWARE(A9_CT_NAME);
+ MODULE_DESCRIPTION("Hisense A9 E Ink display with in-kernel software TCON");
+ MODULE_LICENSE("GPL");
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_engine.c b/drivers/gpu/drm/a9_eink/a9_eink_engine.c
+index c6c07f4c9..58067f68e 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_engine.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_engine.c
+@@ -85,6 +85,36 @@ int a9e_wf_check(const uint8_t *blob, size_t len, const struct a9t_tables **tabl
+ 	return 0;
+ }
+ 
++/* ---- control template ------------------------------------------------------ */
++int a9e_ct_check(const uint8_t *blob, size_t len, const uint8_t **payload)
++{
++	const uint8_t *p;
++	size_t i;
++
++	if (len < sizeof(struct a9e_ct_header))
++		return A9E_CT_ESIZE;
++	if (rd32(blob) != A9E_CT_MAGIC)
++		return A9E_CT_EMAGIC;
++	if (rd32(blob + 4) != A9E_CT_VERSION)
++		return A9E_CT_EVERSION;
++	if (rd32(blob + 8) != sizeof(struct a9e_ct_header) ||
++	    rd32(blob + 12) != A9T_FRAME_BYTES ||
++	    len != sizeof(struct a9e_ct_header) + A9T_FRAME_BYTES)
++		return A9E_CT_ESIZE;
++	p = blob + sizeof(struct a9e_ct_header);
++	for (i = 0; i < A9T_FRAME_BYTES; i += 4) {
++		if (p[i])
++			return A9E_CT_EBYTE0;
++		if (p[i + 2])
++			return A9E_CT_EBYTE2;
++		if (p[i + 3] != 0xff)
++			return A9E_CT_EBYTE3;
++	}
++	if (payload)
++		*payload = p;
++	return 0;
++}
++
+ /* ---- setup and rects ------------------------------------------------------- */
+ void a9e_setup(struct a9e_engine *e)
+ {
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_engine.h b/drivers/gpu/drm/a9_eink/a9_eink_engine.h
+index 82db7cd98..d00f852e6 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_engine.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink_engine.h
+@@ -49,6 +49,27 @@ struct a9e_wf_header {
+ 	uint8_t payload_sha256[32];	/* of the payload that follows */
+ };
+ 
++/*
++ * The control template (/lib/firmware/hisense/a9-ctrl-template.bin), little
++ * endian: this header, then one 448 x 829 frame of 32-bit words whose bytes
++ * 1..3 are the panel's control signals (a9tcon.h) and byte 0 is 0. Made from
++ * the user's own composer by scripts/mainline/eink/tools (vendor-derived:
++ * never part of the source). Only one payload is accepted: its SHA-256 is
++ * A9E_CT_SHA256 (MEASURED: the composer's builder, recovery's builder and 16
++ * live stock ring buffers agree on bytes 1..3).
++ */
++#define A9E_CT_MAGIC 0x54433941u	/* "A9CT" */
++#define A9E_CT_VERSION 1u
++#define A9E_CT_SHA256 "a88ae8efc5325e1ab52e4e48b73d2abb1a3c81a7989baa2a226513b07cebfbe7"
++struct a9e_ct_header {
++	uint32_t magic;
++	uint32_t version;
++	uint32_t header_size;		/* sizeof(struct a9e_ct_header) = 80 */
++	uint32_t payload_size;		/* A9T_FRAME_BYTES */
++	uint8_t source_sha256[32];	/* the composer the template came from */
++	uint8_t payload_sha256[32];	/* of the payload that follows */
++};
++
+ struct a9e_engine {
+ 	/* caller-provided buffers (assign, then a9e_setup) */
+ 	const struct a9t_tables *t;
+@@ -99,6 +120,18 @@ int a9e_mode_valid(uint32_t mode);
+ #define A9E_WF_ELAST (-8)	/* a table pass would end on a driving frame */
+ int a9e_wf_check(const uint8_t *blob, size_t len, const struct a9t_tables **tables);
+ 
++/* Check a control-template blob: header, sizes, and every word of the payload
++ * (byte 0 == 0: no drive; byte 2 == 0x00; byte 3 == 0xff, as stock). Returns 0
++ * and the payload, or a negative A9E_CT_E* code. The SHA-256s (header's and
++ * A9E_CT_SHA256) are checked by the caller. */
++#define A9E_CT_ESIZE (-1)
++#define A9E_CT_EMAGIC (-2)
++#define A9E_CT_EVERSION (-3)
++#define A9E_CT_EBYTE0 (-4)
++#define A9E_CT_EBYTE2 (-5)
++#define A9E_CT_EBYTE3 (-6)
++int a9e_ct_check(const uint8_t *blob, size_t len, const uint8_t **payload);
++
+ /* After assigning the buffers: engine state, old := 15 (white), arrays := 0. */
+ void a9e_setup(struct a9e_engine *e);
+ 
+@@ -128,9 +161,11 @@ void a9e_begin_init(struct a9e_engine *e, int bin);
+ int a9e_begin(struct a9e_engine *e, uint32_t mode, int clear, const struct a9e_rect *rect,
+ 	      int mask, int bin);
+ 
+-/* Next drive frame into out (A9T_FRAME_BYTES; bytes 1..3 of every word are
+- * never written, keep them zero). Returns 1 = more frames follow, 0 = this
+- * was the last one (always all zero for stock tables). */
++/* Next drive frame into out (A9T_FRAME_BYTES). Only byte 0 of each word is
++ * written; bytes 1..3 must already hold the control template (a9tcon.h), so
++ * pre-fill out (and e->cache) with it once. Returns 1 = more frames follow,
++ * 0 = this was the last one (always a null frame, byte 0 all zero, for stock
++ * tables). */
+ int a9e_frame(struct a9e_engine *e, uint8_t *out);
+ 
+ /* Commit the update: old := new, previous mode := this mode. */
+@@ -140,7 +175,8 @@ void a9e_end(struct a9e_engine *e);
+  * next update is forced to a full clear. */
+ void a9e_abort(struct a9e_engine *e);
+ 
+-/* 1 if every data code of the frame is 0 (no drive). */
++/* 1 if byte 0 (the data code) of every word is 0: no drive. Bytes 1..3 (the
++ * control template) are not looked at. */
+ int a9e_frame_is_null(const uint8_t *out);
+ 
+ #ifdef __cplusplus
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_transport.c b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+index a1e9a9e52..8bb79d508 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_transport.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+@@ -13,6 +13,18 @@
+  * TC358767 driver creates for the E Ink transport panel carries the panel's
+  * DT node, and once attached its ->dev is the msm drm_device.
+  *
++ * What the panel scans (2026-10-15, boot 12): every 32-bit word is byte 0 =
++ * drive data | bytes 1..3 = the CONTROL TEMPLATE (gate clocks and source
++ * strobes on the G lane, 0x00 on R, 0xff on X), which stock builds once at TCON
++ * start and never overwrites. Without it the panel's gate/source drivers are
++ * never clocked and nothing changes on the glass. So: both buffers hold the
++ * template from attach on; a frame is composed as (frame & byte-0 lanes) |
++ * template, so bytes 1..3 come from the validated template whatever the
++ * frame's bytes 1..3 hold; the idle ("zero", null) frame is the template
++ * itself (byte 0 = 0 everywhere). The null test looks at byte 0 only, so the
++ * interlock below is unchanged. Without a template the transport never
++ * powers up.
++ *
+  * Userspace must never become DRM master of the msm card (Android: only the
+  * a9_eink card is given to the composer). If it does, our commits fail with
+  * -EBUSY and the update is aborted; power-off then falls back to forcing the
+@@ -54,6 +66,51 @@
+ static int a9x_power_off_locked(struct a9x_transport *t);
+ static int a9x_commit_locked(struct a9x_transport *t, int idx, bool null);
+ 
++#if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
++#error "a9x_compose assumes little-endian words (byte 0 = bits 0..7)"
++#endif
++#define A9X_BYTE0_LANES 0x000000ff000000ffULL	/* byte 0 of two 32-bit words */
++
++/* buffer idx := the control template: the idle frame (no drive). t->lock held */
++static void a9x_fill_idle(struct a9x_transport *t, int idx)
++{
++	u8 *d = t->map[idx].vaddr;
++	int r;
++
++	if (!t->tmpl) {		/* never powered without one (a9x_power_on) */
++		memset(d, 0, (size_t)t->pitch * TX_H);
++		return;
++	}
++	for (r = 0; r < TX_H; r++)
++		memcpy(d + (size_t)r * t->pitch, t->tmpl + (size_t)r * TX_W * 4, TX_W * 4);
++}
++
++/*
++ * buffer idx := byte 0 of every word of frame | bytes 1..3 of the template,
++ * in one pass (u64: two words). Returns true if byte 0 is 0 everywhere (a null
++ * frame: what went into the buffer drives nothing). t->lock held, t->tmpl set.
++ */
++static bool a9x_compose(struct a9x_transport *t, int idx, const u8 *frame)
++{
++	u8 *dst = t->map[idx].vaddr;
++	u64 acc = 0;
++	int r, i;
++
++	for (r = 0; r < TX_H; r++) {
++		const u64 *s = (const u64 *)(frame + (size_t)r * TX_W * 4);
++		const u64 *c = (const u64 *)(t->tmpl + (size_t)r * TX_W * 4);
++		u64 *d = (u64 *)(dst + (size_t)r * t->pitch);
++
++		for (i = 0; i < TX_W / 2; i++) {
++			u64 v = s[i] & A9X_BYTE0_LANES;
++
++			acc |= v;
++			d[i] = v | c[i];
++		}
++	}
++	return !acc;
++}
++
+ static u32 a9x_period_us(struct a9x_transport *t)
+ {
+ 	return t->period_us ? t->period_us : A9X_PERIOD_DEFAULT_US;
+@@ -272,9 +329,17 @@ int a9x_attach(struct a9x_transport *t)
+ 			t->buf[i] = NULL;
+ 			goto err_bufs;
+ 		}
+-		iosys_map_memset(&t->map[i], 0, 0, (size_t)t->buf[i]->fb->pitches[0] * TX_H);
++		/* a9x_compose writes u64 words through the CPU mapping */
++		if (t->map[i].is_iomem || t->buf[i]->fb->pitches[0] < TX_W * 4 ||
++		    t->buf[i]->fb->pitches[0] % 8 || t->buf[i]->fb->pitches[0] != t->buf[0]->fb->pitches[0]) {
++			dev_err(t->dev, "transport buffer %d: iomem %d pitch %u unsupported\n", i,
++				t->map[i].is_iomem, t->buf[i]->fb->pitches[0]);
++			ret = -EINVAL;
++			goto err_bufs;
++		}
++		t->pitch = t->buf[i]->fb->pitches[0];
++		a9x_fill_idle(t, i);
+ 	}
+-	t->pitch = t->buf[0]->fb->pitches[0];
+ 	/* order shutdown/suspend: this driver before the msm device */
+ 	t->link = device_link_add(t->dev, ddev->dev, DL_FLAG_STATELESS);
+ 	if (!t->link)
+@@ -289,8 +354,9 @@ int a9x_attach(struct a9x_transport *t)
+ 
+ 	/* after this only the unregister callback may release the client */
+ 	drm_client_register(&t->client);
+-	dev_info(t->dev, "transport on %s: %ux%u %p4cc pitch %u, frame period %u us\n",
+-		 ddev->driver->name, TX_W, TX_H, &t->fourcc, t->pitch, t->period_us);
++	dev_info(t->dev, "transport on %s: %ux%u %p4cc pitch %u, frame period %u us, %s\n",
++		 ddev->driver->name, TX_W, TX_H, &t->fourcc, t->pitch, t->period_us,
++		 t->tmpl ? "control template in both buffers" : "NO control template");
+ 	return 0;
+ 
+ err_bufs:
+@@ -400,6 +466,12 @@ int a9x_power_on(struct a9x_transport *t)
+ 		mutex_unlock(&t->lock);
+ 		return 0;
+ 	}
++	if (!t->tmpl) {
++		/* without bytes 1..3 the panel is not clocked: never drive */
++		mutex_unlock(&t->lock);
++		dev_err(t->dev, "no control template: transport stays off\n");
++		return -ENODATA;
++	}
+ 	/* stock PanelOpen keeps the panel off for at least 200 ms */
+ 	if (t->off_since) {
+ 		s64 off = ktime_ms_delta(ktime_get(), t->off_since);
+@@ -408,10 +480,10 @@ int a9x_power_on(struct a9x_transport *t)
+ 			msleep(200 - off);
+ 	}
+ 	for (i = 0; i < 2; i++)
+-		iosys_map_memset(&t->map[i], 0, 0, (size_t)t->pitch * TX_H);
++		a9x_fill_idle(t, i);
+ 	t->front_null = true;
+-	/* full modeset with an all-zero buffer: DSI on, panel prepare (lines,
+-	 * FP9929A up), bridge init; video starts before the bridge init */
++	/* full modeset with the idle (template) buffer: DSI on, panel prepare
++	 * (lines, FP9929A up), bridge init; video starts before the bridge init */
+ 	ret = a9x_commit_locked(t, 0, true);
+ 	if (ret) {
+ 		dev_err(t->dev, "transport enable failed: %d\n", ret);
+@@ -423,10 +495,10 @@ int a9x_power_on(struct a9x_transport *t)
+ 	}
+ 	t->on = true;
+ 	t->on_since = ktime_get();
+-	/* one more all-zero refresh before any drive frame; failure: caller powers off */
++	/* one more idle refresh before any drive frame; failure: caller powers off */
+ 	ret = a9x_commit_locked(t, 1, true);
+ 	if (ret) {
+-		dev_err(t->dev, "second all-zero refresh failed: %d\n", ret);
++		dev_err(t->dev, "second idle refresh failed: %d\n", ret);
+ 		mutex_unlock(&t->lock);
+ 		return ret;
+ 	}
+@@ -439,22 +511,17 @@ int a9x_power_on(struct a9x_transport *t)
+ 
+ int a9x_show(struct a9x_transport *t, const u8 *frame)
+ {
+-	int back, ret, r;
+-	bool null = a9e_frame_is_null(frame);
++	int back, ret;
++	bool null;
+ 
+ 	mutex_lock(&t->lock);
+-	if (!t->on || t->gone) {
++	if (!t->on || t->gone || !t->tmpl) {
+ 		mutex_unlock(&t->lock);
+ 		return -ENODEV;
+ 	}
+ 	back = t->front ^ 1;
+-	if (t->pitch == TX_W * 4) {
+-		iosys_map_memcpy_to(&t->map[back], 0, frame, A9T_FRAME_BYTES);
+-	} else {
+-		for (r = 0; r < TX_H; r++)
+-			iosys_map_memcpy_to(&t->map[back], (size_t)r * t->pitch,
+-					    frame + (size_t)r * TX_W * 4, TX_W * 4);
+-	}
++	/* null judged on what went into the buffer */
++	null = a9x_compose(t, back, frame);
+ 	ret = a9x_commit_locked(t, back, null);
+ 	if (!ret) {
+ 		t->frames++;
+@@ -464,7 +531,7 @@ int a9x_show(struct a9x_transport *t, const u8 *frame)
+ 	return ret;
+ }
+ 
+-/* zero frame, let it scan two refreshes, CRTC off. Called with t->lock held. */
++/* idle (template) frame, let it scan two refreshes, CRTC off. t->lock held. */
+ static int a9x_power_off_locked(struct a9x_transport *t)
+ {
+ 	int ret;
+@@ -476,7 +543,7 @@ static int a9x_power_off_locked(struct a9x_transport *t)
+ 		/* never power down (or idle) on a frame that drives */
+ 		int back = t->front ^ 1;
+ 
+-		iosys_map_memset(&t->map[back], 0, 0, (size_t)t->pitch * TX_H);
++		a9x_fill_idle(t, back);
+ 		if (!a9x_commit_locked(t, back, true))
+ 			t->front_null = true;
+ 		else
+@@ -518,7 +585,7 @@ int a9x_power_off(struct a9x_transport *t)
+ 	return ret;
+ }
+ 
+-/* replace a driving frame on screen by a zero frame (HV stays as is) */
++/* replace a driving frame on screen by the idle (template) frame (HV stays as is) */
+ int a9x_blank(struct a9x_transport *t)
+ {
+ 	int back, ret = 0;
+@@ -526,7 +593,7 @@ int a9x_blank(struct a9x_transport *t)
+ 	mutex_lock(&t->lock);
+ 	if (t->on && !t->gone && (!t->front_null || t->stall_armed)) {
+ 		back = t->front ^ 1;
+-		iosys_map_memset(&t->map[back], 0, 0, (size_t)t->pitch * TX_H);
++		a9x_fill_idle(t, back);
+ 		ret = a9x_commit_locked(t, back, true);
+ 		if (!ret)
+ 			t->front_null = true;
+diff --git a/drivers/gpu/drm/a9_eink/a9tcon.c b/drivers/gpu/drm/a9_eink/a9tcon.c
+index 5a41a31dc..dda0b5494 100644
+--- a/drivers/gpu/drm/a9_eink/a9tcon.c
++++ b/drivers/gpu/drm/a9_eink/a9tcon.c
+@@ -282,6 +282,15 @@ static void load_lut(struct a9t_state *s, enum a9t_class c, int bin, uint32_t fr
+         s->scratch[i] = p[i * CLS[c].rs];
+ }
+ 
++/* Byte 0 of every word := 0, bytes 1..3 untouched: the no-drive frame. On a
++ * template-filled buffer this IS the template, stock's idle frame (stock never
++ * writes bytes 1..3 after building the control template at TCON start). */
++static void clear_codes(uint8_t *out)
++{
++    for (size_t i = 0; i < A9T_FRAME_BYTES; i += 4)
++        out[i] = 0;
++}
++
+ /* Writes byte 0 of every word; bytes 1..3 are never written (as stock). */
+ static void render(const struct a9t_state *s, const uint16_t *pairs, uint8_t *out)
+ {
+@@ -324,9 +333,9 @@ int a9t_lookup(struct a9t_state *s, uint32_t type, int bin, const uint16_t *pair
+     if (n >= 1 && n < last) {
+         memcpy(out, s->cache, A9T_FRAME_BYTES);
+     } else if (bal && n == last) { /* Balanced emits two null frames */
+-        memset(out, 0, A9T_FRAME_BYTES);
++        clear_codes(out);
+     } else { /* final null frame */
+-        memset(out, 0, A9T_FRAME_BYTES);
++        clear_codes(out);
+         s->counter = 0;
+         return 0;
+     }
+diff --git a/drivers/gpu/drm/a9_eink/a9tcon.h b/drivers/gpu/drm/a9_eink/a9tcon.h
+index 9b68d66a3..69c934c6f 100644
+--- a/drivers/gpu/drm/a9_eink/a9tcon.h
++++ b/drivers/gpu/drm/a9_eink/a9tcon.h
+@@ -16,6 +16,16 @@
+  * (row-major, 1648 bytes per row). A drive frame is 448 x 829 words of 4 bytes
+  * (XRGB8888 on the DSI link); only byte 0 of words 0..411 of rows 5..828 carries
+  * data (4 pixels, 2 bits each).
++ *
++ * Bytes 1..3 of every word are NOT zero on the panel: they carry the panel's
++ * control signals (byte 1 gate/source strobes, byte 2 0x00, byte 3 0xff), a
++ * fixed CONTROL TEMPLATE that stock builds once at TCON start (composer
++ * HWCDisplay::SetPowerMode 0x19eed0, librecovery_ui.so Init_Eink_SWTcon) and
++ * never overwrites (MEASURED, 16 live stock ring buffers, 2026-10-15). The core
++ * writes byte 0 only, never bytes 1..3, so every output buffer (and the hold
++ * cache) must be pre-filled with the template by the caller; a "null" frame is
++ * then the template itself. The template is vendor-derived and loaded at run
++ * time (scripts/mainline/eink/tools), never part of this code.
+  */
+ #ifndef A9TCON_H
+ #define A9TCON_H
+diff --git a/drivers/gpu/drm/panel/panel-hisense-hlte556n-eink.c b/drivers/gpu/drm/panel/panel-hisense-hlte556n-eink.c
+index df1111540..06eedd7eb 100644
+--- a/drivers/gpu/drm/panel/panel-hisense-hlte556n-eink.c
++++ b/drivers/gpu/drm/panel/panel-hisense-hlte556n-eink.c
+@@ -16,13 +16,18 @@
+  *    exposes, scan out 448x829 XRGB8888 frames, one per vblank;
+  *  - the drive data rides in byte 0 of every 32-bit pixel: rows 0..4 blank,
+  *    rows 5..828 words 0..411 = 4 E Ink pixels as 2-bit codes
+- *    (p0<<6 | p1<<4 | p2<<2 | p3), words 412..447 zero, bytes 1..3 zero
+- *    (scripts/mainline/a9tcon.py, docs/mainline-plan.md section 4);
++ *    (p0<<6 | p1<<4 | p2<<2 | p3), words 412..447 zero; bytes 1..3 are NOT
++ *    zero: they carry the panel's control signals (gate clocks and source
++ *    strobes on G, 0x00 on R, 0xff on X), a fixed template stock builds once
++ *    and never overwrites; with zeros there the panel is never clocked
++ *    (boot 12; drivers/gpu/drm/a9_eink, hisense/a9-ctrl-template.bin;
++ *    scripts/mainline/a9tcon.py, docs/mainline-plan.md section 4);
+  *  - the E Ink high voltage is up exactly while the CRTC is active. Like the
+  *    stock composer (2-3 s idle timer, MEASURED), the TCON keeps the CRTC on
+- *    across a burst of updates, ENDS EVERY UPDATE WITH AN ALL-ZERO FRAME (no
+- *    drive) and disables the CRTC (DPMS off, FP9929A down) once idle. Never
+- *    leave a non-zero frame on screen with the CRTC active. In-kernel user:
++ *    across a burst of updates, ENDS EVERY UPDATE WITH AN IDLE FRAME (byte 0
++ *    zero everywhere = the template: no drive) and disables the CRTC (DPMS
++ *    off, FP9929A down) once idle. Never leave a frame with a non-zero byte 0
++ *    on screen with the CRTC active. In-kernel user:
+  *    the a9_eink driver (scripts/mainline/eink in the A9 repo).
+  *
+  * Panel control lines (vendor qcom,mdss_dsi_epd_eink_fhdhs_video): xon,

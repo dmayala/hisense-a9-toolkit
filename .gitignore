@@ -1,0 +1,59 @@
+# ---------------------------------------------------------------- secrets ---
+# The PRIVATE halves of the signing key. Only the certificate is committed --
+# it has to be, since it is baked into plat_mac_permissions.xml, but the key
+# itself must never leave this machine. Anyone holding it can sign an APK that
+# the patched ROM will place in the platform SELinux domain.
+keys/*.key
+keys/*.pk8
+keys/*.jks
+keys/*.keystore
+keys/*.p12
+
+# ------------------------------------------------------- separate git repos ---
+# Tracked in their own repositories, with their own remotes. Committing them
+# here would either nest a repo or create a stray gitlink.
+device_hisense_HLTE556N/
+work-gsi/A9PatchingService/
+work-gsi/manday-hisense/
+
+# ------------------------------------------------- build output / scratch ----
+# Multi-gigabyte working directories and generated artifacts. Everything here
+# is reproducible from the firmware package plus the scripts that are tracked.
+.venv/
+builds/
+work-gsi/
+work-km/
+work-recovery/
+work-epd/
+dtgen-device/
+dtgen-out/
+
+# Images and archives should never land in git.
+*.img
+*.img.xz
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.*
+*.bin
+*.elf
+*.apk
+*.jar
+*.dex
+*.so
+*.odex
+*.vdex
+
+# ----------------------------------------------------------------- noise -----
+__pycache__/
+*.pyc
+*.log
+*.bak
+.DS_Store
+
+scripts/edl_config.json
+runs/
+
+# device-specific values (serial etc.): local/device.json, see data/device.example.json
+local/

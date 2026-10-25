@@ -1,0 +1,12 @@
+--- a/sound/soc/qcom/sdw.c
++++ b/sound/soc/qcom/sdw.c
+@@ -102,7 +102,9 @@
+ 
+ 	switch (cpu_dai->id) {
+ 	case RX_CODEC_DMA_RX_0:
++	case RX_CODEC_DMA_RX_1:
+ 	case TX_CODEC_DMA_TX_3:
++	case TX_CODEC_DMA_TX_4:
+ 		if (tx_ch_cnt || rx_ch_cnt) {
+ 			for_each_rtd_codec_dais(rtd, j, codec_dai) {
+ 				ret = snd_soc_dai_set_channel_map(codec_dai,

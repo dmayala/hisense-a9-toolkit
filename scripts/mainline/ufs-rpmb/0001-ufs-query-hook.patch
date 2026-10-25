@@ -1,0 +1,42 @@
+--- a/drivers/ufs/core/ufshcd.c
++++ b/drivers/ufs/core/ufshcd.c
+@@ -9557,6 +9557,11 @@
+ 	.ondemand_data.downdifferential	= 5,
+ };
+ 
++#ifdef CONFIG_SCSI_UFSHCD_A9_QUERY
++#include <linux/uaccess.h>
++#include "a9-ufs-query.h"
++#endif
++
+ static const struct scsi_host_template ufshcd_driver_template = {
+ 	.module			= THIS_MODULE,
+ 	.name			= UFSHCD,
+@@ -9576,6 +9581,12 @@
+ 	.eh_device_reset_handler = ufshcd_eh_device_reset_handler,
+ 	.eh_host_reset_handler   = ufshcd_eh_host_reset_handler,
+ 	.eh_timed_out		= ufshcd_eh_timed_out,
++#ifdef CONFIG_SCSI_UFSHCD_A9_QUERY
++	.ioctl			= a9_ufs_query_ioctl,
++#ifdef CONFIG_COMPAT
++	.compat_ioctl		= a9_ufs_query_ioctl,
++#endif
++#endif
+ 	.this_id		= -1,
+ 	.sg_tablesize		= SG_ALL,
+ 	.max_segment_size	= PRDT_DATA_BYTE_COUNT_MAX,
+--- a/drivers/ufs/core/Kconfig
++++ b/drivers/ufs/core/Kconfig
+@@ -50,3 +50,12 @@
+ 	  a hardware monitoring device will be created for the UFS device.
+ 
+ 	  If unsure, say N.
++
++config SCSI_UFSHCD_A9_QUERY
++	bool "A9 stock RPMB descriptor query compatibility"
++	depends on SCSI_UFSHCD
++	help
++	  Support the pointer-free Qualcomm downstream UFS ioctl 0x5388 on
++	  SCSI devices for stock Android librpmb. Only READ_DESC for device,
++	  geometry and unit descriptors is supported. RPMB frames use SG_IO.
++	  Enable CHR_DEV_SG for userspace access through /dev/sg*.

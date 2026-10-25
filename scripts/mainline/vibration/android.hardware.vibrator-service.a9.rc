@@ -1,0 +1,8 @@
+on post-fs-data
+    insmod /vendor/lib/modules/a9-aw86xx.ko
+
+service vendor.vibrator-a9 /vendor/bin/hw/android.hardware.vibrator-service.a9
+    class hal
+    user system
+    group input
+    interface aidl android.hardware.vibrator.IVibrator/default

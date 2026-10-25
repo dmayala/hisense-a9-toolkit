@@ -1,0 +1,35 @@
+#!/system/bin/sh
+# Via a9ml_rootsh. check is read-only; create/verify use public CE/DE markers.
+set -eu
+umask 077
+mode=${1-check}
+case "$mode" in check|create|verify) ;; *) echo 'Usage: check-fbe.sh [check|create|verify]' >&2;exit 2;; esac
+[ "$#" -le 1 ] && [ "$(id -u)" = 0 ]
+[ "$(getprop ro.boot.slot_suffix)" = _b ]
+[ "$(getprop sys.boot_completed)" = 1 ]
+[ "$(getenforce)" = Enforcing ]
+[ "$(getprop ro.crypto.state)" = encrypted ]
+[ "$(getprop ro.crypto.type)" = file ]
+awk '$2=="/data" {n++;if($1=="/dev/block/mapper/a9-row29-data" && $3=="f2fs" && $4=="noatime,nosuid,nodev,nodiscard" && $5=="wait,latemount,fileencryption=aes-256-xts:aes-256-cts:v2" && NF==5)ok++} END {exit !(n==1 && ok==1)}' /vendor/etc/fstab.hlte556n
+for name in vold keystore2 vendor.keymint-default vendor.gatekeeper_nonsecure; do
+    [ "$(getprop init.svc.$name)" = running ]
+done
+state=$(cmd activity get-started-user-state 0)
+[ "$state" = RUNNING_UNLOCKED ] || { echo "ROW29 FBE FAIL: user0 state=$state" >&2;exit 1; }
+@MAP_CHECK@
+[ -d /data/unencrypted/key ] && [ -d /data/misc/vold/user_keys/de/0 ]
+[ -d /data/misc/vold/user_keys/ce/0/current ]
+T=$(mktemp -d /dev/.row29-fbe-check-XXXXXX)
+trap 'rm -f "$T/helper";rmdir "$T"' EXIT
+base64 -d > "$T/helper" <<'ROW29_FBE_CHECK_HELPER'
+@HELPER_BASE64@
+ROW29_FBE_CHECK_HELPER
+actual=$(sha256sum "$T/helper");actual=${actual%% *}
+[ "$actual" = '@HELPER_SHA256@' ]
+chmod 700 "$T/helper"
+"$T/helper" "$mode"
+if [ "$mode" != check ];then
+    sha256sum /data/system_ce/0/row29-fbe-proof /data/system_de/0/row29-fbe-proof
+fi
+printf 'BOOT_ID=';cat /proc/sys/kernel/random/boot_id
+echo "ROW29 FBE CHECK PASS mode=$mode user0=RUNNING_UNLOCKED"

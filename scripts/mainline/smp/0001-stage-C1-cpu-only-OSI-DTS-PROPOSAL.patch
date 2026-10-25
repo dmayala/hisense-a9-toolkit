@@ -1,0 +1,20 @@
+Subject: [PROPOSAL] arm64: dts: A9 C1 CPU-only OSI before cluster collapse
+
+Linux-tree fragment only; include LAST in the private A9 board DTS.
+Needs stage-c1.config and the C1 command line. Not for A/B.
+
+--- /dev/null
++++ b/arch/arm64/boot/dts/qcom/a9-smp-c1.dtsi
+@@ -0,0 +1,12 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
++/* Stage C1 only. Include LAST in a private copy of the A9 board DTS.
++ * Keep CPU PSCI domain states (0x40000003) and request OSI normally, but
++ * do not select shared cluster GDHS/power-collapse states in the first test.
++ */
++&cluster_0_pd {
++	/delete-property/ domain-idle-states;
++};
++
++&cluster_1_pd {
++	/delete-property/ domain-idle-states;
++};

@@ -1,0 +1,44 @@
+# Sensor owner alone starts ADSP. Do not time out the card before that owner
+# has announced a working DSP/SNS service. No output route is enabled here.
+on post-fs-data
+    setprop vendor.a9.audio.ready 0
+    setprop vendor.a9.audio.state waiting-adsp
+
+# Load once after the existing ADSP owner reports readiness.
+on property:vendor.a9.sensors.ready=1 && property:vendor.a9.audio.ready=0
+    start vendor.a9-audio-load
+
+service vendor.a9-audio-load /system/bin/sh /vendor/bin/a9-audio-load.sh
+    user root
+    group root system audio
+    seclabel u:r:phhsu_daemon:s0
+    disabled
+    oneshot
+
+# Parsed before the APEX rc: first definition wins (the APEX has no override).
+# Keep the original service name and original implementation; only add the
+# tinyalsa adapter, in a private library namespace bundle. Effect HAL stays APEX.
+service vendor.audio-hal-aidl /vendor/bin/hw/android.hardware.audio.service-aidl.a9
+    class hal
+    user audioserver
+    group audio camera drmrpc inet media mediadrm net_bt net_bt_admin net_bw_acct wakelock context_hub
+    capabilities BLOCK_SUSPEND SYS_NICE
+    rlimit rtprio 10 10
+    ioprio rt 4
+    task_profiles ProcessCapacityHigh HighPerformance
+    seclabel u:r:hal_audio_default:s0
+    setenv LD_LIBRARY_PATH /vendor/lib64/a9-audio
+    setenv LD_PRELOAD /vendor/lib64/a9-audio/liba9audioroute.so
+    onrestart restart audioserver
+
+# Reopen any mixer/PCM handles the HAL cached before the card registered.
+on property:vendor.a9.audio.ready=1
+    restart vendor.audio-hal-aidl
+
+# GSI sysbta sends audio to another provider than the vendor AIDL bluetooth
+# module. Use the default provider hosted in that same vendor process.
+on post-fs-data
+    setprop persist.bluetooth.system_audio_hal.enabled false
+    setprop persist.bluetooth.bluetooth_audio_hal.disabled false
+    setprop persist.bluetooth.a2dp_offload.disabled true
+    setprop persist.bluetooth.leaudio_offload.disabled true

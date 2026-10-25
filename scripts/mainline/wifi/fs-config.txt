@@ -1,0 +1,25 @@
+# pack-vendor defaults ignore staging st_mode. Keep private seeds unreadable
+# to ordinary Android users, independently of permissive SELinux.
+etc/a9-wifi 0 0 0700
+etc/a9-wifi/seeds 0 0 0700
+etc/a9-wifi/seeds/* 0 0 0400
+etc/a9-wifi/assets.sha256 0 0 0400
+etc/a9-wifi/build-manifest.json 0 0 0400
+bin/a9-wifi-sandbox 0 0 0755
+bin/rmtfs 0 0 0755
+bin/tqftpserv 0 0 0755
+bin/pd-mapper 0 0 0755
+
+bin/diag-router 0 0 0755
+etc/a9-wifi/android-bundle.json 0 0 0400
+lib64/a9-wifi/* 0 0 0644
+lib64/a9-wifi 0 0 0755
+lib64/a9-wifi/hal 0 0 0755
+lib64/a9-wifi/supplicant 0 0 0755
+bin/a9ml-wifi-session.sh 0 0 0755
+etc/a9-wifi/session 0 0 0700
+etc/a9-wifi/session/tools 0 0 0700
+etc/a9-wifi/session/tools/* 0 0 0600
+etc/a9-wifi/session/session.conf 0 0 0400
+etc/a9-wifi/session/country 0 0 0400
+etc/a9-wifi/session/manifest.json 0 0 0400

@@ -1,0 +1,204 @@
+--- a/src/android/mm/generic_camera_buffer.cpp
++++ b/src/android/mm/generic_camera_buffer.cpp
+@@ -57,6 +57,7 @@
+ 	int flags_;
+ 	off_t bufferLength_;
+ 	bool mapped_;
++	bool blob_;
+ 	std::vector<PlaneInfo> planeInfo_;
+ };
+ 
+@@ -64,7 +65,7 @@
+ 			       buffer_handle_t camera3Buffer,
+ 			       PixelFormat pixelFormat,
+ 			       const Size &size, int flags)
+-	: fd_(-1), flags_(flags), bufferLength_(-1), mapped_(false)
++	: fd_(-1), flags_(flags), bufferLength_(-1), mapped_(false), blob_(false)
+ {
+ 	error_ = 0;
+ 	if (!camera3Buffer || camera3Buffer->numFds < 0 || camera3Buffer->numFds > 1024 ||
+@@ -100,7 +101,9 @@
+ 			    static_cast<uint32_t>(hnd->numFds) != hnd->num_planes +
+ 								(hnd->reserved_region_size > 0) ||
+ 			    hnd->num_planes != info.numPlanes() || hnd->format_modifier ||
+-			    (blob ? hnd->format != r8 :
++			    (blob ? (hnd->format != r8 || hnd->height != 1 ||
++				     hnd->width < sizeof(camera3_jpeg_blob_t) + 4 ||
++				     hnd->width > hnd->sizes[0]) :
+ 			     hnd->format != pixelFormat.fourcc() ||
+ 			     hnd->width != size.width || hnd->height != size.height)) {
+ 				error_ = -EINVAL;
+@@ -127,10 +130,13 @@
+ 					return;
+ 				}
+ 				planeInfo_.push_back({ hnd->fds[i], hnd->strides[i],
+-						      hnd->offsets[i], hnd->sizes[i] });
++						      hnd->offsets[i], blob ? hnd->width : hnd->sizes[i] });
+ 			}
+ 			fd_ = hnd->fds[0];
+-			bufferLength_ = blob ? hnd->sizes[0] : lseek(fd_, 0, SEEK_END);
++			/* BLOB width is the logical byte capacity; sizes[0] includes
++			 * gralloc padding. Android reads the trailer at width - 8. */
++			blob_ = blob;
++			bufferLength_ = blob ? hnd->width : lseek(fd_, 0, SEEK_END);
+ 			LOG(HAL, Debug) << "Imported minigbm " << hnd->num_planes
+ 				       << " planes, stride " << hnd->strides[0]
+ 				       << ", metadata FD " << (hnd->reserved_region_size > 0);
+@@ -241,7 +247,8 @@
+ {
+ 	ASSERT(bufferLength_ >= 0);
+ 
+-	return std::min<unsigned int>(bufferLength_, maxJpegBufferSize);
++	return blob_ ? static_cast<size_t>(bufferLength_) :
++		std::min<size_t>(bufferLength_, maxJpegBufferSize);
+ }
+ 
+ void CameraBuffer::Private::map()
+--- a/src/android/jpeg/encoder_libjpeg.cpp
++++ b/src/android/jpeg/encoder_libjpeg.cpp
+@@ -7,6 +7,8 @@
+ 
+ #include "encoder_libjpeg.h"
+ 
++#include <cstdlib>
++#include <limits>
+ #include <fcntl.h>
+ #include <iomanip>
+ #include <iostream>
+@@ -192,7 +194,13 @@
+ 		return frame.error();
+ 	}
+ 
+-	return encode(frame.planes(), buffer->dstBuffer->plane(0),
++	Span<uint8_t> destination = buffer->dstBuffer->plane(0);
++	if (destination.size() <= sizeof(camera3_jpeg_blob_t))
++		return -ENOSPC;
++
++	/* The HIDL camera3 trailer is not part of the JPEG payload. */
++	return encode(frame.planes(),
++		      destination.first(destination.size() - sizeof(camera3_jpeg_blob_t)),
+ 		      exifData, quality);
+ }
+ 
+@@ -200,19 +208,13 @@
+ 			   Span<uint8_t> dest, Span<const uint8_t> exifData,
+ 			   unsigned int quality)
+ {
+-	unsigned char *destination = dest.data();
+-	unsigned long size = dest.size();
++	unsigned char *destination = nullptr;
++	unsigned long size = 0;
+ 
+ 	jpeg_set_quality(&compress_, quality, TRUE);
+ 
+-	/*
+-	 * The jpeg_mem_dest will reallocate if the required size is not
+-	 * sufficient. That means the output won't be written to the correct
+-	 * buffers.
+-	 *
+-	 * \todo Implement our own custom memory destination to prevent
+-	 * reallocation and prefer failure with correct reporting.
+-	 */
++	/* Let libjpeg own its reallocatable buffer. Never let it realloc an
++	 * mmap() address supplied by gralloc. Copy only after checking capacity. */
+ 	jpeg_mem_dest(&compress_, &destination, &size);
+ 
+ 	jpeg_start_compress(&compress_, TRUE);
+@@ -235,5 +237,12 @@
+ 
+ 	jpeg_finish_compress(&compress_);
+ 
++	if (size > dest.size() || size > std::numeric_limits<int>::max()) {
++		free(destination);
++		return -ENOSPC;
++	}
++
++	memcpy(dest.data(), destination, size);
++	free(destination);
+ 	return size;
+ }
+--- a/src/android/jpeg/post_processor_jpeg.cpp
++++ b/src/android/jpeg/post_processor_jpeg.cpp
+@@ -8,6 +8,8 @@
+ #include "post_processor_jpeg.h"
+ 
+ #include <chrono>
++
++#include "jpeg_blob.h"
+ 
+ #include "../camera_device.h"
+ #include "../camera_metadata.h"
+@@ -98,7 +100,7 @@
+ 
+ 		int jpeg_size = thumbnailEncoder_.encode(thumbnailPlanes,
+ 							 *thumbnail, {}, quality);
+-		thumbnail->resize(jpeg_size);
++		thumbnail->resize(jpeg_size > 0 ? jpeg_size : 0);
+ 
+ 		LOG(JPEG, Debug)
+ 			<< "Thumbnail compress returned "
+@@ -209,13 +211,15 @@
+ 		return;
+ 	}
+ 
+-	/* Fill in the JPEG blob header. */
+-	uint8_t *resultPtr = destination->plane(0).data()
+-			   + destination->jpegBufferSize(cameraDevice_->maxJpegBufferSize())
+-			   - sizeof(struct camera3_jpeg_blob);
+-	auto *blob = reinterpret_cast<struct camera3_jpeg_blob *>(resultPtr);
+-	blob->jpeg_blob_id = CAMERA3_JPEG_BLOB_ID;
+-	blob->jpeg_size = jpeg_size;
++	/* Publish a valid JPEG and the legacy HIDL camera3 trailer. */
++	ret = writeJpegBlob(destination->plane(0),
++			    destination->jpegBufferSize(cameraDevice_->maxJpegBufferSize()),
++			    jpeg_size);
++	if (ret) {
++		LOG(JPEG, Error) << "Invalid JPEG payload or BLOB capacity: " << ret;
++		processComplete.emit(streamBuffer, PostProcessor::Status::Error);
++		return;
++	}
+ 
+ 	/* Update the JPEG result Metadata. */
+ 	resultMetadata->addEntry(ANDROID_JPEG_SIZE, jpeg_size);
+--- a/src/android/camera_device.cpp
++++ b/src/android/camera_device.cpp
+@@ -948,7 +948,8 @@
+ 		controls.set(controls::ScalerCrop, cropRegion);
+ 	}
+ 
+-	if (settings.getEntry(ANDROID_STATISTICS_FACE_DETECT_MODE, &entry)) {
++	if (camera_->controls().count(controls::draft::FaceDetectMode.id()) &&
++	    settings.getEntry(ANDROID_STATISTICS_FACE_DETECT_MODE, &entry)) {
+ 		const uint8_t *data = entry.data.u8;
+ 		controls.set(controls::draft::FaceDetectMode, data[0]);
+ 	}
+--- /dev/null
++++ b/src/android/jpeg/jpeg_blob.h
+@@ -0,0 +1,27 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++#pragma once
++
++#include <cerrno>
++#include <cstring>
++#include <hardware/camera3.h>
++#include <libcamera/base/span.h>
++
++/* The camera3 ABI trailer may be unaligned (BLOB width is a byte count). */
++inline int writeJpegBlob(libcamera::Span<uint8_t> destination,
++			size_t capacity, int jpegSize)
++{
++	if (capacity > destination.size() || capacity < sizeof(camera3_jpeg_blob_t) + 4 ||
++	    jpegSize < 4)
++		return -EINVAL;
++	if (static_cast<size_t>(jpegSize) > capacity - sizeof(camera3_jpeg_blob_t))
++		return -ENOSPC;
++	if (destination[0] != 0xff || destination[1] != 0xd8 ||
++	    destination[jpegSize - 2] != 0xff || destination[jpegSize - 1] != 0xd9)
++		return -EINVAL;
++
++	camera3_jpeg_blob_t blob{};
++	blob.jpeg_blob_id = CAMERA3_JPEG_BLOB_ID;
++	blob.jpeg_size = jpegSize;
++	memcpy(destination.data() + capacity - sizeof(blob), &blob, sizeof(blob));
++	return 0;
++}

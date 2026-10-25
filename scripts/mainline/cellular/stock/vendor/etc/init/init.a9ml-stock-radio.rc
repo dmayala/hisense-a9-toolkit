@@ -1,0 +1,108 @@
+# QCRIL publishes the declared radio HALs independently of WLAN readiness,
+# like stock class-main startup. MPSS/RAM-rmtfs remains externally owned.
+service a9ml-cellular-prepare /system/bin/sh /vendor/bin/a9ml-cellular-prepare.sh
+    class late_start
+    user root
+    group root radio system
+    seclabel u:r:vendor_init:s0
+    disabled
+    oneshot
+    timeout_period 60
+
+service a9ml-stock-radio-prepare /system/bin/sh /vendor/bin/a9ml-stock-radio-prepare.sh
+    class late_start
+    user root
+    group root radio system
+    seclabel u:r:vendor_init:s0
+    disabled
+    oneshot
+    timeout_period 180
+
+# Boot preparation lives beside firmware/owner startup in init.a9ml-wifi.rc.
+# That keeps the firmware-before-IPA order independent of RC import order.
+# Preserve explicit disable/re-enable. Boot preparation above is synchronous;
+# do not queue a second copy behind zygote, or retry a failed boot implicitly.
+on property:vendor.a9ml.cellular=1 && property:vendor.a9ml.cellular.stock.state=stopped
+    setprop vendor.a9ml.cellular.stock.state requested
+    setprop vendor.a9ml.cellular.stock.phase modules
+    exec_start a9ml-cellular-prepare
+    start a9ml-stock-radio-prepare
+
+# The helper publishes ready only after source verification and data copies.
+# The kernel module prerequisites are checked by that helper too: exec_start
+# failure alone would not stop init from processing the next command.
+on property:vendor.a9ml.cellular.stock.ready=1 && property:vendor.a9ml.cellular=1
+    setprop vendor.a9ml.cellular.stock.state starting
+    start vendor.qcrild
+
+# The image and VINTF declare both DSDS slots, including when both are empty.
+on property:vendor.a9ml.cellular.stock.ready=1 && property:vendor.a9ml.cellular=1 && property:ro.vendor.a6l.ril.slots=2
+    start vendor.qcrild2
+
+# IMS companions retain the serving-owner release. QCRIL must remain available
+# when WLAN is unavailable so Telephony can receive RADIO_NOT_AVAILABLE/ABSENT.
+on property:vendor.a9ml.cellular.stock.ready=1 && property:vendor.a9ml.cellular=1 && property:vendor.a9ml.wifi.session.state=serving && property:vendor.a9ml.wifi.android.ready=1
+    setprop vendor.a9ml.cellular.owner_released 1
+    start vendor.imsqmidaemon
+    start vendor.ims_rtp_daemon
+    start vendor.imsrcsservice
+
+# Preserve the stock data-daemon QMI-ready dependency, gated by this owner.
+on property:vendor.ims.QMI_DAEMON_STATUS=1 && property:vendor.a9ml.cellular.stock.ready=1 && property:vendor.a9ml.cellular=1 && property:vendor.a9ml.wifi.session.state=serving && property:vendor.a9ml.wifi.android.ready=1
+    start vendor.imsdatadaemon
+
+on property:vendor.ims.DATA_DAEMON_STATUS=1 && property:vendor.a9ml.cellular.stock.ready=1 && property:vendor.a9ml.cellular=1 && property:vendor.a9ml.wifi.session.state=serving && property:vendor.a9ml.wifi.android.ready=1
+    restart vendor.ims_rtp_daemon
+
+on property:vendor.a9ml.cellular=0
+    setprop vendor.a9ml.cellular.stock.ready 0
+    stop vendor.imsdatadaemon
+    stop vendor.ims_rtp_daemon
+    stop vendor.imsrcsservice
+    stop vendor.imsqmidaemon
+    stop vendor.qcrild3
+    stop vendor.qcrild2
+    stop vendor.qcrild
+    stop vendor.netmgrd
+    setprop vendor.a9ml.cellular.stock.state stopped
+
+# Owner teardown stops IMS clients, not the stock radio HAL publication.
+# QCRIL remains a framework endpoint across modem/WLAN unavailability; only
+# cellular opt-out or shutdown stops it. This adds no modem start/retry route.
+on property:vendor.a9ml.wifi.session.state=ending
+    setprop vendor.a9ml.cellular.owner_released 0
+    stop vendor.imsdatadaemon
+    stop vendor.ims_rtp_daemon
+    stop vendor.imsrcsservice
+    stop vendor.imsqmidaemon
+
+on property:vendor.a9ml.wifi.session.state=ended
+    setprop vendor.a9ml.cellular.owner_released 0
+    stop vendor.imsdatadaemon
+    stop vendor.ims_rtp_daemon
+    stop vendor.imsrcsservice
+    stop vendor.imsqmidaemon
+
+on property:vendor.a9ml.wifi.session.state=failed
+    setprop vendor.a9ml.cellular.owner_released 0
+    stop vendor.imsdatadaemon
+    stop vendor.ims_rtp_daemon
+    stop vendor.imsrcsservice
+    stop vendor.imsqmidaemon
+
+on property:vendor.a9ml.wifi.android.ready=0 && property:vendor.a9ml.cellular.owner_released=1
+    setprop vendor.a9ml.cellular.owner_released 0
+    stop vendor.imsdatadaemon
+    stop vendor.ims_rtp_daemon
+    stop vendor.imsrcsservice
+    stop vendor.imsqmidaemon
+
+on shutdown
+    stop vendor.imsdatadaemon
+    stop vendor.ims_rtp_daemon
+    stop vendor.imsrcsservice
+    stop vendor.imsqmidaemon
+    stop vendor.qcrild3
+    stop vendor.qcrild2
+    stop vendor.qcrild
+    stop vendor.netmgrd

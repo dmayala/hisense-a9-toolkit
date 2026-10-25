@@ -1,0 +1,23 @@
+--- a/sound/soc/qcom/qdsp6/q6dsp-lpass-ports.c
++++ b/sound/soc/qcom/qdsp6/q6dsp-lpass-ports.c
+@@ -416,7 +416,9 @@
+ 			.stream_name = "Secondary MI2S Playback",
+ 			.rates = SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_8000 |
+ 				 SNDRV_PCM_RATE_16000,
+-			.formats = SNDRV_PCM_FMTBIT_S16_LE,
++			.formats = SNDRV_PCM_FMTBIT_S16_LE |
++				(IS_ENABLED(CONFIG_SND_SOC_A9_ES9218) ?
++				 SNDRV_PCM_FMTBIT_S32_LE : 0),
+ 			.channels_min = 1,
+ 			.channels_max = 8,
+ 			.rate_min =     8000,
+--- a/Documentation/devicetree/bindings/sound/qcom,sm8250.yaml
++++ b/Documentation/devicetree/bindings/sound/qcom,sm8250.yaml
+@@ -30,6 +30,7 @@
+               - qcom,sm8750-sndcard
+           - const: qcom,sm8450-sndcard
+       - enum:
++          - hisense,a9-es9218-sndcard
+           - fairphone,fp4-sndcard
+           - fairphone,fp5-sndcard
+           - qcom,apq8096-sndcard

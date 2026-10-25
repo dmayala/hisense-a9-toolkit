@@ -1,0 +1,73 @@
+From 53094f97d5bff8e96bce4c60a7d55db6c0dbb261 Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 21:17:34 -0700
+Subject: [PATCH 6/9] regulator: fp9929a: log the VCOM source, refuse power-up
+ on the built-in default
+
+The VCOM is per panel. Use androidboot.eink_vcom from the bootloader, else
+the DT value; if neither is valid, keep the old default only for the log
+and refuse every power-up (-EINVAL).
+---
+ drivers/regulator/fp9929a.c | 32 ++++++++++++++++++++++++++------
+ 1 file changed, 26 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/regulator/fp9929a.c b/drivers/regulator/fp9929a.c
+index 8a4ab24bc..d5eca1926 100644
+--- a/drivers/regulator/fp9929a.c
++++ b/drivers/regulator/fp9929a.c
+@@ -64,6 +64,7 @@ struct fp9929a {
+ 	struct mutex lock;
+ 	unsigned int vcom_mv;
+ 	u8 vcom_code;
++	const char *vcom_src;	/* "cmdline", "dt" or "default" */
+ 	bool on;
+ 	bool have_temp;
+ 	int temp_c;
+@@ -133,6 +134,15 @@ static int fp9929a_enable(struct regulator_dev *rdev)
+ 			 "power-up refused: boot with fp9929a.allow_power_on=1 to allow it\n");
+ 		return -EPERM;
+ 	}
++	/*
++	 * The panel's VCOM is per-device (diag partition, passed by the ABL as
++	 * androidboot.eink_vcom; 2730 mV on the A9 this was written for). Never
++	 * drive the panel on the driver's built-in guess.
++	 */
++	if (!strcmp(fp->vcom_src, "default")) {
++		dev_err(fp->dev, "power-up refused: no VCOM from cmdline or DT\n");
++		return -EINVAL;
++	}
+ 
+ 	mutex_lock(&fp->lock);
+ 	if (fp->on) {
+@@ -284,15 +294,25 @@ static int fp9929a_probe(struct i2c_client *client)
+ 	gpiod_direction_output(fp->pwrup, 0);
+ 	fp->on = false;
+ 
++	fp->vcom_src = "cmdline";
+ 	mv = fp9929a_vcom_from_cmdline();
+-	if (!mv)
+-		of_property_read_u32(dev->of_node, "fitipower,vcom-millivolt", &mv);
+-	if (mv < FP9929A_VCOM_MIN_MV || mv >= FP9929A_VCOM_MAX_MV)
+-		mv = FP9929A_VCOM_DEFAULT_MV;
++	if (mv && (mv < FP9929A_VCOM_MIN_MV || mv >= FP9929A_VCOM_MAX_MV)) {
++		dev_warn(dev, "androidboot.eink_vcom=%u out of range, ignored\n", mv);
++		mv = 0;
++	}
++	if (!mv) {
++		fp->vcom_src = "dt";
++		if (of_property_read_u32(dev->of_node, "fitipower,vcom-millivolt", &mv) ||
++		    mv < FP9929A_VCOM_MIN_MV || mv >= FP9929A_VCOM_MAX_MV) {
++			fp->vcom_src = "default";
++			mv = FP9929A_VCOM_DEFAULT_MV;
++		}
++	}
+ 	fp->vcom_mv = mv;
+ 	fp->vcom_code = fp9929a_vcom_code(mv);
+-	dev_info(dev, "VCOM %u mV -> code 0x%02x; power-up %s\n", mv,
+-		 fp->vcom_code, allow_power_on ? "ALLOWED" : "refused (safe default)");
++	dev_info(dev, "VCOM %u mV (from %s) -> code 0x%02x; power-up %s\n", mv,
++		 fp->vcom_src, fp->vcom_code,
++		 allow_power_on ? "ALLOWED" : "refused (safe default)");
+ 
+ 	i2c_set_clientdata(client, fp);
+ 

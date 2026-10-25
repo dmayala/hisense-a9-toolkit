@@ -1,0 +1,91 @@
+; Round 3: source-derived gaps after a real enforcing boot. Fresh AVC export
+; was lost; do not claim these static rules prove feature recovery.
+; Coordinator explicitly permits its existing loopback root diagnostic domain
+; to remain permissive-equivalent. No functional service domain is exempted.
+(typepermissive a9ml_rootsh)
+
+; ueventd uses the matching file_contexts for all media nodes, including
+; multi-digit Venus video nodes and CAMSS media/subdevice nodes.
+(allow hal_camera_default video_device_202504 (chr_file (read write open getattr ioctl map)))
+(allowx hal_camera_default video_device_202504 (ioctl chr_file ((range 0x5600 0x56ff) (range 0x7c00 0x7cff))))
+(allow mediacodec video_device_202504 (chr_file (read write open getattr ioctl map)))
+(allowx mediacodec video_device_202504 (ioctl chr_file ((range 0x5600 0x56ff) (range 0x7c00 0x7cff))))
+(allow hal_camera_default sysfs_202504 (dir (read open search getattr)))
+(allow hal_camera_default sysfs_202504 (file (read open getattr)))
+(allow hal_camera_default sysfs_202504 (lnk_file (read getattr)))
+(allow hal_camera_default dmabuf_heap_device_202504 (chr_file (read write open getattr ioctl)))
+(allow hal_camera_default dmabuf_system_heap_device_202504 (chr_file (read write open getattr ioctl)))
+(allowx hal_camera_default dmabuf_heap_device_202504 (ioctl chr_file (0x4800)))
+(allowx hal_camera_default dmabuf_system_heap_device_202504 (ioctl chr_file (0x4800)))
+; Shell diagnostics can enumerate/stat nodes; DAC remains cameraserver:camera
+; 0660, so captures continue through the existing root diagnostic channel.
+(allow shell_202504 video_device_202504 (chr_file (getattr)))
+
+; Match canonical MPSS parent, not a guessed remoteproc index. The existing
+; controller alone owns start/stop and retains all its admissions/guards.
+(type a9ml_sysfs_mpss) (roletype object_r a9ml_sysfs_mpss)
+(typeattributeset fs_type (a9ml_sysfs_mpss))
+(typeattributeset sysfs_type (a9ml_sysfs_mpss))
+(genfscon sysfs "/devices/platform/soc@0/6080000.remoteproc" (u object_r a9ml_sysfs_mpss ((s0) (s0))))
+(allow a9_wifi_radio a9ml_sysfs_mpss (dir (read open search getattr)))
+(allow a9_wifi_radio a9ml_sysfs_mpss (lnk_file (read getattr)))
+(allow a9_wifi_radio a9ml_sysfs_mpss (file (read write open getattr)))
+(allow a9_wifi_radio a9ml_sysfs_adsp (dir (read open search getattr)))
+(allow a9_wifi_radio a9ml_sysfs_adsp (lnk_file (read getattr)))
+(allow a9_wifi_radio a9ml_sysfs_adsp (file (read open getattr)))
+(allow shell_202504 a9ml_sysfs_mpss (dir (read open search getattr)))
+(allow shell_202504 a9ml_sysfs_mpss (lnk_file (read getattr)))
+(allow shell_202504 a9ml_sysfs_mpss (file (read open getattr)))
+(allow shell_202504 a9ml_sysfs_adsp (dir (read open search getattr)))
+(allow shell_202504 a9ml_sysfs_adsp (lnk_file (read getattr)))
+(allow shell_202504 a9ml_sysfs_adsp (file (read open getattr)))
+
+; Session source: exec tools/trial mounts, read-only noload persist mount,
+; physical seed reads, and RAM-only child roots. No physical block write.
+(allow a9_wifi_radio tmpfs_202504 (dir (read write open search getattr create add_name remove_name setattr mounton rmdir)))
+(allow a9_wifi_radio tmpfs_202504 (file (read write open getattr create append setattr unlink execute execute_no_trans map)))
+(allow a9_wifi_radio tmpfs_202504 (lnk_file (create read getattr unlink)))
+; enter_jail makes the inherited root mount private, then detaches that old
+; root after pivot_root into its new noswap tmpfs.
+(allow a9_wifi_radio rootfs_202504 (dir (mounton)))
+(allow a9_wifi_radio rootfs_202504 (filesystem (unmount getattr)))
+(allow a9_wifi_radio block_device_202504 (dir (read open search getattr)))
+(allow a9_wifi_radio block_device_202504 (lnk_file (read getattr)))
+(allow a9_wifi_radio block_device_202504 (blk_file (read open getattr ioctl)))
+(allowx a9_wifi_radio block_device_202504 (ioctl blk_file (0x125e 0x1260 0x1268 0x1272)))
+(allow a9_wifi_radio labeledfs_202504 (filesystem (mount unmount getattr)))
+(allow a9_wifi_radio unlabeled_202504 (filesystem (mount unmount getattr)))
+(allow a9_wifi_radio unlabeled_202504 (dir (read open search getattr)))
+(allow a9_wifi_radio unlabeled_202504 (file (read open getattr)))
+(allow a9_wifi_radio unlabeled_202504 (lnk_file (read getattr)))
+(allow a9_wifi_radio ram_device_202504 (blk_file (read open getattr ioctl)))
+(allowx a9_wifi_radio ram_device_202504 (ioctl blk_file (0x125e 0x1260 0x1268 0x1272)))
+(allow a9_wifi_radio a9_wifi_ram_file (dir (reparent)))
+(allow a9_wifi_radio self (process (setfscreate)))
+(allow a9_wifi_radio self (capability (dac_override dac_read_search fsetid mknod)))
+
+; gadget_core.cpp: enumerate/unlink/symlink configfs functions, write gadget
+; attributes and UDC, wait for FunctionFS endpoints, watch/rebind and soft-connect.
+; sm6115.dtsi names both wrapper/child "usb". Label the canonical device
+; subtree: a /class/udc rule alone does not label the symlink's target.
+(genfscon sysfs "/devices/platform/soc@0/4ef8800.usb/4e00000.usb/udc" (u object_r sysfs_udc ((s0) (s0))))
+(allow hal_usb_gadget_default configfs_202504 (dir (read open search getattr write add_name remove_name)))
+(allow hal_usb_gadget_default configfs_202504 (file (read write open getattr)))
+(allow hal_usb_gadget_default configfs_202504 (lnk_file (read getattr create unlink)))
+(allow hal_usb_gadget_default functionfs_202504 (dir (read open search getattr watch)))
+(allow hal_usb_gadget_default functionfs_202504 (file (getattr)))
+(allow hal_usb_gadget_default sysfs_udc_202504 (dir (read open search getattr)))
+(allow hal_usb_gadget_default sysfs_udc_202504 (lnk_file (read getattr)))
+(allow hal_usb_gadget_default sysfs_udc_202504 (file (read write open getattr)))
+(allow hal_usb_gadget_default sysfs_202504 (dir (read open search getattr)))
+(allow hal_usb_gadget_default sysfs_202504 (lnk_file (read getattr)))
+(allow hal_usb_gadget_default self (anon_inode (create read write getattr ioctl)))
+(allow hal_usb_gadget_default usb_control_prop_202504 (file (read open getattr map)))
+(allow a9ml_usb sysfs_udc_202504 (dir (read open search getattr)))
+(allow a9ml_usb sysfs_udc_202504 (lnk_file (read getattr)))
+(allow a9ml_usb sysfs_udc_202504 (file (read open getattr)))
+(allow a9ml_usb functionfs_202504 (dir (read open search getattr)))
+(allow a9ml_usb functionfs_202504 (file (getattr)))
+; Legacy state file is supplied by the compatibility kernel module.
+(allow hal_usb_gadget_default sysfs_android_usb_202504 (dir (read open search getattr)))
+(allow hal_usb_gadget_default sysfs_android_usb_202504 (file (read open getattr)))

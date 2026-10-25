@@ -1,0 +1,23 @@
+From: A9 project <dmayala@users.noreply.github.com>
+Subject: [PATCH 0064] cgroup-v1: allow CAP_SYS_NICE task migration as on Android GKI
+
+Android's system_server moves app tasks between foreground/background groups.
+Mainline v1 returns EACCES after the file's DAC/SELinux open checks because
+system_server is neither root nor the app's UID. Match Android common 6.6's
+namespace-scoped CAP_SYS_NICE exception; keep unprivileged UID checks and all
+file/LSM checks intact. No UID-specific exception or new capability grant.
+
+Reference: android.googlesource.com/kernel/common/+/refs/heads/android15-6.6/kernel/cgroup/cgroup-v1.c
+---
+--- a/kernel/cgroup/cgroup-v1.c
++++ b/kernel/cgroup/cgroup-v1.c
+@@ -523,7 +523,8 @@
+ 	tcred = get_task_cred(task);
+ 	if (!uid_eq(cred->euid, GLOBAL_ROOT_UID) &&
+ 	    !uid_eq(cred->euid, tcred->uid) &&
+-	    !uid_eq(cred->euid, tcred->suid))
++	    !uid_eq(cred->euid, tcred->suid) &&
++	    !ns_capable(tcred->user_ns, CAP_SYS_NICE))
+ 		ret = -EACCES;
+ 	put_cred(tcred);
+ 	if (ret)

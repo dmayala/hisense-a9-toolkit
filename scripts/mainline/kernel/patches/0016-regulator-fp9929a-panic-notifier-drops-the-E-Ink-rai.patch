@@ -1,0 +1,90 @@
+From f2607ce1779c2914b690f1bd6b09bc087d25d1a7 Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 23:32:22 -0700
+Subject: [PATCH] regulator: fp9929a: panic notifier drops the E Ink rails (G9)
+
+If the kernel panics with HV up, drop VCOM-EN, wait 50 ms (stock power-down
+gap), then PWRUP. Non-sleeping GPIO calls, no locks.
+---
+ drivers/regulator/fp9929a.c | 39 ++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 38 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/regulator/fp9929a.c b/drivers/regulator/fp9929a.c
+index b5c8dc5b3..40727047c 100644
+--- a/drivers/regulator/fp9929a.c
++++ b/drivers/regulator/fp9929a.c
+@@ -37,7 +37,9 @@
+ #include <linux/i2c.h>
+ #include <linux/module.h>
+ #include <linux/mutex.h>
++#include <linux/notifier.h>
+ #include <linux/of.h>
++#include <linux/panic_notifier.h>
+ #include <linux/regulator/driver.h>
+ #include <linux/regulator/fp9929a.h>
+ #include <linux/regulator/of_regulator.h>
+@@ -67,6 +69,7 @@ struct fp9929a {
+ 	u8 vcom_code;
+ 	const char *vcom_src;	/* "cmdline", "dt" or "default" */
+ 	bool on;
++	struct notifier_block panic_nb;
+ 	bool have_temp;
+ 	int temp_c;
+ };
+@@ -250,6 +253,33 @@ static const struct hwmon_chip_info fp9929a_chip_info = {
+ 	.info = fp9929a_hwmon_info,
+ };
+ 
++/*
++ * Panic with the rails up (G9): a dying kernel stops the TCON mid-update
++ * and the panel would sit under drive voltage. Drop VCOM-EN, wait as the
++ * stock power-down does, then PWRUP. Panic context: no locks, no sleeping
++ * (TLMM GPIOs do not sleep; mdelay is fine here).
++ */
++static int fp9929a_panic(struct notifier_block *nb, unsigned long ev, void *p)
++{
++	struct fp9929a *fp = container_of(nb, struct fp9929a, panic_nb);
++
++	if (!READ_ONCE(fp->on))
++		return NOTIFY_DONE;
++	gpiod_set_value(fp->vcom_en, 0);
++	mdelay(50);
++	gpiod_set_value(fp->pwrup, 0);
++	WRITE_ONCE(fp->on, false);
++	pr_emerg("fp9929a: panic: E Ink rails powered down\n");
++	return NOTIFY_DONE;
++}
++
++static void fp9929a_unregister_panic(void *data)
++{
++	struct fp9929a *fp = data;
++
++	atomic_notifier_chain_unregister(&panic_notifier_list, &fp->panic_nb);
++}
++
+ static int fp9929a_probe(struct i2c_client *client)
+ {
+ 	struct device *dev = &client->dev;
+@@ -257,7 +287,7 @@ static int fp9929a_probe(struct i2c_client *client)
+ 	struct regulator_dev *rdev;
+ 	struct fp9929a *fp;
+ 	unsigned int mv = 0;
+-	int up, com;
++	int up, com, ret;
+ 
+ 	fp = devm_kzalloc(dev, sizeof(*fp), GFP_KERNEL);
+ 	if (!fp)
+@@ -336,6 +366,13 @@ static int fp9929a_probe(struct i2c_client *client)
+ 		if (IS_ERR(hw))
+ 			dev_notice(dev, "no hwmon\n");
+ 	}
++	fp->panic_nb.notifier_call = fp9929a_panic;
++	fp->panic_nb.priority = INT_MAX;	/* before anything that may hang */
++	atomic_notifier_chain_register(&panic_notifier_list, &fp->panic_nb);
++	ret = devm_add_action_or_reset(dev, fp9929a_unregister_panic, fp);
++	if (ret)
++		return ret;
++
+ 	return 0;
+ }
+ 

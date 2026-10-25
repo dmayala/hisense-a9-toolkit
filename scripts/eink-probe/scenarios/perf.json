@@ -1,0 +1,14 @@
+{
+  "name": "perf",
+  "comment": "Each step is one adb argument vector appended to the --adb prefix. Settle is detected from the camera (quiet_ms with no change, after min_wait_ms, capped by max_wait_ms).",
+  "min_wait_ms": 1500, "quiet_ms": 700, "max_wait_ms": 10000,
+  "steps": [
+    {"name": "home",        "adb": ["shell", "input", "keyevent", "KEYCODE_HOME"]},
+    {"name": "drawer_up",   "adb": ["shell", "input", "swipe", "412", "1500", "412", "500", "150"]},
+    {"name": "back",        "adb": ["shell", "input", "keyevent", "KEYCODE_BACK"]},
+    {"name": "settings",    "adb": ["shell", "am", "start", "-a", "android.settings.SETTINGS"]},
+    {"name": "scroll_down", "adb": ["shell", "input", "swipe", "412", "1300", "412", "400", "150"]},
+    {"name": "scroll_down2","adb": ["shell", "input", "swipe", "412", "1300", "412", "400", "150"]},
+    {"name": "home_again",  "adb": ["shell", "input", "keyevent", "KEYCODE_HOME"]}
+  ]
+}

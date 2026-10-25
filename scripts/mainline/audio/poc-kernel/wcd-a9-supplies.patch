@@ -1,0 +1,43 @@
+--- a/sound/soc/codecs/wcd937x.c
++++ b/sound/soc/codecs/wcd937x.c
+@@ -106,6 +106,10 @@
+ 
+ 	atomic_t rx_clk_cnt;
+ 	atomic_t ana_clk_count;
++};
++
++static const char * const a9_wcd_supplies[] = {
++ "vdd-rxtx", "vdd-px", "vdd-buck",
+ };
+ 
+ static const char * const wcd937x_supplies[] = {
+@@ -2913,7 +2917,8 @@
+ 	wcd937x->common.dev = dev;
+ 	wcd937x->common.max_bias = 3;
+ 
+-	wcd937x->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_LOW);
++	wcd937x->reset_gpio = devm_gpiod_get(dev, "reset",
++  of_device_is_compatible(dev->of_node, "hisense,a9-wcd937x") ? GPIOD_OUT_HIGH : GPIOD_OUT_LOW);
+ 	if (IS_ERR(wcd937x->reset_gpio))
+ 		return dev_err_probe(dev, PTR_ERR(wcd937x->reset_gpio),
+ 				     "failed to reset wcd gpio\n");
+@@ -2926,7 +2931,10 @@
+ 	cfg = &wcd937x->mbhc_cfg;
+ 	cfg->swap_gnd_mic = wcd937x_swap_gnd_mic;
+ 
+-	ret = devm_regulator_bulk_get_enable(dev, ARRAY_SIZE(wcd937x_supplies),
++	if (of_device_is_compatible(dev->of_node, "hisense,a9-wcd937x"))
++  ret = devm_regulator_bulk_get_enable(dev, ARRAY_SIZE(a9_wcd_supplies), a9_wcd_supplies);
++ else
++  ret = devm_regulator_bulk_get_enable(dev, ARRAY_SIZE(wcd937x_supplies),
+ 					     wcd937x_supplies);
+ 	if (ret)
+ 		return dev_err_probe(dev, ret, "Failed to get and enable supplies\n");
+@@ -2979,6 +2987,7 @@
+ 
+ #if defined(CONFIG_OF)
+ static const struct of_device_id wcd937x_of_match[] = {
++ { .compatible = "hisense,a9-wcd937x" },
+ 	{ .compatible = "qcom,wcd9370-codec" },
+ 	{ .compatible = "qcom,wcd9375-codec" },
+ 	{ }

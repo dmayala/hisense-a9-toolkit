@@ -1,0 +1,9 @@
+# Standalone CF allocator using /vendor/lib64/libminigbm_gralloc.so.
+# refresh-integrated-vendor.py removes its old APEX when this service is staged.
+service vendor.graphics.allocator /vendor/bin/hw/android.hardware.graphics.allocator-service.minigbm
+    class hal animation
+    user system
+    group graphics drmrpc
+    capabilities SYS_NICE
+    task_profiles ServiceCapacityLow
+    setenv LD_LIBRARY_PATH /vendor/lib64/a9-gralloc:/vendor/lib64

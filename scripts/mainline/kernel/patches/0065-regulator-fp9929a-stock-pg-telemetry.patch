@@ -1,0 +1,180 @@
+From: A9 project <dmayala@users.noreply.github.com>
+Subject: [PATCH] regulator: fp9929a: use stock PG telemetry only
+
+Stock active_mode at0xffffff8008f1ed50 logs raw PG without waiting,
+retrying or gating enable on it. Keep API, GPIO/VCOM and explicit hard-off
+controls; PG cannot reject enable or the separate timing recovery.
+
+--- a/drivers/regulator/fp9929a.c
++++ b/drivers/regulator/fp9929a.c
+@@ -63,17 +63,9 @@
+  *    latched every power-up fails with -EIO, at entry and at every gate
+  *    check; only writing 1 to clear_fault clears it (-EBUSY while the drop
+  *    is still pending). For the a9_eink frame-progress interlock.
+- *  - power-good: after VCOM-EN=1 the PG line (DT GPIO_ACTIVE_HIGH, logical 1
+- *    = rails settled good) must read 1 twice in a row within
+- *    fp9929a.pg_timeout_ms (default 100) of the VCOM-EN assertion (a read
+- *    that completes later never counts), or the rails are powered down and
+- *    the power-up fails with -ETIMEDOUT. Without a PG line power-up is
+- *    refused (-ENODEV). The wait ends early if the gate closes (or max_on_ms
+- *    expires), and the gate is re-checked under the gate lock once more
+- *    after it, before the rails are marked on. The vendor driver only logs
+- *    the raw level right after the control edges and never waits for it;
+- *    the polarity reasoning is in docs/mainline-fp9929a-pg.md of the A9
+- *    work repo.
++ *  - power-good: sampled for logging only, as stock active_mode does.
++ *    Low, absent or unreadable PG never affects power-up, refresh or retry.
++ *    Explicit gate/emergency checks still bracket the control sequence.
+  *
+  * Modelled on drivers/regulator/fp9931.c (Andreas Kemnade), which drives the
+  * related FP9931 with a different register map.
+@@ -163,14 +155,6 @@
+ MODULE_PARM_DESC(allow_power_on,
+ 		 "Allow the E Ink high-voltage rails to be switched on (default: no). Writing 0 returns once no power-up is in flight (-EBUSY after 2 s)");
+ 
+-/*
+- * fp9931.c (upstream, related part) waits up to 200 ms for PG; the FP9929A
+- * datasheet gives no PG timing, so this is a guess, kept tunable.
+- */
+-static unsigned int pg_timeout_ms = 100;
+-module_param(pg_timeout_ms, uint, 0644);
+-MODULE_PARM_DESC(pg_timeout_ms,
+-		 "Power-up fails unless PG reads good within this long after VCOM-EN (ms, default 100; read at each power-up)");
+ 
+ /*
+  * max_on_ms: the per-power-up HV limit, counted from energize (before PWRUP).
+@@ -412,47 +396,7 @@
+ 	cancel_delayed_work(&fp->max_on_work);
+ }
+ 
+-/*
+- * called with lock held, after VCOM-EN=1: wait until PG (logical) reads 1 on
+- * two consecutive samples ~1 ms apart. Returns 0 and the settle time in us,
+- * -ETIMEDOUT / a negative GPIO error with the last level read in *last, or
+- * -ECANCELED as soon as the gate closes or max_on_ms expires (the caller's
+- * locked gate re-check then decides).
+- */
+-/*
+- * The deadline counts from @vcom_on, the moment VCOM-EN was raised, and is
+- * checked after every read and BEFORE a good read is counted: a read that
+- * completes after the deadline (the thread was descheduled) can never be
+- * the one that accepts PG.
+- */
+-static int fp9929a_wait_pg(struct fp9929a *fp, ktime_t vcom_on,
+-			   unsigned int timeout_ms, unsigned int *settle_us,
+-			   int *last)
+-{
+-	ktime_t deadline = ktime_add_ms(vcom_on, timeout_ms);
+-	ktime_t start = vcom_on;
+-	int good = 0, v;
+-
+-	for (;;) {
+-		if (!READ_ONCE(allow_power_on) || READ_ONCE(fp->expired) ||
+-		    atomic_read(&fp9929a_emerg))
+-			return -ECANCELED;
+-		v = gpiod_get_value_cansleep(fp->pg);
+-		*last = v;
+-		if (v < 0)
+-			return v;
+-		if (ktime_after(ktime_get(), deadline))
+-			return -ETIMEDOUT;
+-		good = v == 1 ? good + 1 : 0;
+-		if (good >= 2) {
+-			*settle_us = ktime_us_delta(ktime_get(), start);
+-			return 0;
+-		}
+-		usleep_range(1000, 1100);
+-	}
+-}
+-
+-/* called with lock held: whether a max_on_ms fault is still latched */
++
+ static bool fp9929a_fault_latched(struct fp9929a *fp)
+ {
+ 	if (fp->forced_off && fp->forced_gen != atomic_read(&fp9929a_clear_gen)) {
+@@ -628,9 +572,13 @@
+ 	return -EPERM;
+ }
+ 
++static unsigned int pg_dip_policy = 1;
++module_param(pg_dip_policy, uint, 0444);
++MODULE_PARM_DESC(pg_dip_policy, "Stock PG telemetry policy: 1");
++
+ static int __fp9929a_enable(struct fp9929a *fp)
+ {
+-	unsigned int pg_ms, settle_us = 0;
++	unsigned int settle_us = 0;
+ 	int ret, pg_last = -1;
+ 	ktime_t vcom_on;
+ 
+@@ -652,11 +600,6 @@
+ 	if (!strcmp(fp->vcom_src, "default")) {
+ 		dev_err(fp->dev, "power-up refused: no VCOM from cmdline or DT\n");
+ 		return -EINVAL;
+-	}
+-	/* without PG nothing tells us the rails came up in spec */
+-	if (!fp->pg) {
+-		dev_err(fp->dev, "power-up refused: no pg-gpios in the DT\n");
+-		return -ENODEV;
+ 	}
+ 
+ 	mutex_lock(&fp->lock);
+@@ -728,41 +671,27 @@
+ 		mutex_unlock(&fp->lock);
+ 		return ret;
+ 	}
+-	/*
+-	 * origin of the PG deadline, taken BEFORE the pin rises (review 4): a
+-	 * task switch after the GPIO write can then only shorten the PG window,
+-	 * never give a late observer a fresh one
+-	 */
++	/* Timestamp the control edge for the passive PG log. */
+ 	vcom_on = ktime_get();
+ 	gpiod_set_value_cansleep(fp->vcom_en, 1);
+ 	/* after the write: the emergency work compares it with emerg_at */
+ 	WRITE_ONCE(fp->vcom_on_at, ktime_get());
+ 	mutex_unlock(&fp9929a_gate_lock);
+ 
+-	pg_ms = READ_ONCE(pg_timeout_ms);
+-	ret = fp9929a_wait_pg(fp, vcom_on, pg_ms, &settle_us, &pg_last);
+-	if (ret && ret != -ECANCELED) {
+-		dev_err(fp->dev,
+-			"PG not asserted within %u ms (last %d): powering down\n",
+-			pg_ms, pg_last);
+-		fp9929a_abort_power_up(fp);
+-		mutex_unlock(&fp->lock);
+-		return -ETIMEDOUT;
+-	}
+-	/*
+-	 * the gate may have closed during the wait: re-check, under its lock.
+-	 * A cancelled wait never reaches "on", even if the gate reopened since.
+-	 */
+-	if (ret == -ECANCELED || !fp9929a_gate_open(fp)) {
+-		ret = fp9929a_gate_closed(fp, "marking the rails on (PG wait)");
++	/* Stock active_mode logs PG, without polling or testing its level. */
++	pg_last = fp->pg ? gpiod_get_value_cansleep(fp->pg) : -ENOENT;
++	settle_us = ktime_us_delta(ktime_get(), vcom_on);
++	/* Re-check the explicit gate after the diagnostic sample. */
++	if (!fp9929a_gate_open(fp)) {
++		ret = fp9929a_gate_closed(fp, "marking the rails on");
+ 		mutex_unlock(&fp->lock);
+ 		return ret;
+ 	}
+ 	fp->on = true;
+ 	mutex_unlock(&fp9929a_gate_lock);
+-	dev_info(fp->dev, "on: VCOM %u mV (code 0x%02x), temp %d C, PG 1 after %u us\n",
++	dev_info(fp->dev, "on: VCOM %u mV (code 0x%02x), temp %d C, PG %d sampled after %u us (stock telemetry only)\n",
+ 		 fp->vcom_mv, fp->vcom_code, fp->have_temp ? fp->temp_c : -1,
+-		 settle_us);
++		 pg_last, settle_us);
+ 	mutex_unlock(&fp->lock);
+ 	return 0;
+ }
+@@ -974,7 +903,6 @@
+ 	mutex_lock(&fp9929a_gate_lock);
+ 	if (!READ_ONCE(allow_power_on) && !fp->on && !fp->energized &&
+ 	    !fp9929a_fault_latched(fp) && !atomic_read(&fp9929a_emerg_busy) &&
+-	    fp->pg && gpiod_get_value_cansleep(fp->pg) == 0 &&
+ 	    gpiod_get_value_cansleep(fp->vcom_en) == 0 &&
+ 	    gpiod_get_value_cansleep(fp->pwrup) == 0 &&
+ 	    atomic_cmpxchg(&fp9929a_emerg, 2, 0) == 2)

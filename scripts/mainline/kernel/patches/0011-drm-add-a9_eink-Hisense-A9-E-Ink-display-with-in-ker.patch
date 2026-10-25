@@ -1,0 +1,2914 @@
+From dd947aa5aef370db7a70b52e8a4ce97f494e4fd0 Mon Sep 17 00:00:00 2001
+From: A9-project <dmayala@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 21:25:52 -0700
+Subject: [PATCH 11/13] drm: add a9_eink, Hisense A9 E Ink display with
+ in-kernel software TCON
+
+An 824x1648 KMS device (shmem GEM, damage clips) whose plane updates are
+turned into E Ink waveform drive frames by a byte-exact port of the stock
+composer's software TCON (a9tcon, from the A9 repo's scripts/mainline/tcon,
+copied unchanged). The 448x829 drive frames are scanned out through an
+in-kernel DRM client on the msm card (DSI0 -> TC358767 -> panel). Waveform
+tables come from request_firmware(hisense/a9-waveform.bin), extracted by
+the user from their own composer binary.
+
+Default is a dry run: frames are computed and hashed but nothing is sent
+unless a9_eink.enable=1, and the panel and FP9929A keep their own gates.
+Userspace ABI: the connector's eink sysfs group (mode 513/515/518/521,
+black_threshold, white_threshold, contrast, force_clear, status).
+---
+ drivers/gpu/drm/Kconfig                     |    1 +
+ drivers/gpu/drm/Makefile                    |    1 +
+ drivers/gpu/drm/a9_eink/Kconfig             |   20 +
+ drivers/gpu/drm/a9_eink/Makefile            |    6 +
+ drivers/gpu/drm/a9_eink/a9_eink.h           |  118 ++
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c       | 1117 +++++++++++++++++++
+ drivers/gpu/drm/a9_eink/a9_eink_engine.c    |  295 +++++
+ drivers/gpu/drm/a9_eink/a9_eink_engine.h    |  149 +++
+ drivers/gpu/drm/a9_eink/a9_eink_transport.c |  414 +++++++
+ drivers/gpu/drm/a9_eink/a9tcon.c            |  493 ++++++++
+ drivers/gpu/drm/a9_eink/a9tcon.h            |  151 +++
+ drivers/gpu/drm/a9_eink/kcompat/stddef.h    |    3 +
+ drivers/gpu/drm/a9_eink/kcompat/stdint.h    |    3 +
+ drivers/gpu/drm/a9_eink/kcompat/string.h    |    2 +
+ 14 files changed, 2773 insertions(+)
+ create mode 100644 drivers/gpu/drm/a9_eink/Kconfig
+ create mode 100644 drivers/gpu/drm/a9_eink/Makefile
+ create mode 100644 drivers/gpu/drm/a9_eink/a9_eink.h
+ create mode 100644 drivers/gpu/drm/a9_eink/a9_eink_drv.c
+ create mode 100644 drivers/gpu/drm/a9_eink/a9_eink_engine.c
+ create mode 100644 drivers/gpu/drm/a9_eink/a9_eink_engine.h
+ create mode 100644 drivers/gpu/drm/a9_eink/a9_eink_transport.c
+ create mode 100644 drivers/gpu/drm/a9_eink/a9tcon.c
+ create mode 100644 drivers/gpu/drm/a9_eink/a9tcon.h
+ create mode 100644 drivers/gpu/drm/a9_eink/kcompat/stddef.h
+ create mode 100644 drivers/gpu/drm/a9_eink/kcompat/stdint.h
+ create mode 100644 drivers/gpu/drm/a9_eink/kcompat/string.h
+
+diff --git a/drivers/gpu/drm/Kconfig b/drivers/gpu/drm/Kconfig
+index 323422861..525a2aade 100644
+--- a/drivers/gpu/drm/Kconfig
++++ b/drivers/gpu/drm/Kconfig
+@@ -350,6 +350,7 @@ source "drivers/gpu/drm/tegra/Kconfig"
+ source "drivers/gpu/drm/tidss/Kconfig"
+ source "drivers/gpu/drm/tilcdc/Kconfig"
+ source "drivers/gpu/drm/tiny/Kconfig"
++source "drivers/gpu/drm/a9_eink/Kconfig"
+ source "drivers/gpu/drm/tve200/Kconfig"
+ source "drivers/gpu/drm/tyr/Kconfig"
+ source "drivers/gpu/drm/udl/Kconfig"
+diff --git a/drivers/gpu/drm/Makefile b/drivers/gpu/drm/Makefile
+index e97faabcd..c624cb4a7 100644
+--- a/drivers/gpu/drm/Makefile
++++ b/drivers/gpu/drm/Makefile
+@@ -217,6 +217,7 @@ obj-y			+= hisilicon/
+ obj-y			+= mxsfb/
+ obj-y			+= sysfb/
+ obj-y			+= tiny/
++obj-$(CONFIG_DRM_A9_EINK) += a9_eink/
+ obj-$(CONFIG_DRM_PL111) += pl111/
+ obj-$(CONFIG_DRM_TVE200) += tve200/
+ obj-$(CONFIG_DRM_ADP) += adp/
+diff --git a/drivers/gpu/drm/a9_eink/Kconfig b/drivers/gpu/drm/a9_eink/Kconfig
+new file mode 100644
+index 000000000..d75a4de47
+--- /dev/null
++++ b/drivers/gpu/drm/a9_eink/Kconfig
+@@ -0,0 +1,20 @@
++# SPDX-License-Identifier: GPL-2.0-only
++config DRM_A9_EINK
++	tristate "Hisense A9 (HLTE556N) E Ink display with in-kernel software TCON"
++	depends on DRM && OF && ARM64 && MMU
++	depends on REGULATOR_FP9929A && IIO
++	# msm's fbdev client would scan console contents out to the E Ink transport
++	depends on !DRM_FBDEV_EMULATION
++	select DRM_CLIENT
++	select DRM_KMS_HELPER
++	select DRM_GEM_SHMEM_HELPER
++	select FW_LOADER
++	select CRYPTO_LIB_SHA256
++	help
++	  An 824x1648 KMS device for the Hisense A9 E Ink panel. The kernel
++	  runs the software TCON (a port of the stock composer's frame
++	  generation) and scans the 448x829 drive frames out through the msm
++	  DSI output and the TC358767 bridge. Waveform tables are loaded with
++	  request_firmware from hisense/a9-waveform.bin, extracted by the
++	  user from their own composer binary. Sends nothing to the panel
++	  unless a9_eink.enable=1.
+diff --git a/drivers/gpu/drm/a9_eink/Makefile b/drivers/gpu/drm/a9_eink/Makefile
+new file mode 100644
+index 000000000..31dc45a28
+--- /dev/null
++++ b/drivers/gpu/drm/a9_eink/Makefile
+@@ -0,0 +1,6 @@
++# SPDX-License-Identifier: GPL-2.0-only
++# a9tcon.c / a9tcon.h are copied unchanged from scripts/mainline/tcon (A9 repo);
++# kcompat/ maps their <stdint.h>/<stddef.h>/<string.h> to kernel headers.
++ccflags-y += -I$(src) -I$(src)/kcompat
++a9_eink-y := a9_eink_drv.o a9_eink_transport.o a9_eink_engine.o a9tcon.o
++obj-$(CONFIG_DRM_A9_EINK) += a9_eink.o
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+new file mode 100644
+index 000000000..e93204620
+--- /dev/null
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -0,0 +1,118 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef A9_EINK_H
++#define A9_EINK_H
++
++#include <linux/iosys-map.h>
++#include <linux/ktime.h>
++#include <linux/mutex.h>
++#include <linux/notifier.h>
++#include <linux/wait.h>
++
++#include <drm/drm_client.h>
++#include <drm/drm_connector.h>
++#include <drm/drm_crtc.h>
++#include <drm/drm_device.h>
++#include <drm/drm_encoder.h>
++#include <drm/drm_plane.h>
++
++#include "a9_eink_engine.h"
++
++struct iio_channel;
++struct regulator;
++struct task_struct;
++struct dentry;
++
++/*
++ * Transport: an in-kernel DRM client on the msm DRM device that scans the
++ * 448x829 drive frames out through DSI0 -> TC358767 -> the E Ink source
++ * drivers. CRTC on = panel prepared = FP9929A high voltage on.
++ */
++struct a9x_transport {
++	struct device *dev;		/* ours, for logging */
++	struct device_node *panel_np;	/* hisense,transport-panel */
++	u32 fourcc;
++	struct mutex lock;		/* order: drm clientlist_mutex, then this */
++	struct drm_client_dev client;
++	bool registered;		/* client on the msm device's list */
++	bool gone;			/* msm device unregistered under us */
++	bool unreg_hv_unknown;		/* its power-down failed at unregister */
++	struct device_link *link;	/* us -> msm (shutdown/suspend order) */
++	wait_queue_head_t *wq;		/* the driver worker, woken on unregister */
++	struct drm_mode_set *ms;	/* the modeset that drives the panel */
++	struct drm_client_buffer *buf[2];
++	struct iosys_map map[2];
++	u32 pitch;
++	int front;			/* buffer being scanned out */
++	bool front_null;		/* it carries no drive */
++	bool on;			/* CRTC active: HV may be up */
++	bool vbl_ref;
++	u64 last_vbl;
++	ktime_t last_commit, on_since, off_since;
++	u32 period_us;			/* frame period of the transport mode */
++	/* stats */
++	u64 frames, late, vbl_skips, commits_failed;
++	u32 max_gap_us;
++};
++
++int a9x_attach(struct a9x_transport *t);	/* -EAGAIN: msm not there yet */
++void a9x_detach(struct a9x_transport *t);
++int a9x_power_on(struct a9x_transport *t);
++int a9x_show(struct a9x_transport *t, const u8 *frame);
++int a9x_power_off(struct a9x_transport *t);
++int a9x_blank(struct a9x_transport *t);
++bool a9x_attached(struct a9x_transport *t);
++
++struct a9_eink {
++	struct drm_device drm;
++	struct drm_plane plane;
++	struct drm_crtc crtc;
++	struct drm_encoder encoder;
++	struct drm_connector connector;
++	struct device *dev;
++
++	struct a9x_transport tx;
++	struct device_node *pmic_np;	/* hisense,epd-pmic (FP9929A) */
++	struct iio_channel *therm;	/* PMI632 epd_top_therm, optional */
++	struct regulator *hv;		/* emergency handle on the FP9929A */
++
++	/* front side: written by the plane's atomic_update */
++	struct mutex shadow_lock;
++	u8 *shadow;			/* landscape grey of the latest commit */
++	struct a9e_rect dirty;
++	bool clear_req, kick, busy, suspending, parked;
++	u32 mode;			/* stock mode word, sysfs "mode" */
++	int controls[3];		/* black, white, contrast */
++	bool controls_dirty;
++	wait_queue_head_t wq;
++
++	/* engine, owned by the worker thread; eng_lock for debugfs readers */
++	struct mutex eng_lock;
++	struct a9e_engine e;
++	struct a9t_tables *tables;
++	bool wf_loaded;
++	u8 wf_src_sha[32];
++	u8 *frame;			/* staging frame, A9T_FRAME_BYTES */
++	u8 *trace_old;			/* levels before the last update (trace) */
++	bool init_pending, force_clear;		/* real pipeline */
++	bool dry_init_pending, dry_force_clear;	/* dry-run model */
++	u8 *dry_save_old, *dry_levels;
++	u32 dry_save_pre;
++	int dry_save_have_pre;
++	bool hv_fault;				/* forced HV off, state unknown */
++	struct notifier_block pm_nb;
++	struct task_struct *thread;
++
++	/* last update, for sysfs/debugfs */
++	struct {
++		u32 mode, pre, type, frames, steps;
++		int clear, bin, t1, t2, t1_raw, t2_raw, dry, aborted;
++		struct a9e_rect rect;
++		u32 begin_us, total_us;
++		u8 sha[32];
++		bool sha_valid;
++	} last;
++	u64 updates, aborts;
++	struct dentry *dbg;
++};
++
++#endif
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+new file mode 100644
+index 000000000..32f7b9a08
+--- /dev/null
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -0,0 +1,1117 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Hisense A9 (HLTE556N) E Ink display: a KMS device with an in-kernel
++ * software TCON. Never run on hardware as of 2026-10-15.
++ *
++ *   userspace (SurfaceFlinger via drm_hwcomposer, minigbm dumb/shmem buffers)
++ *      | 824x1648 portrait, XRGB/ARGB/XBGR/ABGR8888 or R8, damage clips
++ *      v
++ *   this card: plane atomic_update converts the damaged area to the TCON's
++ *   landscape grey (stock luma + rotation) and records the pixels that changed
++ *      v  (worker thread, one update at a time, newest content coalesced)
++ *   a9tcon engine: mode-switch steps, conditioning, pack, waveform frames
++ *   (byte-exact port of the stock composer, scripts/mainline/tcon)
++ *      v
++ *   transport: drm_client on the msm card, one 448x829 drive frame per
++ *   85 Hz refresh -> DSI0 -> TC358767 -> E Ink source drivers
++ *   (CRTC on = panel prepared = FP9929A rails up; off after each update)
++ *
++ * Waveform tables: request_firmware("hisense/a9-waveform.bin"), made by
++ * scripts/mainline/eink/tools/a9wf-extract from the user's own composer.
++ *
++ * SAFETY GATES (all default off):
++ *   a9_eink.enable=1                        this driver sends frames at all;
++ *                                           with 0 everything runs as a dry
++ *                                           run (frames computed + hashed)
++ *   panel_hisense_hlte556n_eink.enable=1    the panel may be prepared
++ *   fp9929a.allow_power_on=1                the PMIC may raise the rails
++ * Before the first frame the driver checks that the FP9929A really is on;
++ * after every update it ends on an all-zero (no drive) frame and powers the
++ * pipeline down (hv_hold_ms later, default 0). hv_max_ms caps any continuous
++ * high-voltage period. If a power-down commit fails, the FP9929A is forced
++ * down through its regulator.
++ *
++ * Userspace control ABI (docs/mainline-eink-compat.md): the connector's
++ * "eink" sysfs group: mode (513/515/518/521, default 518), black_threshold,
++ * white_threshold, contrast, force_clear. Debug: debugfs a9_eink/.
++ */
++#include <linux/debugfs.h>
++#include <linux/delay.h>
++#include <linux/dma-mapping.h>
++#include <linux/firmware.h>
++#include <linux/iio/consumer.h>
++#include <linux/kthread.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/suspend.h>
++#include <linux/regulator/consumer.h>
++#include <linux/regulator/fp9929a.h>
++#include <linux/seq_file.h>
++#include <linux/sysfs.h>
++#include <linux/vmalloc.h>
++
++#include <crypto/sha2.h>
++
++#include <drm/drm_atomic.h>
++#include <drm/drm_atomic_helper.h>
++#include <drm/drm_damage_helper.h>
++#include <drm/drm_drv.h>
++#include <drm/drm_fourcc.h>
++#include <drm/drm_framebuffer.h>
++#include <drm/drm_gem_atomic_helper.h>
++#include <drm/drm_gem_framebuffer_helper.h>
++#include <drm/drm_gem_shmem_helper.h>
++#include <drm/drm_managed.h>
++#include <drm/drm_modes.h>
++#include <drm/drm_print.h>
++#include <drm/drm_probe_helper.h>
++#include <drm/drm_vblank.h>
++#include <drm/drm_vblank_helper.h>
++
++#include "a9_eink.h"
++
++static bool enable;
++module_param(enable, bool, 0644);
++MODULE_PARM_DESC(enable, "Send drive frames to the E Ink panel (default: no = dry run)");
++
++static unsigned int hv_hold_ms = 3000;
++module_param(hv_hold_ms, uint, 0644);
++MODULE_PARM_DESC(hv_hold_ms, "Power the pipeline (HV) down this long after the last update; stock: 2-3 s (default 3000, 0 = right after each update)");
++
++static unsigned int hv_max_ms = 60000;
++module_param(hv_max_ms, uint, 0644);
++MODULE_PARM_DESC(hv_max_ms, "Power down between updates after this much continuous HV-on time; stock has no cap, 33 s seen (default 60000)");
++
++static bool init_flash = true;
++module_param(init_flash, bool, 0644);
++MODULE_PARM_DESC(init_flash, "Run the stock one-time init flash before the first update (default: yes)");
++
++static bool trace;
++module_param(trace, bool, 0644);
++MODULE_PARM_DESC(trace, "SHA-256 every update's frames and keep the inputs in debugfs (always on in dry run)");
++
++static char *transport_format = "XR24";
++module_param(transport_format, charp, 0444);
++MODULE_PARM_DESC(transport_format, "fourcc of the 448x829 transport buffers: XR24 or XB24 (default XR24)");
++
++static int temp_fallback = 28;
++module_param(temp_fallback, int, 0644);
++MODULE_PARM_DESC(temp_fallback, "Temperature (deg C) used when a sensor gives nothing; the stock composer starts with 28 (default 28)");
++
++static int flag_6c7 = 1;
++module_param(flag_6c7, int, 0644);
++MODULE_PARM_DESC(flag_6c7, "Stock engine byte this+0x6c7 (0 adds 0x100 to the mode word); default 1");
++
++static bool mask_outside_damage;
++module_param(mask_outside_damage, bool, 0644);
++MODULE_PARM_DESC(mask_outside_damage, "Partial updates drive nothing outside the damage (not stock; default no)");
++
++static bool any_mode;
++module_param(any_mode, bool, 0644);
++MODULE_PARM_DESC(any_mode, "Testing: accept any stock mode word in sysfs mode, not only 513/515/518/521");
++
++#define A9_FW_NAME "hisense/a9-waveform.bin"
++#define A9_MODE_DEFAULT 518	/* Smooth, the compat contract default */
++#define A9_MODE_CLEAR 0x203	/* force_clear: Clear + clear flag = type-2 table */
++#define A9_DRAIN_MS 15000
++
++static inline struct a9_eink *to_a9(struct drm_device *d)
++{
++	return container_of(d, struct a9_eink, drm);
++}
++
++/* ---- front side: KMS ------------------------------------------------------- */
++static const u32 a9_formats[] = {
++	DRM_FORMAT_XRGB8888, DRM_FORMAT_ARGB8888,
++	DRM_FORMAT_XBGR8888, DRM_FORMAT_ABGR8888,
++	DRM_FORMAT_R8,
++};
++
++/* nominal 60 Hz: paces the vblank timer that SurfaceFlinger's vsync follows */
++static const struct drm_display_mode a9_mode = {
++	DRM_MODE_INIT(60, A9E_FB_W, A9E_FB_H, 76, 152),
++};
++
++static enum a9e_fmt a9_fmt(u32 fourcc)
++{
++	switch (fourcc) {
++	case DRM_FORMAT_XRGB8888:
++	case DRM_FORMAT_ARGB8888:
++		return A9E_FMT_BGRX;
++	case DRM_FORMAT_R8:
++		return A9E_FMT_R8;
++	default:
++		return A9E_FMT_RGBX;
++	}
++}
++
++static int a9_plane_atomic_check(struct drm_plane *plane, struct drm_atomic_commit *state)
++{
++	struct drm_plane_state *ps = drm_atomic_get_new_plane_state(state, plane);
++	struct a9_eink *a9 = to_a9(plane->dev);
++	struct drm_crtc_state *cs = drm_atomic_get_new_crtc_state(state, &a9->crtc);
++
++	return drm_atomic_helper_check_plane_state(ps, cs, DRM_PLANE_NO_SCALING,
++						   DRM_PLANE_NO_SCALING, false, false);
++}
++
++static void a9_plane_atomic_update(struct drm_plane *plane, struct drm_atomic_commit *state)
++{
++	struct drm_plane_state *old = drm_atomic_get_old_plane_state(state, plane);
++	struct drm_plane_state *ps = plane->state;
++	struct drm_shadow_plane_state *sps = to_drm_shadow_plane_state(ps);
++	struct a9_eink *a9 = to_a9(plane->dev);
++	struct drm_framebuffer *fb = ps->fb;
++	struct drm_atomic_helper_damage_iter iter;
++	struct drm_rect clip;
++	struct a9e_rect changed = { 0, 0, 0, 0 };
++	enum a9e_fmt fmt;
++	const u8 *src;
++	int sx, sy, idx;
++
++	if (!fb || !a9->crtc.state->active || !ps->visible)
++		return;
++	if (sps->data[0].is_iomem) {
++		drm_warn_once(&a9->drm, "I/O memory framebuffers are not supported\n");
++		return;
++	}
++	if (!drm_dev_enter(&a9->drm, &idx))
++		return;
++	fmt = a9_fmt(fb->format->format);
++	sx = ps->src.x1 >> 16;
++	sy = ps->src.y1 >> 16;
++	/* data[0] already includes fb->offsets[0] (drm_gem_fb_vmap) */
++	src = (const u8 *)sps->data[0].vaddr +
++	      (size_t)sy * fb->pitches[0] + (size_t)sx * fb->format->cpp[0];
++
++	if (drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE))
++		goto out;
++	mutex_lock(&a9->shadow_lock);
++	drm_atomic_helper_damage_iter_init(&iter, old, ps);
++	drm_atomic_for_each_plane_damage(&iter, &clip) {
++		a9e_fb_to_grey(a9->shadow, src, fb->pitches[0], fmt,
++			       clip.x1 - sx, clip.y1 - sy, clip.x2 - sx, clip.y2 - sy, &changed);
++	}
++	if (!a9e_rect_empty(&changed)) {
++		a9e_rect_union(&a9->dirty, &changed);
++		a9->kick = true;
++		wake_up(&a9->wq);
++	}
++	mutex_unlock(&a9->shadow_lock);
++	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
++out:
++	drm_dev_exit(idx);
++}
++
++static const struct drm_plane_helper_funcs a9_plane_helper_funcs = {
++	DRM_GEM_SHADOW_PLANE_HELPER_FUNCS,
++	.atomic_check = a9_plane_atomic_check,
++	.atomic_update = a9_plane_atomic_update,
++};
++
++static const struct drm_plane_funcs a9_plane_funcs = {
++	.update_plane = drm_atomic_helper_update_plane,
++	.disable_plane = drm_atomic_helper_disable_plane,
++	.destroy = drm_plane_cleanup,
++	DRM_GEM_SHADOW_PLANE_FUNCS,
++};
++
++static enum drm_mode_status a9_crtc_mode_valid(struct drm_crtc *crtc,
++					       const struct drm_display_mode *mode)
++{
++	return drm_crtc_helper_mode_valid_fixed(crtc, mode, &a9_mode);
++}
++
++static int a9_crtc_atomic_check(struct drm_crtc *crtc, struct drm_atomic_commit *state)
++{
++	struct drm_crtc_state *cs = drm_atomic_get_new_crtc_state(state, crtc);
++	int ret;
++
++	if (!cs->enable)
++		return 0;
++	ret = drm_atomic_helper_check_crtc_primary_plane(cs);
++	if (ret)
++		return ret;
++	return drm_atomic_add_affected_planes(state, crtc);
++}
++
++/*
++ * Display on/off of THIS card (screen off, doze) changes nothing on the
++ * glass: the last image stays, queued work is finished by the worker and the
++ * rails go down after it as usual. No clear, no init flash on disable.
++ */
++static const struct drm_crtc_helper_funcs a9_crtc_helper_funcs = {
++	.mode_valid = a9_crtc_mode_valid,
++	.atomic_check = a9_crtc_atomic_check,
++	DRM_CRTC_HELPER_VBLANK_FUNCS,
++};
++
++static const struct drm_crtc_funcs a9_crtc_funcs = {
++	.reset = drm_atomic_helper_crtc_reset,
++	.destroy = drm_crtc_cleanup,
++	.set_config = drm_atomic_helper_set_config,
++	.page_flip = drm_atomic_helper_page_flip,
++	.atomic_duplicate_state = drm_atomic_helper_crtc_duplicate_state,
++	.atomic_destroy_state = drm_atomic_helper_crtc_destroy_state,
++	DRM_CRTC_VBLANK_TIMER_FUNCS,
++};
++
++static const struct drm_encoder_funcs a9_encoder_funcs = {
++	.destroy = drm_encoder_cleanup,
++};
++
++static int a9_connector_get_modes(struct drm_connector *connector)
++{
++	return drm_connector_helper_get_modes_fixed(connector, &a9_mode);
++}
++
++static const struct drm_connector_helper_funcs a9_connector_hfuncs = {
++	.get_modes = a9_connector_get_modes,
++};
++
++static const struct attribute_group a9_eink_group;
++
++static int a9_connector_late_register(struct drm_connector *connector)
++{
++	return sysfs_create_group(&connector->kdev->kobj, &a9_eink_group);
++}
++
++static void a9_connector_early_unregister(struct drm_connector *connector)
++{
++	sysfs_remove_group(&connector->kdev->kobj, &a9_eink_group);
++}
++
++static const struct drm_connector_funcs a9_connector_funcs = {
++	.reset = drm_atomic_helper_connector_reset,
++	.fill_modes = drm_helper_probe_single_connector_modes,
++	.destroy = drm_connector_cleanup,
++	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
++	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
++	.late_register = a9_connector_late_register,
++	.early_unregister = a9_connector_early_unregister,
++};
++
++static const struct drm_mode_config_funcs a9_mode_config_funcs = {
++	.fb_create = drm_gem_fb_create_with_dirty,
++	.atomic_check = drm_atomic_helper_check,
++	.atomic_commit = drm_atomic_helper_commit,
++};
++
++DEFINE_DRM_GEM_FOPS(a9_fops);
++
++static const struct drm_driver a9_drm_driver = {
++	.driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
++	.fops = &a9_fops,
++	DRM_GEM_SHMEM_DRIVER_OPS,
++	.name = "a9_eink",
++	.desc = "Hisense A9 E Ink (software TCON)",
++	.major = 1,
++	.minor = 0,
++};
++
++/* ---- sysfs: the compat contract's "eink" group on the connector ---------------- */
++static struct a9_eink *kdev_to_a9(struct device *kdev)
++{
++	struct drm_connector *c = dev_get_drvdata(kdev);	/* drm_sysfs: kdev drvdata = connector */
++
++	return to_a9(c->dev);
++}
++
++static bool a9_mode_allowed(u32 m)
++{
++	if (any_mode)
++		return a9e_mode_valid(m);
++	return m == 513 || m == 515 || m == 518 || m == 521;
++}
++
++static ssize_t mode_show(struct device *kdev, struct device_attribute *attr, char *buf)
++{
++	struct a9_eink *a9 = kdev_to_a9(kdev);
++
++	return sysfs_emit(buf, "%u\n", READ_ONCE(a9->mode));
++}
++
++static ssize_t mode_store(struct device *kdev, struct device_attribute *attr,
++			  const char *buf, size_t len)
++{
++	struct a9_eink *a9 = kdev_to_a9(kdev);
++	u32 m;
++
++	if (kstrtou32(buf, 0, &m) || !a9_mode_allowed(m))
++		return -EINVAL;
++	mutex_lock(&a9->shadow_lock);
++	a9->mode = m;	/* used by the next update's transition builder */
++	mutex_unlock(&a9->shadow_lock);
++	return len;
++}
++static DEVICE_ATTR_RW(mode);
++
++static ssize_t a9_ctl_show(struct device *kdev, int i, char *buf)
++{
++	return sysfs_emit(buf, "%d\n", READ_ONCE(kdev_to_a9(kdev)->controls[i]));
++}
++
++static ssize_t a9_ctl_store(struct device *kdev, int i, const char *buf, size_t len)
++{
++	struct a9_eink *a9 = kdev_to_a9(kdev);
++	int v;
++
++	if (kstrtoint(buf, 10, &v) || v < 0 || v > 100)
++		return -EINVAL;
++	mutex_lock(&a9->shadow_lock);
++	a9->controls[i] = v;
++	a9->controls_dirty = true;	/* applied at the next update, no refresh by itself */
++	mutex_unlock(&a9->shadow_lock);
++	return len;
++}
++
++#define A9_CTL_ATTR(name, i)							\
++static ssize_t name##_show(struct device *d, struct device_attribute *a, char *b) \
++{ return a9_ctl_show(d, i, b); }						\
++static ssize_t name##_store(struct device *d, struct device_attribute *a,	\
++			    const char *b, size_t l)				\
++{ return a9_ctl_store(d, i, b, l); }						\
++static DEVICE_ATTR_RW(name)
++
++A9_CTL_ATTR(black_threshold, 0);
++A9_CTL_ATTR(white_threshold, 1);
++A9_CTL_ATTR(contrast, 2);
++
++static ssize_t force_clear_store(struct device *kdev, struct device_attribute *attr,
++				 const char *buf, size_t len)
++{
++	struct a9_eink *a9 = kdev_to_a9(kdev);
++
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	if (!a9->thread)
++		return -ENODEV;
++	mutex_lock(&a9->shadow_lock);
++	/* reserved: satisfied by the next GC16 redraw that starts after now */
++	a9->clear_req = true;
++	a9->kick = true;
++	mutex_unlock(&a9->shadow_lock);
++	wake_up(&a9->wq);
++	return len;
++}
++static DEVICE_ATTR_WO(force_clear);
++
++/* read-only status (not part of the contract) */
++static ssize_t status_show(struct device *kdev, struct device_attribute *attr, char *buf)
++{
++	struct a9_eink *a9 = kdev_to_a9(kdev);
++	struct a9x_transport *t = &a9->tx;
++
++	return sysfs_emit(buf,
++		"enable %d waveform %d transport %d hv_on %d\n"
++		"updates %llu aborts %llu frames %llu late %llu vbl_skips %llu commit_fail %llu max_gap_us %u\n"
++		"last mode %#x pre %#x clear %d type %u bin %d t1 %d t2 %d frames %u steps %u dry %d aborted %d"
++		" rect %d,%d-%d,%d begin_us %u total_us %u\n",
++		enable, a9->wf_loaded, a9x_attached(t), t->on,
++		a9->updates, a9->aborts, t->frames, t->late, t->vbl_skips, t->commits_failed,
++		t->max_gap_us, a9->last.mode, a9->last.pre, a9->last.clear, a9->last.type,
++		a9->last.bin, a9->last.t1, a9->last.t2, a9->last.frames, a9->last.steps,
++		a9->last.dry, a9->last.aborted, a9->last.rect.x1, a9->last.rect.y1,
++		a9->last.rect.x2, a9->last.rect.y2, a9->last.begin_us, a9->last.total_us);
++}
++static DEVICE_ATTR_RO(status);
++
++static struct attribute *a9_eink_attrs[] = {
++	&dev_attr_mode.attr,
++	&dev_attr_black_threshold.attr,
++	&dev_attr_white_threshold.attr,
++	&dev_attr_contrast.attr,
++	&dev_attr_force_clear.attr,
++	&dev_attr_status.attr,
++	NULL
++};
++
++static const struct attribute_group a9_eink_group = {
++	.name = "eink",
++	.attrs = a9_eink_attrs,
++};
++
++/* ---- waveform ------------------------------------------------------------------ */
++static int a9_load_waveform(struct a9_eink *a9)
++{
++	const struct firmware *fw;
++	const struct a9t_tables *t;
++	u8 d[SHA256_DIGEST_SIZE];
++	int ret;
++
++	if (a9->wf_loaded)
++		return 0;
++	ret = request_firmware(&fw, A9_FW_NAME, a9->dev);
++	if (ret) {
++		dev_warn_once(a9->dev, "no %s (%d): make it with a9wf-extract; updates are dropped\n",
++			      A9_FW_NAME, ret);
++		return ret;
++	}
++	ret = a9e_wf_check(fw->data, fw->size, &t);
++	if (!ret) {
++		sha256(fw->data + sizeof(struct a9e_wf_header),
++		       fw->size - sizeof(struct a9e_wf_header), d);
++		if (memcmp(d, ((const struct a9e_wf_header *)fw->data)->payload_sha256, sizeof(d)))
++			ret = -EBADMSG;
++	}
++	if (ret) {
++		dev_err(a9->dev, "%s rejected (%d)\n", A9_FW_NAME, ret);
++		release_firmware(fw);
++		return -EINVAL;
++	}
++	memcpy(a9->tables, t, sizeof(*t));
++	memcpy(a9->wf_src_sha, ((const struct a9e_wf_header *)fw->data)->source_sha256, 32);
++	release_firmware(fw);
++
++	mutex_lock(&a9->eng_lock);
++	a9->e.t = a9->tables;
++	a9->e.flag_6c7 = flag_6c7;
++	a9e_setup(&a9->e);
++	mutex_unlock(&a9->eng_lock);
++	a9->wf_loaded = true;
++	a9->init_pending = a9->dry_init_pending = init_flash;
++	a9->force_clear = a9->dry_force_clear = true;	/* glass content unknown at start */
++	dev_info(a9->dev, "waveform tables loaded (composer %*phN...)\n", 4, a9->wf_src_sha);
++	return 0;
++}
++
++/* ---- temperatures (stock rules, docs/mainline-plan.md section 4.5 item 6) -------- */
++static void a9_temps(struct a9_eink *a9, int *t1, int *t2)
++{
++	struct fp9929a_status st;
++	int v;
++
++	/* t1: the FP9929A's TMST byte, sampled inside the power-up sequence */
++	*t1 = temp_fallback;
++	a9->last.t1_raw = INT_MIN;
++	if (!fp9929a_get_status(a9->pmic_np, &st) && st.temp_valid) {
++		a9->last.t1_raw = st.temp_c;
++		*t1 = st.temp_c > 85 ? 0 : st.temp_c;	/* composer: above 85 reads as 0 */
++	}
++	/* t2: PMI632 epd_top_therm in m deg C (mainline interpolates in mV, stock
++	 * in uV: up to 73 m deg C apart, a different integer for ~3% of codes) */
++	*t2 = *t1;
++	a9->last.t2_raw = INT_MIN;
++	if (a9->therm && !iio_read_channel_processed(a9->therm, &v)) {
++		a9->last.t2_raw = v;
++		*t2 = v < -999 ? 0 : (v > 50999 ? 50 : v / 1000);
++	}
++}
++
++/* rails up and, where PG is wired, power-good (PG reads 0 when on: MEASURED
++ * in 45 of 45 stock sessions) */
++static bool a9_hv_is_on(struct a9_eink *a9)
++{
++	struct fp9929a_status st;
++
++	if (fp9929a_get_status(a9->pmic_np, &st))
++		return false;
++	return st.on && (!st.pg_valid || st.pg_good);
++}
++
++static bool a9_hv_maybe_on(struct a9_eink *a9)
++{
++	struct fp9929a_status st;
++
++	return fp9929a_get_status(a9->pmic_np, &st) || st.on;
++}
++
++/* ---- pipeline power ------------------------------------------------------------- */
++static void a9_force_hv_off(struct a9_eink *a9, const char *why)
++{
++	dev_crit_ratelimited(a9->dev, "%s: forcing the FP9929A down\n", why);
++	if (a9->hv)
++		regulator_force_disable(a9->hv);
++	/* latched until a pipeline power-down succeeds again */
++	a9->hv_fault = true;
++}
++
++static void a9_power_off(struct a9_eink *a9)
++{
++	if (READ_ONCE(a9->tx.unreg_hv_unknown)) {
++		WRITE_ONCE(a9->tx.unreg_hv_unknown, false);
++		if (a9_hv_maybe_on(a9))
++			a9_force_hv_off(a9, "msm went away with the pipeline on");
++	}
++	if (!a9->tx.on) {
++		if (a9->hv_fault && !a9_hv_maybe_on(a9))
++			a9->hv_fault = false;
++		return;
++	}
++	if (a9x_power_off(&a9->tx) || a9_hv_maybe_on(a9))
++		a9_force_hv_off(a9, "pipeline power-down failed");
++	else
++		a9->hv_fault = false;
++}
++
++static int a9_power_on(struct a9_eink *a9)
++{
++	int ret;
++
++	if (a9->hv_fault) {
++		a9_power_off(a9);
++		if (a9->hv_fault)
++			return -EIO;	/* still unknown: refuse */
++	}
++	if (a9->tx.on) {
++		/* rails must still be up and good for every update, not only at enable */
++		if (a9_hv_is_on(a9))
++			return 0;
++		dev_err(a9->dev, "FP9929A dropped out while the pipeline was on\n");
++		a9_power_off(a9);
++		return -EIO;
++	}
++	if (!a9x_attached(&a9->tx)) {
++		ret = a9x_attach(&a9->tx);
++		if (ret)
++			return ret;
++	}
++	ret = a9x_power_on(&a9->tx);
++	if (ret) {
++		a9_power_off(a9);
++		return ret;
++	}
++	if (!a9_hv_is_on(a9)) {
++		/* a gate refused (panel or fp9929a) or the PMIC failed: drive nothing */
++		dev_err(a9->dev, "FP9929A is not on after enable: no frames sent "
++			"(panel_hisense_hlte556n_eink.enable / fp9929a.allow_power_on?)\n");
++		a9_power_off(a9);
++		return -EIO;
++	}
++	return 0;
++}
++
++/* ---- one update ------------------------------------------------------------------- */
++struct a9_job {
++	u32 mode;
++	int clear, mask;
++	bool dry;
++	struct a9e_rect rect;
++};
++
++static int a9_run_frames(struct a9_eink *a9, bool dry, struct sha256_ctx *sc)
++{
++	int more, ret;
++
++	do {
++		more = a9e_frame(&a9->e, a9->frame);
++		if (sc)
++			sha256_update(sc, a9->frame, A9T_FRAME_BYTES);
++		if (!dry) {
++			/* emergency stop: enable=0 mid-update aborts after this frame */
++			if (!READ_ONCE(enable))
++				return -ECANCELED;
++			ret = a9x_show(&a9->tx, a9->frame);
++			if (ret)
++				return ret;
++		}
++	} while (more);
++	/* never hold a driving frame, whatever the table's last column says */
++	if (!dry && !a9e_frame_is_null(a9->frame)) {
++		dev_warn_once(a9->dev, "waveform pass ended on a driving frame: blanking\n");
++		return a9x_blank(&a9->tx);
++	}
++	return 0;
++}
++
++static void a9_update(struct a9_eink *a9, const struct a9_job *job)
++{
++	bool dry = job->dry;
++	bool hash = dry || READ_ONCE(trace);
++	bool *init_pending = dry ? &a9->dry_init_pending : &a9->init_pending;
++	bool *force_clear = dry ? &a9->dry_force_clear : &a9->force_clear;
++	struct sha256_ctx sc;
++	ktime_t t0 = ktime_get();
++	int t1, t2, bin, ret, steps;
++
++	/* attaching only looks the msm card up and allocates buffers: also done in
++	 * a dry run, so the transport side can be checked without any commit */
++	if (!a9x_attached(&a9->tx)) {
++		ret = a9x_attach(&a9->tx);
++		if (ret && ret != -EAGAIN)
++			dev_warn_ratelimited(a9->dev, "transport attach: %d\n", ret);
++	}
++	if (!dry) {
++		ret = a9_power_on(a9);
++		if (ret) {
++			dev_warn_ratelimited(a9->dev, "update dropped: pipeline not available (%d)\n", ret);
++			a9->aborts++;
++			return;
++		}
++	}
++	a9_temps(a9, &t1, &t2);	/* t1 was sampled by the FP9929A at this power-up */
++
++	mutex_lock(&a9->eng_lock);
++	if (dry) {
++		/* a dry run must not change what the real pipeline believes */
++		memcpy(a9->dry_save_old, a9->e.old, A9T_N);
++		a9->dry_save_pre = a9->e.pre_mode;
++		a9->dry_save_have_pre = a9->e.have_pre;
++	}
++	bin = a9t_temp_bin(&a9->e.st, t1, t2);
++	if (*init_pending) {
++		a9e_begin_init(&a9->e, bin);
++		ret = a9_run_frames(a9, dry, NULL);
++		a9e_end(&a9->e);	/* glass taken as white (INFERRED): old := 15 */
++		if (ret)
++			goto abort;
++		*init_pending = false;
++	}
++	if (hash) {
++		memcpy(a9->trace_old, a9->e.old, A9T_N);
++		sha256_init(&sc);
++	}
++	a9->last.pre = a9->e.have_pre ? a9->e.pre_mode : job->mode;
++	steps = a9e_begin(&a9->e, job->mode, job->clear, &job->rect, job->mask, bin);
++	a9->last.begin_us = (u32)ktime_us_delta(ktime_get(), t0);
++	ret = a9_run_frames(a9, dry, hash ? &sc : NULL);
++	if (ret)
++		goto abort;
++	a9e_end(&a9->e);
++
++	a9->last.mode = a9->e.mode;
++	a9->last.clear = a9->e.clear;
++	a9->last.type = a9->e.type;
++	a9->last.bin = bin;
++	a9->last.t1 = t1;
++	a9->last.t2 = t2;
++	a9->last.frames = a9->e.nframes;
++	a9->last.steps = steps;
++	a9->last.rect = a9->e.rect;
++	a9->last.dry = dry;
++	a9->last.aborted = 0;
++	a9->last.sha_valid = hash;
++	if (hash)
++		sha256_final(&sc, a9->last.sha);
++	a9->last.total_us = (u32)ktime_us_delta(ktime_get(), t0);
++	a9->updates++;
++	*force_clear = false;
++	if (dry) {
++		/* the debugfs "levels" of a dry run are the model's; restore the real one */
++		memcpy(a9->dry_levels, a9->e.old, A9T_N);
++		memcpy(a9->e.old, a9->dry_save_old, A9T_N);
++		a9->e.pre_mode = a9->dry_save_pre;
++		a9->e.have_pre = a9->dry_save_have_pre;
++	}
++	mutex_unlock(&a9->eng_lock);
++	return;
++
++abort:
++	dev_err(a9->dev, "update aborted after %u frames (%d): forcing a clear next\n",
++		a9->e.nframes, ret);
++	a9e_abort(&a9->e);
++	a9->last.aborted = 1;
++	a9->aborts++;
++	*force_clear = true;
++	if (dry) {
++		memcpy(a9->e.old, a9->dry_save_old, A9T_N);
++		a9->e.pre_mode = a9->dry_save_pre;
++		a9->e.have_pre = a9->dry_save_have_pre;
++	}
++	mutex_unlock(&a9->eng_lock);
++	if (!dry)
++		a9_power_off(a9);
++}
++
++/* ---- worker ------------------------------------------------------------------------ */
++static bool a9_take_job(struct a9_eink *a9, struct a9_job *job)
++{
++	bool have = false;
++
++	mutex_lock(&a9->shadow_lock);
++	if (a9->kick) {
++		a9->kick = false;
++		job->dry = !READ_ONCE(enable);
++		if (a9->controls_dirty) {
++			mutex_lock(&a9->eng_lock);
++			a9t_set_controls(&a9->e.st, a9->controls[0], a9->controls[1], a9->controls[2]);
++			mutex_unlock(&a9->eng_lock);
++			a9->controls_dirty = false;
++		}
++		if (a9->clear_req || (job->dry ? a9->dry_force_clear : a9->force_clear)) {
++			/* full GC16 of the newest image; the steady mode stays as set */
++			job->mode = A9_MODE_CLEAR;
++			job->clear = 1;
++			job->mask = 0;
++			job->rect = a9e_rect_full();
++			a9->clear_req = false;
++		} else {
++			job->mode = a9->mode;
++			job->clear = 0;
++			job->mask = READ_ONCE(mask_outside_damage);
++			job->rect = a9->dirty;
++		}
++		a9->dirty = (struct a9e_rect){ 0, 0, 0, 0 };
++		memcpy(a9->e.grey, a9->shadow, A9T_N);
++		have = job->clear || !a9e_rect_empty(&job->rect);
++	}
++	mutex_unlock(&a9->shadow_lock);
++	return have;
++}
++
++static unsigned int a9_hold_ms(void)
++{
++	return min(READ_ONCE(hv_hold_ms), 10000u);
++}
++
++static int a9_thread(void *data)
++{
++	struct a9_eink *a9 = data;
++	struct a9_job job;
++
++	while (!kthread_should_stop()) {
++		unsigned int hold = a9_hold_ms();
++		long tmo;
++
++		if (READ_ONCE(a9->suspending)) {
++			/* system suspend: rails down, history kept, wait for resume */
++			a9_power_off(a9);
++			smp_store_release(&a9->parked, true);
++			wake_up_all(&a9->wq);
++			wait_event_interruptible(a9->wq, !READ_ONCE(a9->suspending) ||
++						 kthread_should_stop());
++			smp_store_release(&a9->parked, false);
++			continue;
++		}
++		if (a9->hv_fault)
++			tmo = HZ;			/* retry the power-down, no busy loop */
++		else if (a9->tx.on)
++			tmo = msecs_to_jiffies(hold);
++		else
++			tmo = MAX_SCHEDULE_TIMEOUT;
++		if (tmo)
++			wait_event_interruptible_timeout(a9->wq,
++				READ_ONCE(a9->kick) || READ_ONCE(a9->suspending) ||
++				READ_ONCE(a9->tx.unreg_hv_unknown) || kthread_should_stop(), tmo);
++		if (kthread_should_stop())
++			break;
++		if (READ_ONCE(a9->suspending))
++			continue;
++		if (!READ_ONCE(a9->kick)) {
++			a9_power_off(a9);	/* idle */
++			continue;
++		}
++		WRITE_ONCE(a9->busy, true);
++		smp_mb();	/* busy is visible before kick reads as cleared (a9_drain) */
++		if (a9_load_waveform(a9)) {
++			WRITE_ONCE(a9->kick, false);	/* dropped; retried at the next commit */
++		} else {
++			if (a9->tx.on && hv_max_ms &&
++			    ktime_ms_delta(ktime_get(), a9->tx.on_since) > hv_max_ms)
++				a9_power_off(a9);	/* bounded continuous HV time */
++			if (a9_take_job(a9, &job))
++				a9_update(a9, &job);
++			/* follow-up already queued: keep the pipeline; otherwise drop it now */
++			if (!READ_ONCE(a9->kick) && !hold)
++				a9_power_off(a9);
++		}
++		smp_store_release(&a9->busy, false);
++		wake_up_all(&a9->wq);	/* drainers */
++	}
++	a9_power_off(a9);
++	return 0;
++}
++
++static bool a9_idle(struct a9_eink *a9)
++{
++	bool kick = READ_ONCE(a9->kick);
++
++	smp_rmb();
++	return !kick && !smp_load_acquire(&a9->busy);
++}
++
++/* finish every queued update (never truncate a waveform). Returns false on timeout. */
++static bool a9_drain(struct a9_eink *a9)
++{
++	if (!a9->thread)
++		return true;
++	wake_up_all(&a9->wq);
++	if (!wait_event_timeout(a9->wq, a9_idle(a9), msecs_to_jiffies(A9_DRAIN_MS))) {
++		dev_warn(a9->dev, "drain timed out\n");
++		return false;
++	}
++	return true;
++}
++
++/*
++ * System sleep: msm saves and later restores its atomic state in .prepare
++ * (drm_mode_config_helper_suspend), so the pipeline must be down BEFORE the
++ * PM core starts: a PM notifier, run before the freezer and dpm_prepare.
++ */
++static int a9_pm_notify(struct notifier_block *nb, unsigned long action, void *data)
++{
++	struct a9_eink *a9 = container_of(nb, struct a9_eink, pm_nb);
++
++	switch (action) {
++	case PM_SUSPEND_PREPARE:
++	case PM_HIBERNATION_PREPARE:
++		a9_drain(a9);
++		WRITE_ONCE(a9->suspending, true);
++		wake_up_all(&a9->wq);
++		if (!wait_event_timeout(a9->wq, smp_load_acquire(&a9->parked),
++					msecs_to_jiffies(A9_DRAIN_MS)))
++			a9_force_hv_off(a9, "worker did not park for suspend");
++		break;
++	case PM_POST_SUSPEND:
++	case PM_POST_HIBERNATION:
++	case PM_POST_RESTORE:
++		WRITE_ONCE(a9->suspending, false);
++		wake_up_all(&a9->wq);
++		break;
++	}
++	return NOTIFY_DONE;
++}
++
++/* ---- debugfs ----------------------------------------------------------------------- */
++static int a9_dbg_last_show(struct seq_file *m, void *v)
++{
++	struct a9_eink *a9 = m->private;
++
++	mutex_lock(&a9->eng_lock);
++	seq_printf(m, "mode %#x pre %#x clear %d type %u bin %d t1 %d t2 %d t1_raw %d t2_raw %d\n",
++		   a9->last.mode, a9->last.pre, a9->last.clear, a9->last.type, a9->last.bin,
++		   a9->last.t1, a9->last.t2, a9->last.t1_raw, a9->last.t2_raw);
++	seq_printf(m, "rect %d,%d-%d,%d steps %u dry %d aborted %d\n",
++		   a9->last.rect.x1, a9->last.rect.y1, a9->last.rect.x2, a9->last.rect.y2,
++		   a9->last.steps, a9->last.dry, a9->last.aborted);
++	if (a9->last.sha_valid)
++		seq_printf(m, "frames %u sha256 %*phN\n", a9->last.frames, 32, a9->last.sha);
++	else
++		seq_printf(m, "frames %u sha256 -\n", a9->last.frames);
++	mutex_unlock(&a9->eng_lock);
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(a9_dbg_last);
++
++static void a9_debugfs(struct a9_eink *a9)
++{
++	static struct debugfs_blob_wrapper grey, old, lv, dlv;
++
++	a9->dbg = debugfs_create_dir("a9_eink", NULL);
++	grey.data = a9->e.grey;		/* grey of the last update */
++	grey.size = A9T_N;
++	old.data = a9->trace_old;	/* levels before it (trace / dry run) */
++	old.size = A9T_N;
++	lv.data = a9->e.old;		/* levels now on the glass */
++	lv.size = A9T_N;
++	debugfs_create_blob("grey", 0400, a9->dbg, &grey);
++	debugfs_create_blob("levels_before", 0400, a9->dbg, &old);
++	debugfs_create_blob("levels", 0400, a9->dbg, &lv);
++	dlv.data = a9->dry_levels;	/* levels after the last dry-run update */
++	dlv.size = A9T_N;
++	debugfs_create_blob("dry_levels", 0400, a9->dbg, &dlv);
++	debugfs_create_file("last", 0400, a9->dbg, a9, &a9_dbg_last_fops);
++}
++
++/* ---- probe -------------------------------------------------------------------------- */
++static void a9_put_node(void *np)
++{
++	of_node_put(np);
++}
++
++static void *a9_vzalloc(struct device *dev, size_t n)
++{
++	void *p = vzalloc(n);
++
++	if (p && devm_add_action_or_reset(dev, (void (*)(void *))vfree, p))
++		return NULL;
++	return p;
++}
++
++static int a9_pipe_init(struct a9_eink *a9)
++{
++	struct drm_device *drm = &a9->drm;
++	int ret;
++
++	drm_plane_helper_add(&a9->plane, &a9_plane_helper_funcs);
++	ret = drm_universal_plane_init(drm, &a9->plane, 0, &a9_plane_funcs, a9_formats,
++				       ARRAY_SIZE(a9_formats), NULL, DRM_PLANE_TYPE_PRIMARY, NULL);
++	if (ret)
++		return ret;
++	drm_plane_enable_fb_damage_clips(&a9->plane);
++	drm_crtc_helper_add(&a9->crtc, &a9_crtc_helper_funcs);
++	ret = drm_crtc_init_with_planes(drm, &a9->crtc, &a9->plane, NULL, &a9_crtc_funcs, NULL);
++	if (ret)
++		return ret;
++	a9->encoder.possible_crtcs = drm_crtc_mask(&a9->crtc);
++	ret = drm_encoder_init(drm, &a9->encoder, &a9_encoder_funcs, DRM_MODE_ENCODER_DSI, NULL);
++	if (ret)
++		return ret;
++	/* DSI type: the contract path is cardN-DSI-1 (and HWC treats DSI as internal) */
++	ret = drm_connector_init(drm, &a9->connector, &a9_connector_funcs, DRM_MODE_CONNECTOR_DSI);
++	if (ret)
++		return ret;
++	drm_connector_helper_add(&a9->connector, &a9_connector_hfuncs);
++	return drm_connector_attach_encoder(&a9->connector, &a9->encoder);
++}
++
++static int a9_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct a9_eink *a9;
++	struct drm_device *drm;
++	const char *f = transport_format;
++	int ret, k;
++
++	if (!f || strlen(f) != 4 || (strcmp(f, "XR24") && strcmp(f, "XB24")))
++		return dev_err_probe(dev, -EINVAL, "transport_format must be XR24 or XB24\n");
++
++	a9 = devm_drm_dev_alloc(dev, &a9_drm_driver, struct a9_eink, drm);
++	if (IS_ERR(a9))
++		return PTR_ERR(a9);
++	drm = &a9->drm;
++	a9->dev = dev;
++	platform_set_drvdata(pdev, a9);
++	mutex_init(&a9->shadow_lock);
++	mutex_init(&a9->eng_lock);
++	init_waitqueue_head(&a9->wq);
++	a9->mode = A9_MODE_DEFAULT;
++	a9->controls[0] = 30;
++	a9->controls[1] = 30;
++	a9->controls[2] = 0;
++
++	a9->pmic_np = of_parse_phandle(dev->of_node, "hisense,epd-pmic", 0);
++	a9->tx.panel_np = of_parse_phandle(dev->of_node, "hisense,transport-panel", 0);
++	if (a9->pmic_np && devm_add_action_or_reset(dev, a9_put_node, a9->pmic_np))
++		return -ENOMEM;
++	if (a9->tx.panel_np && devm_add_action_or_reset(dev, a9_put_node, a9->tx.panel_np))
++		return -ENOMEM;
++	if (!a9->pmic_np || !a9->tx.panel_np)
++		return dev_err_probe(dev, -EINVAL, "need hisense,epd-pmic and hisense,transport-panel\n");
++	ret = fp9929a_get_status(a9->pmic_np, NULL);
++	if (ret == -EPROBE_DEFER)
++		return dev_err_probe(dev, ret, "FP9929A not bound yet\n");
++	a9->hv = devm_regulator_get_optional(dev, "epd");
++	if (IS_ERR(a9->hv)) {
++		if (PTR_ERR(a9->hv) == -EPROBE_DEFER)
++			return -EPROBE_DEFER;
++		dev_warn(dev, "no epd-supply: no forced FP9929A power-down fallback\n");
++		a9->hv = NULL;
++	}
++	a9->therm = devm_iio_channel_get(dev, "epd-therm");
++	if (IS_ERR(a9->therm)) {
++		if (PTR_ERR(a9->therm) == -EPROBE_DEFER)
++			return -EPROBE_DEFER;
++		dev_warn(dev, "no epd-therm channel: t2 = t1\n");
++		a9->therm = NULL;
++	}
++
++	a9->tx.dev = dev;
++	a9->tx.wq = &a9->wq;
++	a9->tx.fourcc = strcmp(f, "XB24") ? DRM_FORMAT_XRGB8888 : DRM_FORMAT_XBGR8888;
++	mutex_init(&a9->tx.lock);
++
++	a9->tables = a9_vzalloc(dev, sizeof(*a9->tables));
++	a9->shadow = a9_vzalloc(dev, A9T_N);
++	a9->e.grey = a9_vzalloc(dev, A9T_N);
++	a9->e.old = a9_vzalloc(dev, A9T_N);
++	a9->e.nlv = a9_vzalloc(dev, A9T_N);
++	a9->e.pairs = a9_vzalloc(dev, (size_t)A9T_N * 2);
++	for (k = 0; k < 5; k++)
++		a9->e.arr[k] = a9_vzalloc(dev, (size_t)A9T_N * 2);
++	a9->e.work = a9_vzalloc(dev, sizeof(*a9->e.work));
++	a9->e.cache = a9_vzalloc(dev, A9T_FRAME_BYTES);
++	a9->frame = a9_vzalloc(dev, A9T_FRAME_BYTES);	/* bytes 1..3 stay zero */
++	a9->trace_old = a9_vzalloc(dev, A9T_N);
++	a9->dry_save_old = a9_vzalloc(dev, A9T_N);
++	a9->dry_levels = a9_vzalloc(dev, A9T_N);
++	if (!a9->tables || !a9->shadow || !a9->e.grey || !a9->e.old || !a9->e.nlv ||
++	    !a9->e.pairs || !a9->e.arr[4] || !a9->e.arr[0] || !a9->e.arr[1] ||
++	    !a9->e.arr[2] || !a9->e.arr[3] || !a9->e.work || !a9->e.cache ||
++	    !a9->frame || !a9->trace_old || !a9->dry_save_old || !a9->dry_levels)
++		return -ENOMEM;
++	memset(a9->shadow, 0xff, A9T_N);	/* white, like the levels */
++
++	dma_coerce_mask_and_coherent(dev, DMA_BIT_MASK(64));
++	ret = drmm_mode_config_init(drm);
++	if (ret)
++		return ret;
++	drm->mode_config.funcs = &a9_mode_config_funcs;
++	drm->mode_config.min_width = A9E_FB_W;
++	drm->mode_config.max_width = A9E_FB_W;
++	drm->mode_config.min_height = A9E_FB_H;
++	drm->mode_config.max_height = A9E_FB_H;
++	drm->mode_config.preferred_depth = 24;
++	ret = a9_pipe_init(a9);
++	if (ret)
++		return dev_err_probe(dev, ret, "pipeline init\n");
++	ret = drm_vblank_init(drm, 1);
++	if (ret)
++		return ret;
++	drm_mode_config_reset(drm);
++
++	a9->thread = kthread_run(a9_thread, a9, "a9_eink");
++	if (IS_ERR(a9->thread)) {
++		ret = PTR_ERR(a9->thread);
++		a9->thread = NULL;
++		return ret;
++	}
++	ret = drm_dev_register(drm, 0);
++	if (ret) {
++		kthread_stop(a9->thread);
++		a9->thread = NULL;
++		return ret;
++	}
++	a9->pm_nb.notifier_call = a9_pm_notify;
++	register_pm_notifier(&a9->pm_nb);
++	a9_debugfs(a9);
++	dev_info(dev, "E Ink KMS %ux%u; frames %s; transport %s; HV hold %u ms\n",
++		 A9E_FB_W, A9E_FB_H, enable ? "SENT TO THE PANEL" : "dry run (a9_eink.enable=0)",
++		 f, hv_hold_ms);
++	return 0;
++}
++
++static void a9_teardown(struct a9_eink *a9)
++{
++	bool drained = a9_drain(a9);
++
++	if (!drained)
++		/* a wedged commit could also wedge kthread_stop: rails first */
++		a9_force_hv_off(a9, "shutdown drain timed out");
++	if (a9->thread) {
++		kthread_stop(a9->thread);	/* powers the pipeline down */
++		a9->thread = NULL;
++	}
++	a9x_detach(&a9->tx);
++}
++
++static void a9_remove(struct platform_device *pdev)
++{
++	struct a9_eink *a9 = platform_get_drvdata(pdev);
++
++	unregister_pm_notifier(&a9->pm_nb);
++	drm_dev_unplug(&a9->drm);
++	a9_teardown(a9);
++	debugfs_remove_recursive(a9->dbg);
++	drm_atomic_helper_shutdown(&a9->drm);
++}
++
++static void a9_shutdown(struct platform_device *pdev)
++{
++	struct a9_eink *a9 = platform_get_drvdata(pdev);
++
++	/* power-off image: its force_clear must finish before the rails go */
++	a9_teardown(a9);
++}
++
++static const struct of_device_id a9_of_match[] = {
++	{ .compatible = "hisense,hlte556n-eink-display" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, a9_of_match);
++
++static struct platform_driver a9_driver = {
++	.probe = a9_probe,
++	.remove = a9_remove,
++	.shutdown = a9_shutdown,
++	.driver = {
++		.name = "a9-eink",
++		.of_match_table = a9_of_match,
++	},
++};
++module_platform_driver(a9_driver);
++
++MODULE_FIRMWARE(A9_FW_NAME);
++MODULE_DESCRIPTION("Hisense A9 E Ink display with in-kernel software TCON");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_engine.c b/drivers/gpu/drm/a9_eink/a9_eink_engine.c
+new file mode 100644
+index 000000000..c6c07f4c9
+--- /dev/null
++++ b/drivers/gpu/drm/a9_eink/a9_eink_engine.c
+@@ -0,0 +1,295 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * a9_eink engine, see a9_eink_engine.h. No vendor data, no allocation;
++ * needs only memcpy/memset (through a9tcon.h's includes).
++ */
++#include "a9_eink_engine.h"
++
++#include <string.h>
++
++int a9e_mode_valid(uint32_t mode)
++{
++	return (mode & 0xff) <= 10 && mode <= 0xffff;
++}
++
++/* ---- waveform blob --------------------------------------------------------- */
++struct wf_cls {
++	size_t off;
++	uint32_t rs;
++};
++
++static const struct wf_cls WF_CLS[] = {
++	{ offsetof(struct a9t_tables, clear3), A9T_RS_CLEAR },
++	{ offsetof(struct a9t_tables, type2), A9T_RS_CLEAR },
++	{ offsetof(struct a9t_tables, balanced), A9T_RS_BAL },
++	{ offsetof(struct a9t_tables, smooth), A9T_RS_SMOOTH },
++	{ offsetof(struct a9t_tables, speed), A9T_RS_SMOOTH },
++};
++
++static uint32_t rd32(const uint8_t *p)
++{
++	return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
++}
++
++int a9e_wf_check(const uint8_t *blob, size_t len, const struct a9t_tables **tables)
++{
++	const struct a9t_tables *t;
++	size_t c;
++	int b, i;
++
++	if (len < sizeof(struct a9e_wf_header))
++		return A9E_WF_ESIZE;
++	if (rd32(blob) != A9E_WF_MAGIC)
++		return A9E_WF_EMAGIC;
++	if (rd32(blob + 4) != A9E_WF_VERSION)
++		return A9E_WF_EVERSION;
++	if (rd32(blob + 8) != sizeof(struct a9e_wf_header) ||
++	    rd32(blob + 12) != sizeof(struct a9t_tables) ||
++	    len != sizeof(struct a9e_wf_header) + sizeof(struct a9t_tables))
++		return A9E_WF_ESIZE;
++	t = (const struct a9t_tables *)(blob + sizeof(struct a9e_wf_header));
++
++	for (i = 0; i < 51; i++)
++		if (t->bin_map[i] >= A9T_BINS)
++			return A9E_WF_EBINMAP;
++	for (b = 0; b < A9T_BINS; b++) {
++		uint32_t n = t->init[(size_t)b * A9T_INIT_STRIDE];
++		if (n < 1 || n > A9T_INIT_STRIDE - 1)
++			return A9E_WF_EINIT;
++		if (t->init[(size_t)b * A9T_INIT_STRIDE + n] & 3)
++			return A9E_WF_ELAST;
++	}
++	for (c = 0; c < sizeof(WF_CLS) / sizeof(WF_CLS[0]); c++) {
++		const uint8_t *base = (const uint8_t *)t + WF_CLS[c].off;
++		uint32_t rs = WF_CLS[c].rs;
++		for (b = 0; b < A9T_BINS; b++) {
++			const uint8_t *bin = base + (size_t)b * A9T_SLOTS * rs;
++			uint32_t n = bin[0], s, f;
++			/* the frame count of a bin is row 0's length byte; every
++			 * frame index read must stay inside its own row */
++			if (n < 2 || n > rs - 1)
++				return A9E_WF_ELEN;
++			for (s = 0; s < A9T_SLOTS; s++) {
++				for (f = 1; f <= n; f++)
++					if (bin[(size_t)s * rs + f] > 2)
++						return A9E_WF_ECODE;
++				/* table passes (Clear, type 2, Balanced full) end on
++				 * their last column: it must not drive */
++				if (c <= 2 && bin[(size_t)s * rs + n])
++					return A9E_WF_ELAST;
++			}
++		}
++	}
++	if (tables)
++		*tables = t;
++	return 0;
++}
++
++/* ---- setup and rects ------------------------------------------------------- */
++void a9e_setup(struct a9e_engine *e)
++{
++	int k;
++
++	a9t_init(&e->st, e->t, e->cache);
++	memset(e->old, 15, A9T_N);
++	memset(e->nlv, 15, A9T_N);
++	for (k = 0; k < 5; k++)
++		memset(e->arr[k], 0, (size_t)A9T_N * 2); /* stock: zeroed at TCON start */
++	e->have_pre = 0;
++	e->pre_mode = 0;
++	e->nframes = 0;
++	e->init = 0;
++}
++
++struct a9e_rect a9e_rect_from_fb(int c1, int r1, int c2, int r2)
++{
++	/* grey[y][x] = fb(row x, column 823 - y) */
++	struct a9e_rect r = { r1, A9E_FB_W - c2, r2, A9E_FB_W - c1 };
++	return r;
++}
++
++int a9e_rect_empty(const struct a9e_rect *r)
++{
++	return r->x1 >= r->x2 || r->y1 >= r->y2;
++}
++
++struct a9e_rect a9e_rect_full(void)
++{
++	struct a9e_rect r = { 0, 0, A9T_W, A9T_H };
++	return r;
++}
++
++void a9e_rect_union(struct a9e_rect *acc, const struct a9e_rect *r)
++{
++	if (a9e_rect_empty(r))
++		return;
++	if (a9e_rect_empty(acc)) {
++		*acc = *r;
++		return;
++	}
++	if (r->x1 < acc->x1) acc->x1 = r->x1;
++	if (r->y1 < acc->y1) acc->y1 = r->y1;
++	if (r->x2 > acc->x2) acc->x2 = r->x2;
++	if (r->y2 > acc->y2) acc->y2 = r->y2;
++}
++
++/* ---- framebuffer -> grey ----------------------------------------------------
++ * Stock luma (76 b0 + 150 b1 + 30 b2) >> 8 on bytes 0..2 of an RGBA_8888
++ * buffer (b0 = R, INFERRED from the Android default format). The weights stay
++ * on R, G, B for the other byte orders. */
++void a9e_fb_to_grey(uint8_t *grey, const uint8_t *src, uint32_t pitch, enum a9e_fmt fmt,
++		    int c1, int r1, int c2, int r2, struct a9e_rect *changed)
++{
++	int c, r, bpp = fmt == A9E_FMT_R8 ? 1 : 4;
++	int i0 = fmt == A9E_FMT_BGRX ? 2 : 0, i2 = fmt == A9E_FMT_BGRX ? 0 : 2;
++	struct a9e_rect ch = { A9T_W, A9T_H, 0, 0 };
++
++	if (c1 < 0) c1 = 0;
++	if (r1 < 0) r1 = 0;
++	if (c2 > A9E_FB_W) c2 = A9E_FB_W;
++	if (r2 > A9E_FB_H) r2 = A9E_FB_H;
++	for (c = c1; c < c2; c++) {
++		int y = A9E_FB_W - 1 - c, rmin = A9T_W, rmax = -1;
++		uint8_t *o = grey + (size_t)y * A9T_W;
++		const uint8_t *p = src + (size_t)r1 * pitch + (size_t)c * bpp;
++		for (r = r1; r < r2; r++, p += pitch) {
++			uint8_t v = bpp == 1 ? p[0] :
++				(uint8_t)((76u * p[i0] + 150u * p[1] + 30u * p[i2]) >> 8);
++			if (changed && o[r] != v) {
++				if (r < rmin) rmin = r;
++				rmax = r;
++			}
++			o[r] = v;
++		}
++		if (rmax >= 0) {
++			if (rmin < ch.x1) ch.x1 = rmin;
++			if (rmax + 1 > ch.x2) ch.x2 = rmax + 1;
++			if (y < ch.y1) ch.y1 = y;
++			if (y + 1 > ch.y2) ch.y2 = y + 1;
++		}
++	}
++	if (changed)
++		a9e_rect_union(changed, &ch);
++}
++
++/* ---- update ------------------------------------------------------------------ */
++void a9e_begin_init(struct a9e_engine *e, int bin)
++{
++	e->init = 1;
++	e->bin = bin;
++	e->nframes = 0;
++	e->st.counter = 0;
++}
++
++int a9e_begin(struct a9e_engine *e, uint32_t mode, int clear, const struct a9e_rect *rect,
++	      int mask, int bin)
++{
++	uint32_t pre = e->have_pre ? e->pre_mode : mode;
++	size_t y;
++
++	e->init = 0;
++	e->bin = bin;
++	e->clear = clear ? 1 : 0;
++	e->rect = *rect;
++	e->nframes = 0;
++	memset(&e->req, 0, sizeof(e->req));
++	e->mode = a9t_request_build(&e->req, pre, mode, e->flag_6c7, &e->clear, &e->clear_reset);
++	if (e->req.count)
++		a9t_request_arrays(&e->req, e->old, e->arr);	/* old := last step level */
++	if (e->req.count || e->clear || e->req.kind)
++		e->rect = a9e_rect_full();
++	e->mask = mask && !e->req.count && !e->clear;
++
++	a9t_condition(&e->st, e->grey, e->mode, e->nlv, e->work);
++	if (!(e->rect.x1 == 0 && e->rect.y1 == 0 && e->rect.x2 == A9T_W && e->rect.y2 == A9T_H)) {
++		/* outside the damage the glass keeps its levels */
++		for (y = 0; y < A9T_H; y++) {
++			size_t row = y * A9T_W;
++			if ((int)y < e->rect.y1 || (int)y >= e->rect.y2) {
++				memcpy(e->nlv + row, e->old + row, A9T_W);
++				continue;
++			}
++			memcpy(e->nlv + row, e->old + row, (size_t)e->rect.x1);
++			memcpy(e->nlv + row + e->rect.x2, e->old + row + e->rect.x2,
++			       (size_t)(A9T_W - e->rect.x2));
++		}
++	}
++	a9t_pack(e->old, e->nlv, e->mode, e->clear, e->pairs);
++	e->type = (uint32_t)a9t_final_type(e->mode, e->clear);
++	a9t_update_begin(&e->st);
++	e->st.counter = 0;
++	return (int)e->req.count;
++}
++
++static void mask_frame(uint8_t *out, const struct a9e_rect *rc)
++{
++	int y, w, k;
++
++	for (y = 0; y < A9T_H; y++) {
++		uint8_t *o = out + (size_t)(y + A9T_HEAD_ROWS) * A9T_TW * 4;
++		if (y < rc->y1 || y >= rc->y2) {
++			for (w = 0; w < A9T_DATA_WORDS; w++)
++				o[w * 4] = 0;
++			continue;
++		}
++		for (w = 0; w < A9T_DATA_WORDS; w++) {
++			int x0 = 4 * w;
++			uint8_t m = 0;
++			if (x0 >= rc->x1 && x0 + 4 <= rc->x2)
++				continue;
++			for (k = 0; k < 4; k++)
++				if (x0 + k >= rc->x1 && x0 + k < rc->x2)
++					m |= (uint8_t)(3u << (6 - 2 * k));
++			o[w * 4] &= m;
++		}
++	}
++}
++
++int a9e_frame(struct a9e_engine *e, uint8_t *out)
++{
++	int more;
++
++	if (e->init) {
++		more = a9t_init_frame(&e->st, e->bin, out);
++	} else {
++		more = a9t_update_frame(&e->st, &e->req, e->arr, e->type, e->bin, e->pairs, out);
++		if (e->mask)
++			mask_frame(out, &e->rect);
++	}
++	e->nframes++;
++	return more;
++}
++
++void a9e_end(struct a9e_engine *e)
++{
++	if (e->init) {
++		e->init = 0;
++		memset(e->old, 15, A9T_N);	/* glass taken as white after the flash (INFERRED) */
++		return;
++	}
++	memcpy(e->old, e->nlv, A9T_N);
++	e->pre_mode = e->mode & ~0x100u;	/* the builder only looks at the low byte */
++	e->have_pre = 1;
++}
++
++void a9e_abort(struct a9e_engine *e)
++{
++	e->init = 0;
++	e->st.counter = 0;
++	e->st.step = 0;
++	/* nothing reliable is known about the glass: keep old as is; the caller
++	 * forces the next update to clear = 1 */
++}
++
++int a9e_frame_is_null(const uint8_t *out)
++{
++	int r, w;
++
++	for (r = 0; r < A9T_TH; r++) {
++		const uint8_t *o = out + (size_t)r * A9T_TW * 4;
++		for (w = 0; w < A9T_TW; w++)
++			if (o[w * 4])
++				return 0;
++	}
++	return 1;
++}
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_engine.h b/drivers/gpu/drm/a9_eink/a9_eink_engine.h
+new file mode 100644
+index 000000000..82db7cd98
+--- /dev/null
++++ b/drivers/gpu/drm/a9_eink/a9_eink_engine.h
+@@ -0,0 +1,149 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * a9_eink engine: one E Ink update on top of the a9tcon core
++ * (scripts/mainline/tcon/a9tcon.c, byte-exact vs the stock composer).
++ *
++ * Pure C, no kernel or libc headers beyond what a9tcon.h pulls in: the same
++ * file builds into the a9_eink kernel module and into the userspace test
++ * harness (scripts/mainline/eink/test/). All buffers are owned by the caller.
++ *
++ * Sequence per update (mirrors a9tcon-cli.c, which test-tcon-c.py checks
++ * against the stock code under Unicorn):
++ *   a9e_fb_to_grey()   damage rect of the portrait framebuffer -> landscape grey
++ *   a9e_begin()        request builder (mode switch) + step arrays,
++ *                      conditioning, outside-damage levels kept, pack, type
++ *   a9e_frame()        one drive frame per call until it returns 0
++ *   a9e_end()          old := new, previous mode := this mode
++ * With a full-screen rect and mask = 0, the frames are exactly those of
++ * `a9tcon --pre <prev> --mode <mode> --clear <c>` on the same grey and old.
++ */
++#ifndef A9_EINK_ENGINE_H
++#define A9_EINK_ENGINE_H
++
++#include "a9tcon.h"
++
++/* Framebuffer (portrait, what userspace draws): 824 x 1648 */
++#define A9E_FB_W A9T_H
++#define A9E_FB_H A9T_W
++
++/* landscape TCON coordinates, half-open: x in [x1, x2) < 1648, y < 824 */
++struct a9e_rect {
++	int x1, y1, x2, y2;
++};
++
++enum a9e_fmt {
++	A9E_FMT_RGBX,	/* bytes R,G,B,x: DRM XBGR8888/ABGR8888, Android RGBA_8888 (= stock) */
++	A9E_FMT_BGRX,	/* bytes B,G,R,x: DRM XRGB8888/ARGB8888 */
++	A9E_FMT_R8,	/* one grey byte per pixel: DRM R8 */
++};
++
++/* The waveform blob (/lib/firmware/hisense/a9-waveform.bin), little endian. */
++#define A9E_WF_MAGIC 0x46573941u	/* "A9WF" */
++#define A9E_WF_VERSION 1u
++struct a9e_wf_header {
++	uint32_t magic;
++	uint32_t version;
++	uint32_t header_size;		/* sizeof(struct a9e_wf_header) = 80 */
++	uint32_t payload_size;		/* sizeof(struct a9t_tables) */
++	uint8_t source_sha256[32];	/* the composer the tables came from */
++	uint8_t payload_sha256[32];	/* of the payload that follows */
++};
++
++struct a9e_engine {
++	/* caller-provided buffers (assign, then a9e_setup) */
++	const struct a9t_tables *t;
++	uint8_t *grey;		/* A9T_N: landscape grey of the update */
++	uint8_t *old;		/* A9T_N: levels currently on the glass */
++	uint8_t *nlv;		/* A9T_N: levels of the update */
++	uint16_t *pairs;	/* A9T_N */
++	uint16_t *arr[5];	/* 5 x A9T_N, persistent between updates (stock) */
++	struct a9t_work *work;
++	uint8_t *cache;		/* A9T_FRAME_BYTES, hold-pass frame cache */
++
++	/* knobs */
++	int flag_6c7;		/* engine byte this+0x6c7; 1 = no 0x100 added */
++
++	/* state */
++	struct a9t_state st;
++	uint32_t pre_mode;	/* previous update's mode word */
++	int have_pre;
++
++	/* current update */
++	struct a9t_request req;
++	uint32_t mode;		/* mode word the update runs with */
++	int clear, clear_reset, bin, init;
++	uint32_t type;
++	struct a9e_rect rect;
++	int mask;		/* zero all drive outside rect (non-stock option) */
++	uint32_t nframes;
++};
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* Valid stock mode word? Low byte 0..10 is what the stock jump tables cover. */
++int a9e_mode_valid(uint32_t mode);
++
++/* Check a waveform blob's header and every table: lengths fit the rows,
++ * drive codes 0..2 (3 = both drive lines, never produced by stock tables),
++ * bin map < 14. Returns 0 or a negative reason code (A9E_WF_E*). The SHA-256
++ * of the payload is checked by the caller (kernel: lib/crypto). */
++#define A9E_WF_ESIZE (-1)
++#define A9E_WF_EMAGIC (-2)
++#define A9E_WF_EVERSION (-3)
++#define A9E_WF_EBINMAP (-4)
++#define A9E_WF_ELEN (-5)
++#define A9E_WF_ECODE (-6)
++#define A9E_WF_EINIT (-7)
++#define A9E_WF_ELAST (-8)	/* a table pass would end on a driving frame */
++int a9e_wf_check(const uint8_t *blob, size_t len, const struct a9t_tables **tables);
++
++/* After assigning the buffers: engine state, old := 15 (white), arrays := 0. */
++void a9e_setup(struct a9e_engine *e);
++
++/* Portrait framebuffer rect [c1,c2) x [r1,r2) -> landscape rect. */
++struct a9e_rect a9e_rect_from_fb(int c1, int r1, int c2, int r2);
++/* Union; empty rects (x1 >= x2) are ignored. */
++void a9e_rect_union(struct a9e_rect *acc, const struct a9e_rect *r);
++int a9e_rect_empty(const struct a9e_rect *r);
++struct a9e_rect a9e_rect_full(void);
++
++/* Convert the framebuffer rect [c1,c2) x [r1,r2) of a portrait buffer
++ * (src points at pixel (0,0), pitch in bytes) into the landscape grey buffer.
++ * For A9E_FMT_RGBX, full rect and pitch 832*4 this equals a9t_rgba_to_grey().
++ * If changed is not NULL, the bounding box (landscape) of the grey pixels that
++ * differ from what grey held before is merged into *changed: the effective
++ * damage, so a commit that redraws identical content causes no update. */
++void a9e_fb_to_grey(uint8_t *grey, const uint8_t *src, uint32_t pitch, enum a9e_fmt fmt,
++		    int c1, int r1, int c2, int r2, struct a9e_rect *changed);
++
++/* Start the one-time init flash at bin. Frames via a9e_frame(). */
++void a9e_begin_init(struct a9e_engine *e, int bin);
++
++/* Start an update of e->grey. clear = the update's clear flag (GC16-type full
++ * clear on Balanced/Clear, the stock clear request on Smooth/Speed). A mode
++ * switch or clear forces a full-screen rect (the steps drive every pixel).
++ * Returns the number of steps of the mode switch (0 = steady). */
++int a9e_begin(struct a9e_engine *e, uint32_t mode, int clear, const struct a9e_rect *rect,
++	      int mask, int bin);
++
++/* Next drive frame into out (A9T_FRAME_BYTES; bytes 1..3 of every word are
++ * never written, keep them zero). Returns 1 = more frames follow, 0 = this
++ * was the last one (always all zero for stock tables). */
++int a9e_frame(struct a9e_engine *e, uint8_t *out);
++
++/* Commit the update: old := new, previous mode := this mode. */
++void a9e_end(struct a9e_engine *e);
++
++/* Abort an update midway (transport lost): the glass state is unknown, so the
++ * next update is forced to a full clear. */
++void a9e_abort(struct a9e_engine *e);
++
++/* 1 if every data code of the frame is 0 (no drive). */
++int a9e_frame_is_null(const uint8_t *out);
++
++#ifdef __cplusplus
++}
++#endif
++#endif
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_transport.c b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+new file mode 100644
+index 000000000..cda450c24
+--- /dev/null
++++ b/drivers/gpu/drm/a9_eink/a9_eink_transport.c
+@@ -0,0 +1,414 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * a9_eink transport: drive frames out through the msm DRM device.
++ *
++ * An in-kernel DRM client (the fbdev emulation's mechanism) on the msm card:
++ * two 448x829 dumb buffers, one blocking atomic commit per frame. A blocking
++ * msm commit returns once the hardware has latched the new buffer, so the
++ * next frame is written into the other buffer while this one scans out, and
++ * the commit rate is the panel's 85 Hz (INFERRED: msm wait_flush semantics;
++ * measured on the phone by the "late" and "vbl_skips" counters).
++ *
++ * The msm card is found through the panel: the drm_panel_bridge that the
++ * TC358767 driver creates for the E Ink transport panel carries the panel's
++ * DT node, and once attached its ->dev is the msm drm_device.
++ *
++ * Userspace must never become DRM master of the msm card (Android: only the
++ * a9_eink card is given to the composer). If it does, our commits fail with
++ * -EBUSY and the update is aborted; power-off then falls back to forcing the
++ * FP9929A down (a9_eink_drv.c).
++ */
++#include <linux/delay.h>
++#include <linux/device.h>
++#include <linux/of.h>
++
++#include <drm/drm_atomic.h>
++#include <drm/drm_bridge.h>
++#include <drm/drm_client.h>
++#include <drm/drm_drv.h>
++#include <drm/drm_framebuffer.h>
++#include <drm/drm_fourcc.h>
++#include <drm/drm_modes.h>
++#include <drm/drm_print.h>
++#include <drm/drm_vblank.h>
++
++#include "a9_eink.h"
++
++#define TX_W A9T_TW
++#define TX_H A9T_TH
++
++static int a9x_power_off_locked(struct a9x_transport *t);
++static int a9x_commit_locked(struct a9x_transport *t, int idx);
++
++static void a9x_free_locked(struct a9x_transport *t)
++{
++	int i;
++
++	for (i = 0; i < 2; i++) {
++		if (!t->buf[i])
++			continue;
++		drm_client_buffer_vunmap(t->buf[i]);
++		drm_client_buffer_delete(t->buf[i]);
++		t->buf[i] = NULL;
++	}
++	t->ms = NULL;
++	t->on = false;
++	t->vbl_ref = false;
++}
++
++/* msm card going away: called under its clientlist_mutex */
++static void a9x_client_unregister(struct drm_client_dev *client)
++{
++	struct a9x_transport *t = container_of(client, struct a9x_transport, client);
++
++	mutex_lock(&t->lock);
++	if (t->on) {
++		/* the device is still alive here: the normal zero-frame power-down */
++		dev_crit(t->dev, "msm device unregistering with the E Ink pipeline on\n");
++		if (a9x_power_off_locked(t)) {
++			WRITE_ONCE(t->unreg_hv_unknown, true);	/* the worker forces the FP9929A down */
++			wake_up_all(t->wq);
++		}
++	}
++	if (t->link) {
++		device_link_del(t->link);
++		t->link = NULL;
++	}
++	a9x_free_locked(t);
++	t->registered = false;
++	t->gone = true;
++	drm_client_release(client);
++	mutex_unlock(&t->lock);
++}
++
++/*
++ * Backstop for system sleep (the driver's PM notifier normally has the
++ * pipeline down already): before msm saves its atomic state, take the
++ * CRTC down so a resume never restores it with the rails up.
++ */
++static int a9x_client_suspend(struct drm_client_dev *client)
++{
++	struct a9x_transport *t = container_of(client, struct a9x_transport, client);
++	int ret;
++
++	mutex_lock(&t->lock);
++	ret = a9x_power_off_locked(t);
++	mutex_unlock(&t->lock);
++	if (ret)
++		dev_crit(t->dev, "suspend with the E Ink pipeline on (%d)\n", ret);
++	return 0;
++}
++
++static const struct drm_client_funcs a9x_client_funcs = {
++	.owner = THIS_MODULE,
++	.unregister = a9x_client_unregister,
++	.suspend = a9x_client_suspend,
++};
++
++bool a9x_attached(struct a9x_transport *t)
++{
++	return READ_ONCE(t->registered) && !READ_ONCE(t->gone);
++}
++
++int a9x_attach(struct a9x_transport *t)
++{
++	struct drm_bridge *bridge;
++	struct drm_device *ddev;
++	struct drm_mode_set *ms, *found = NULL;
++	int ret, i;
++
++	mutex_lock(&t->lock);
++	if (t->registered) {
++		mutex_unlock(&t->lock);
++		return 0;
++	}
++	bridge = of_drm_find_and_get_bridge(t->panel_np);
++	if (!bridge) {
++		mutex_unlock(&t->lock);
++		return -EAGAIN;
++	}
++	ddev = READ_ONCE(bridge->dev);
++	if (!ddev || !READ_ONCE(ddev->registered)) {
++		drm_bridge_put(bridge);
++		mutex_unlock(&t->lock);
++		return -EAGAIN;
++	}
++	drm_dev_get(ddev);	/* drm_client_init needs a reference held by the caller */
++	drm_bridge_put(bridge);
++	ret = drm_client_init(ddev, &t->client, "a9-eink", &a9x_client_funcs);
++	drm_dev_put(ddev);
++	if (ret) {
++		dev_err(t->dev, "drm_client_init on %s: %d\n", ddev->driver->name, ret);
++		mutex_unlock(&t->lock);
++		return ret;
++	}
++
++	ret = drm_client_modeset_probe(&t->client, TX_W, TX_H);
++	if (ret) {
++		dev_err(t->dev, "modeset probe: %d\n", ret);
++		goto err_release;
++	}
++	mutex_lock(&t->client.modeset_mutex);
++	drm_client_for_each_modeset(ms, &t->client) {
++		if (ms->mode && ms->num_connectors &&
++		    ms->mode->hdisplay == TX_W && ms->mode->vdisplay == TX_H) {
++			found = ms;
++			break;
++		}
++	}
++	if (found) {
++		/* period from the mode: htotal * vtotal / clock */
++		t->period_us = div_u64((u64)found->mode->htotal * found->mode->vtotal * 1000,
++				       found->mode->clock);
++	}
++	mutex_unlock(&t->client.modeset_mutex);
++	if (!found) {
++		dev_err(t->dev, "no connected %ux%u connector on %s\n", TX_W, TX_H,
++			ddev->driver->name);
++		ret = -ENODEV;
++		goto err_release;
++	}
++
++	for (i = 0; i < 2; i++) {
++		t->buf[i] = drm_client_buffer_create_dumb(&t->client, TX_W, TX_H, t->fourcc);
++		if (IS_ERR(t->buf[i])) {
++			ret = PTR_ERR(t->buf[i]);
++			t->buf[i] = NULL;
++			goto err_bufs;
++		}
++		ret = drm_client_buffer_vmap(t->buf[i], &t->map[i]);
++		if (ret) {
++			drm_client_buffer_delete(t->buf[i]);
++			t->buf[i] = NULL;
++			goto err_bufs;
++		}
++		iosys_map_memset(&t->map[i], 0, 0, (size_t)t->buf[i]->fb->pitches[0] * TX_H);
++	}
++	t->pitch = t->buf[0]->fb->pitches[0];
++	/* order shutdown/suspend: this driver before the msm device */
++	t->link = device_link_add(t->dev, ddev->dev, DL_FLAG_STATELESS);
++	if (!t->link)
++		dev_warn(t->dev, "no device link to %s: shutdown order not guaranteed\n",
++			 dev_name(ddev->dev));
++	t->ms = found;
++	t->front = 0;
++	t->front_null = true;
++	t->gone = false;
++	t->registered = true;
++	mutex_unlock(&t->lock);
++
++	/* after this only the unregister callback may release the client */
++	drm_client_register(&t->client);
++	dev_info(t->dev, "transport on %s: %ux%u %p4cc pitch %u, frame period %u us\n",
++		 ddev->driver->name, TX_W, TX_H, &t->fourcc, t->pitch, t->period_us);
++	return 0;
++
++err_bufs:
++	dev_err(t->dev, "transport buffers: %d\n", ret);
++	a9x_free_locked(t);
++err_release:
++	drm_client_release(&t->client);
++	mutex_unlock(&t->lock);
++	return ret;
++}
++
++void a9x_detach(struct a9x_transport *t)
++{
++	struct drm_device *ddev;
++
++	mutex_lock(&t->lock);
++	if (!t->registered) {
++		mutex_unlock(&t->lock);
++		return;
++	}
++	ddev = t->client.dev;
++	drm_dev_get(ddev);
++	mutex_unlock(&t->lock);
++
++	/* same lock order as drm_client_dev_unregister() */
++	mutex_lock(&ddev->clientlist_mutex);
++	mutex_lock(&t->lock);
++	if (t->registered) {
++		list_del(&t->client.list);
++		if (t->link) {
++			device_link_del(t->link);
++			t->link = NULL;
++		}
++		a9x_free_locked(t);
++		t->registered = false;
++		drm_client_release(&t->client);
++	}
++	mutex_unlock(&t->lock);
++	mutex_unlock(&ddev->clientlist_mutex);
++	drm_dev_put(ddev);
++}
++
++static int a9x_commit_locked(struct a9x_transport *t, int idx)
++{
++	struct drm_crtc *crtc;
++	ktime_t now;
++	u64 vbl;
++	u32 gap;
++	int ret;
++
++	mutex_lock(&t->client.modeset_mutex);
++	t->ms->fb = t->buf[idx]->fb;
++	mutex_unlock(&t->client.modeset_mutex);
++	ret = drm_client_modeset_commit(&t->client);
++	if (ret) {
++		t->commits_failed++;
++		return ret;
++	}
++	now = ktime_get();
++	crtc = t->ms->crtc;
++	if (t->on && t->vbl_ref) {
++		vbl = drm_crtc_vblank_count(crtc);
++		if (vbl > t->last_vbl + 1)
++			t->vbl_skips += vbl - t->last_vbl - 1;
++		t->last_vbl = vbl;
++		gap = (u32)ktime_us_delta(now, t->last_commit);
++		if (gap > t->max_gap_us)
++			t->max_gap_us = gap;
++		if (t->period_us && gap > t->period_us + t->period_us / 2)
++			t->late++;
++	}
++	t->last_commit = now;
++	t->front = idx;
++	return 0;
++}
++
++int a9x_power_on(struct a9x_transport *t)
++{
++	int ret, i;
++
++	mutex_lock(&t->lock);
++	if (!t->registered || t->gone) {
++		mutex_unlock(&t->lock);
++		return -ENODEV;
++	}
++	if (t->on) {
++		mutex_unlock(&t->lock);
++		return 0;
++	}
++	/* stock PanelOpen keeps the panel off for at least 200 ms */
++	if (t->off_since) {
++		s64 off = ktime_ms_delta(ktime_get(), t->off_since);
++
++		if (off < 200)
++			msleep(200 - off);
++	}
++	for (i = 0; i < 2; i++)
++		iosys_map_memset(&t->map[i], 0, 0, (size_t)t->pitch * TX_H);
++	t->front_null = true;
++	/* full modeset with an all-zero buffer: DSI on, panel prepare (lines,
++	 * FP9929A up), bridge init; video starts before the bridge init */
++	ret = a9x_commit_locked(t, 0);
++	if (ret) {
++		dev_err(t->dev, "transport enable failed: %d\n", ret);
++		/* a failed enable may have left the CRTC half on: caller powers off */
++		t->on = true;
++		t->on_since = ktime_get();
++		mutex_unlock(&t->lock);
++		return ret;
++	}
++	t->on = true;
++	/* one more all-zero refresh before any drive frame */
++	a9x_commit_locked(t, 1);
++	t->on_since = ktime_get();
++	t->vbl_ref = !drm_crtc_vblank_get(t->ms->crtc);
++	if (t->vbl_ref)
++		t->last_vbl = drm_crtc_vblank_count(t->ms->crtc);
++	mutex_unlock(&t->lock);
++	return 0;
++}
++
++int a9x_show(struct a9x_transport *t, const u8 *frame)
++{
++	int back, ret, r;
++
++	mutex_lock(&t->lock);
++	if (!t->on || t->gone) {
++		mutex_unlock(&t->lock);
++		return -ENODEV;
++	}
++	back = t->front ^ 1;
++	if (t->pitch == TX_W * 4) {
++		iosys_map_memcpy_to(&t->map[back], 0, frame, A9T_FRAME_BYTES);
++	} else {
++		for (r = 0; r < TX_H; r++)
++			iosys_map_memcpy_to(&t->map[back], (size_t)r * t->pitch,
++					    frame + (size_t)r * TX_W * 4, TX_W * 4);
++	}
++	ret = a9x_commit_locked(t, back);
++	if (!ret) {
++		t->frames++;
++		t->front_null = a9e_frame_is_null(frame);
++	}
++	mutex_unlock(&t->lock);
++	return ret;
++}
++
++/* zero frame, let it scan two refreshes, CRTC off. Called with t->lock held. */
++static int a9x_power_off_locked(struct a9x_transport *t)
++{
++	int ret;
++
++	if (!t->on || t->gone)
++		return 0;
++	if (!t->front_null) {
++		/* never power down (or idle) on a frame that drives */
++		int back = t->front ^ 1;
++
++		iosys_map_memset(&t->map[back], 0, 0, (size_t)t->pitch * TX_H);
++		if (!a9x_commit_locked(t, back))
++			t->front_null = true;
++	}
++	/* let the zero frame scan out for at least two refreshes */
++	if (t->period_us) {
++		s64 since = ktime_us_delta(ktime_get(), t->last_commit);
++
++		if (since < 2 * (s64)t->period_us)
++			usleep_range(2 * t->period_us - since, 2 * t->period_us - since + 500);
++	}
++	if (t->vbl_ref) {
++		drm_crtc_vblank_put(t->ms->crtc);
++		t->vbl_ref = false;
++	}
++	/* CRTC off: bridge disable, panel unprepare = FP9929A stock power-down */
++	ret = drm_client_modeset_dpms(&t->client, DRM_MODE_DPMS_OFF);
++	if (ret) {
++		t->commits_failed++;
++		dev_err(t->dev, "transport disable failed: %d\n", ret);
++	} else {
++		t->on = false;
++		t->off_since = ktime_get();
++	}
++	return ret;
++}
++
++int a9x_power_off(struct a9x_transport *t)
++{
++	int ret;
++
++	mutex_lock(&t->lock);
++	ret = a9x_power_off_locked(t);
++	mutex_unlock(&t->lock);
++	return ret;
++}
++
++/* replace a driving frame on screen by a zero frame (HV stays as is) */
++int a9x_blank(struct a9x_transport *t)
++{
++	int back, ret = 0;
++
++	mutex_lock(&t->lock);
++	if (t->on && !t->gone && !t->front_null) {
++		back = t->front ^ 1;
++		iosys_map_memset(&t->map[back], 0, 0, (size_t)t->pitch * TX_H);
++		ret = a9x_commit_locked(t, back);
++		if (!ret)
++			t->front_null = true;
++	}
++	mutex_unlock(&t->lock);
++	return ret;
++}
+diff --git a/drivers/gpu/drm/a9_eink/a9tcon.c b/drivers/gpu/drm/a9_eink/a9tcon.c
+new file mode 100644
+index 000000000..5a41a31dc
+--- /dev/null
++++ b/drivers/gpu/drm/a9_eink/a9tcon.c
+@@ -0,0 +1,493 @@
++/* a9tcon core: see a9tcon.h. No vendor data, no allocation, memcpy/memset only.
++ * Stock addresses refer to vendor.qti.hardware.display.composer-service,
++ * sha256 8c89557b... (vaddr == file offset); docs/mainline-plan.md section 4. */
++#include "a9tcon.h"
++
++#include <string.h>
++
++/* floor(v / 2^n), independent of how the compiler shifts negative values */
++static inline int32_t asr(int32_t v, int n)
++{
++    return v >= 0 ? (v >> n) : -(int32_t)((uint32_t)(-(int64_t)v + ((1 << n) - 1)) >> n);
++}
++
++/* ---- tables ------------------------------------------------------------- */
++struct cls_desc {
++    size_t off;      /* offset of the class inside struct a9t_tables */
++    uint32_t rs;     /* row stride */
++    uint32_t slots;  /* rows loaded per frame */
++};
++
++static const struct cls_desc CLS[A9T_NCLASS] = {
++    [A9T_CLEAR3] = {offsetof(struct a9t_tables, clear3), A9T_RS_CLEAR, 257},
++    [A9T_TYPE2] = {offsetof(struct a9t_tables, type2), A9T_RS_CLEAR, 257},
++    [A9T_BALANCED] = {offsetof(struct a9t_tables, balanced), A9T_RS_BAL, 256},
++    [A9T_SMOOTH] = {offsetof(struct a9t_tables, smooth), A9T_RS_SMOOTH, 256},
++    [A9T_SPEED] = {offsetof(struct a9t_tables, speed), A9T_RS_SMOOTH, 257},
++};
++
++static enum a9t_class type_class(uint32_t type)
++{
++    switch (type) {
++    case 1: return A9T_BALANCED;
++    case 2: return A9T_TYPE2;
++    case 6: case 8: return A9T_SMOOTH;
++    case 9: return A9T_SPEED;
++    default: return A9T_CLEAR3; /* 3, 4, 5, 7 and anything else */
++    }
++}
++
++static const uint8_t *cls_bin(const struct a9t_tables *t, enum a9t_class c, int bin)
++{
++    return (const uint8_t *)t + CLS[c].off + (size_t)bin * A9T_SLOTS * CLS[c].rs;
++}
++
++/* ---- setup -------------------------------------------------------------- */
++void a9t_init(struct a9t_state *s, const struct a9t_tables *t, uint8_t *cache)
++{
++    memset(s, 0, sizeof(*s));
++    s->t = t;
++    s->cache = cache;
++    memset(cache, 0, A9T_FRAME_BYTES);
++    a9t_set_controls(s, 30, 30, 0);
++}
++
++/* grey lookup builders 0x1a48c8 (g2) / 0x1a49a4 (g16), EpdSetContrast knobs */
++void a9t_set_controls(struct a9t_state *s, int32_t black, int32_t white, int32_t contrast)
++{
++    int32_t b = (black >= 0 && black <= 100) ? black : 30;
++    int32_t h = (white >= 0 && white <= 100) ? 255 - (7 * white / 20) : 244;
++    int32_t m = (contrast >= 0 && contrast <= 100) ? 50 + 80 * (100 - contrast) / 100 : 130;
++    int32_t c = (contrast >= 0 && contrast <= 100) ? contrast : 0;
++    for (int32_t x = 0; x < 256; x++) {
++        int32_t q;
++        if (b < x && x <= 200)
++            q = (x - b) * m / (200 - b);
++        else if (201 <= x && x < h)
++            q = (x - 200) * (255 - m) / (h - 200) + m;
++        else
++            q = x < h ? 0 : 255;
++        s->g2[x] = (uint8_t)q;
++        if (c == 0)
++            s->g16[x] = (uint8_t)x;
++        else if (x <= 200)
++            s->g16[x] = (uint8_t)(x * (200 - c) / 200);
++        else
++            s->g16[x] = (uint8_t)((x - 200) * (c + 55) / 55 + 200 - c);
++    }
++}
++
++/* EinkSwTconThreadHandler 0x1a7a94..0x1a7b28 */
++static int32_t clamp_t(int32_t t)
++{
++    if ((uint32_t)t & 0x80)
++        return 0; /* stock quirk: bit 7 set reads as 0 */
++    return t < 50 ? t : 50;
++}
++
++int a9t_temp_bin(const struct a9t_state *s, int32_t t1, int32_t t2)
++{
++    /* int64: stock traps (b.vs -> abort) where this would overflow int32 */
++    int64_t sum = 2 * (int64_t)clamp_t(t1) + clamp_t(t2);
++    int64_t avg = sum < 3 ? 0 : (sum > 152 ? 50 : sum / 3);
++    return s->t->bin_map[avg];
++}
++
++/* ---- RGBA -> grey + rotation (0x1a61b0..0x1a62f8, same code at 0x1a5e0c) ---
++ * luma (76 c0 + 150 c1 + 30 c2) >> 8 over the 832-stride portrait buffer, then
++ * 8x8 transposes: landscape grey[y][x] = luma(src row x, column 823 - y). */
++void a9t_rgba_to_grey(const uint8_t *rgba, uint8_t *grey)
++{
++    for (int y = 0; y < A9T_H; y++) {
++        const uint8_t *p = rgba + (size_t)(A9T_H - 1 - y) * 4;
++        uint8_t *o = grey + (size_t)y * A9T_W;
++        for (int x = 0; x < A9T_W; x++, p += A9T_SRC_STRIDE * 4)
++            o[x] = (uint8_t)((76u * p[0] + 150u * p[1] + 30u * p[2]) >> 8);
++    }
++}
++
++/* ---- dithers (rolling rows: row k lives in w->row[k & 3]) ---------------- */
++static void load_row(int32_t *dst, const uint8_t *grey, const uint8_t *lut, int y)
++{
++    const uint8_t *g = grey + (size_t)y * A9T_W;
++    for (int x = 0; x < A9T_W; x++)
++        dst[x] = lut[g[x]];
++}
++
++static void prime(struct a9t_work *w, const uint8_t *grey, const uint8_t *lut, int rows)
++{
++    for (int k = 0; k < rows && k < A9T_H; k++)
++        load_row(w->row[k], grey, lut, k);
++}
++
++/* serpentine 1-bit error diffusion, 0x1a741c..0x1a7640 */
++static void errdiff_1bit(const uint8_t *grey, const uint8_t *lut, uint8_t *lv, struct a9t_work *w)
++{
++    prime(w, grey, lut, 2);
++    for (int y = 0; y < A9T_H; y++) {
++        int32_t *cur = w->row[y & 1], *nxt = w->row[(y + 1) & 1];
++        int rev = y & 1, last = y >= A9T_H - 1, f = rev ? -1 : 1;
++        for (int scan = 0; scan < A9T_W; scan++) {
++            int x = rev ? A9T_W - 1 - scan : scan;
++            int32_t p = cur[x];
++            int32_t e = p > 127 ? p - 255 : p;
++            lv[(size_t)y * A9T_W + x] = p > 127 ? 15 : 0;
++            if (scan < A9T_W - 1)
++                cur[x + f] += asr(5 * e, 4);
++            if (!last) {
++                nxt[x] += asr(7 * e, 4);
++                if (scan < A9T_W - 1 && !(scan & 1))
++                    nxt[x + f] += asr(e, 3);
++                else if (scan & 1)
++                    nxt[x - f] += asr(e, 3);
++            }
++        }
++        if (y + 2 < A9T_H)
++            load_row(cur, grey, lut, y + 2);
++    }
++}
++
++/* 32x32 ordered dither, 0x1a764c / 0x1a78c8 */
++static void ordered_1bit(const struct a9t_state *s, const uint8_t *grey, const uint8_t *lut,
++                         uint8_t *lv)
++{
++    const uint8_t *m = s->t->dither;
++    for (int y = 0; y < A9T_H; y++)
++        for (int x = 0; x < A9T_W; x++) {
++            size_t i = (size_t)y * A9T_W + x;
++            uint8_t a = lut[grey[i]];
++            lv[i] = (a > m[(y & 31) * 32 + (x & 31)] || a > 0xef) ? 15 : 0;
++        }
++}
++
++/* DitherSStyle16, 0x1a8300: 16-level serpentine diffusion over 3 rows below */
++static void dither16(const uint8_t *grey, const uint8_t *lut, uint8_t *lv, struct a9t_work *w)
++{
++    prime(w, grey, lut, 4);
++    for (int y = 0; y < A9T_H; y++) {
++        int32_t *r0 = w->row[y & 3], *r1 = w->row[(y + 1) & 3];
++        int32_t *r2 = w->row[(y + 2) & 3], *r3 = w->row[(y + 3) & 3];
++        int rev = y & 1, low = y <= A9T_H - 4, f = rev ? -1 : 1;
++        for (int scan = 0; scan < A9T_W; scan++) {
++            int x = rev ? A9T_W - 1 - scan : scan;
++            int32_t p = r0[x];
++            int32_t q = p / 16, r = p - q * 16, e;
++            uint8_t o;
++            if (r <= 7) {
++                o = (uint8_t)(q * 16);
++                e = r;
++            } else if (p > 0xef) {
++                o = 0xff;
++                e = p - 255;
++            } else {
++                o = (uint8_t)((q + 1) * 16);
++                e = p - 16 * (q + 1);
++            }
++            int32_t e8 = asr(e, 3), e38 = asr(3 * e, 3);
++            int32_t d = e8 / 3, d2 = e38 / 3, h = e8 / 2;
++            int k = scan % 3;
++            if (scan <= A9T_W - 2)
++                r0[x + f] += k <= 1 ? e8 : h;
++            if (low) {
++                r1[x] += d;
++                r3[x] += d;
++                r2[x] += (rev && k == 2) ? h : d;
++                if (scan <= A9T_W - 2 && !(scan & 1)) {
++                    r1[x + f] += d2 + (k == 2 ? h : 0);
++                    r2[x + f] += d2;
++                    r3[x + f] += d2;
++                } else if (scan & 1) {
++                    r1[x - f] += d2;
++                    r2[x - f] += d2;
++                    r3[x - f] += d2;
++                }
++            }
++            lv[(size_t)y * A9T_W + x] = o >> 4;
++        }
++        if (y + 4 < A9T_H)
++            load_row(r0, grey, lut, y + 4);
++    }
++}
++
++/* conditioning 0x1a7338..0x1a79b8 (jump table 0x2ac3c on the mode's low byte) */
++void a9t_condition(const struct a9t_state *s, const uint8_t *grey, uint32_t mode,
++                   uint8_t *lv, struct a9t_work *w)
++{
++    uint32_t lo = mode & 0xff, hi = (mode >> 8) & 0xff;
++    switch (lo) {
++    case 1:
++    case 6:
++        if (hi & 4)
++            ordered_1bit(s, grey, s->g2, lv);
++        else
++            errdiff_1bit(grey, s->g2, lv, w);
++        return;
++    case 9:
++        ordered_1bit(s, grey, s->g2, lv);
++        return;
++    case 2:
++        dither16(grey, s->g16, lv, w);
++        return;
++    case 3:
++        if (hi & 1) {
++            dither16(grey, s->g16, lv, w);
++            return;
++        }
++        for (size_t i = 0; i < A9T_N; i++)
++            lv[i] = s->g16[grey[i]] >> 4;
++        return;
++    default: /* 0, 4, 5, 7, 8: no conditioning */
++        for (size_t i = 0; i < A9T_N; i++)
++            lv[i] = grey[i] >> 4;
++    }
++}
++
++/* packing 0x1a7a00 (plain) / 0x1a7e64 (mode 3, clear 0: the 256 sentinel) */
++void a9t_pack(const uint8_t *old, const uint8_t *nw, uint32_t mode, int clear, uint16_t *pairs)
++{
++    for (size_t i = 0; i < A9T_N; i++)
++        pairs[i] = (uint16_t)(old[i] << 4 | nw[i]);
++    if ((mode & 0xff) != 3 || clear)
++        return;
++#define STEADY(j) (old[j] == 15 && nw[j] == 15)
++    for (int y = 0; y < A9T_H; y++)
++        for (int x = 0; x < A9T_W; x++) {
++            size_t i = (size_t)y * A9T_W + x;
++            if (old[i] == 15 || nw[i] != 15)
++                continue;
++            if (x > 0 && STEADY(i - 1))
++                pairs[i - 1] = 256;
++            else if (x < A9T_W - 1 && STEADY(i + 1))
++                pairs[i + 1] = 256;
++            else if (y > 0 && STEADY(i - A9T_W))
++                pairs[i - A9T_W] = 256;
++            else if (y < A9T_H - 1 && STEADY(i + A9T_W))
++                pairs[i + A9T_W] = 256;
++        }
++#undef STEADY
++}
++
++/* 0x1a7a68..0x1a7a8c: clear on types 1/3 selects the type-2 table */
++int a9t_final_type(uint32_t mode, int clear)
++{
++    uint32_t t = mode & 0xff;
++    return ((t | 2) == 3 && clear) ? 2 : (int)t;
++}
++
++/* ---- frames (lookUpTable 0x1d1690) --------------------------------------- */
++static void load_lut(struct a9t_state *s, enum a9t_class c, int bin, uint32_t frame)
++{
++    const uint8_t *p = cls_bin(s->t, c, bin) + frame + 1;
++    for (uint32_t i = 0; i < CLS[c].slots; i++)
++        s->scratch[i] = p[i * CLS[c].rs];
++}
++
++/* Writes byte 0 of every word; bytes 1..3 are never written (as stock). */
++static void render(const struct a9t_state *s, const uint16_t *pairs, uint8_t *out)
++{
++    const uint8_t *lut = s->scratch; /* pairs must be <= 256 */
++    for (int r = 0; r < A9T_TH; r++) {
++        uint8_t *o = out + (size_t)r * A9T_TW * 4;
++        int w = 0;
++        if (r >= A9T_HEAD_ROWS) {
++            const uint16_t *p = pairs + (size_t)(r - A9T_HEAD_ROWS) * A9T_W;
++            for (; w < A9T_DATA_WORDS; w++, p += 4)
++                o[w * 4] = (uint8_t)(lut[p[0]] << 6 | lut[p[1]] << 4 | lut[p[2]] << 2 | lut[p[3]]);
++        }
++        for (; w < A9T_TW; w++)
++            o[w * 4] = 0;
++    }
++}
++
++int a9t_lookup(struct a9t_state *s, uint32_t type, int bin, const uint16_t *pairs, uint8_t *out)
++{
++    enum a9t_class c = type_class(type);
++    int32_t len = cls_bin(s->t, c, bin)[0];
++    int32_t n = (int32_t)s->counter;
++    int bal = c == A9T_BALANCED;
++    int hold = c == A9T_SMOOTH || c == A9T_SPEED || (bal && !s->balanced_full);
++    if (!hold) { /* every frame from the table */
++        load_lut(s, c, bin, (uint32_t)n);
++        render(s, pairs, out);
++        n++;
++        s->counter = n >= len ? 0 : (uint32_t)n;
++        return n < len;
++    }
++    if (n == 0) { /* frame 0 from the table, cached */
++        load_lut(s, c, bin, 0);
++        render(s, pairs, out);
++        memcpy(s->cache, out, A9T_FRAME_BYTES);
++        s->counter = 1;
++        return 1;
++    }
++    int32_t last = bal ? len - 2 : len - 1;
++    if (n >= 1 && n < last) {
++        memcpy(out, s->cache, A9T_FRAME_BYTES);
++    } else if (bal && n == last) { /* Balanced emits two null frames */
++        memset(out, 0, A9T_FRAME_BYTES);
++    } else { /* final null frame */
++        memset(out, 0, A9T_FRAME_BYTES);
++        s->counter = 0;
++        return 0;
++    }
++    s->counter = (uint32_t)n + 1;
++    return 1;
++}
++
++/* the one-time init flash, 0x1a7d04..0x1a7df0: uniform frames */
++int a9t_init_frame(struct a9t_state *s, int bin, uint8_t *out)
++{
++    const uint8_t *row = s->t->init + (size_t)bin * A9T_INIT_STRIDE;
++    uint32_t len = row[0], n = s->counter;
++    uint8_t code = (uint8_t)((row[n + 1] & 3) * 0x55);
++    for (int r = 0; r < A9T_TH; r++) {
++        uint8_t *o = out + (size_t)r * A9T_TW * 4;
++        for (int w = 0; w < A9T_TW; w++)
++            o[w * 4] = (r >= A9T_HEAD_ROWS && w < A9T_DATA_WORDS) ? code : 0;
++    }
++    n++;
++    if (n >= len) {
++        s->counter = 0;
++        s->init_done = 1;
++        return 0;
++    }
++    s->counter = n;
++    return 1;
++}
++
++/* ---- mode switch (transition handler 0x1a6604..0x1a6e98) ----------------- */
++static void req1(struct a9t_request *r, uint32_t code, uint32_t t)
++{   /* stur d9/d10 (1,t) at +0xc; strb 0xf at +0x24 */
++    r->kind = 1, r->code = code, r->count = 1, r->type[0] = t, r->level[0] = 0xf;
++}
++
++static void req4(struct a9t_request *r, uint32_t code, uint32_t t)
++{   /* q (4,t,t,t) at +0xc, word t at +0x1c, word 0x0f000000 at +0x24 */
++    r->kind = 1, r->code = code, r->count = 4;
++    r->type[0] = r->type[1] = r->type[2] = r->type[3] = t;
++    r->level[0] = r->level[1] = r->level[2] = 0, r->level[3] = 0xf;
++}
++
++static void req5(struct a9t_request *r, uint32_t t1, uint32_t t)
++{   /* q (5,t1,t,t) at +0xc, d (t,t) at +0x1c, word 0xf at +0x24, byte 0xf at +0x28 */
++    r->count = 5, r->type[0] = t1;
++    r->type[1] = r->type[2] = r->type[3] = r->type[4] = t;
++    r->level[0] = 0xf, r->level[1] = r->level[2] = r->level[3] = 0, r->level[4] = 0xf;
++}
++
++uint32_t a9t_request_build(struct a9t_request *r, uint32_t pre_mode, uint32_t cur_mode,
++                           int flag_6c7, int *clear, int *clear_reset)
++{
++    uint32_t pre = pre_mode & 0xff, cur = cur_mode & 0xff;
++    uint32_t mode = cur_mode | (flag_6c7 ? 0 : 0x100);
++    r->kind = r->full = r->code = r->count = 0; /* stp xzr, xzr, [S] */
++    *clear_reset = 0;
++    if (pre == cur && !*clear)
++        return mode; /* 0x1a6690: steady update */
++    int generic = 0;
++    switch (cur) {   /* jump table 0x2ac22 */
++    case 1:
++        if (pre == 2 || pre == 3) r->kind = 1, r->full = 1, generic = 1;
++        else if (pre == 6) req1(r, 2, 6), *clear = 1;
++        else if (pre == 9) req1(r, 3, 9), *clear = 1;
++        else generic = 1;
++        break;
++    case 2:
++        if (pre == 9) req4(r, 8, 9);
++        else if (pre == 6) req4(r, 7, 6);
++        else if (pre == 1) {
++            r->kind = 1, r->code = 9, r->count = 2, r->type[0] = 1, r->type[1] = 1;
++            r->level[0] = 0, r->level[1] = 0xf;
++        } else generic = 1;
++        break;
++    case 3:
++        if (pre == 9) req1(r, 3, 9), *clear = 1;
++        else if (pre == 6) req1(r, 2, 6), *clear = 1;
++        else {
++            if (pre == 1) r->kind = 1;
++            generic = 1;
++        }
++        break;
++    case 6:
++        r->kind = 1;
++        if (pre == 2 || pre == 3) r->code = 1, req5(r, 3, 6);
++        else if (pre == 1) r->code = 6, req5(r, 1, 6);
++        else if (pre == 9) r->code = 5, req5(r, 9, 6);
++        else r->kind = 0, generic = 1;
++        break;
++    case 9:
++        r->kind = 1;
++        if (pre == 2 || pre == 3) r->code = 0xb, req5(r, 3, 9);
++        else if (pre == 1) r->code = 0xc, req5(r, 1, 9);
++        else if (pre == 6) r->code = 4, req5(r, 6, 9);
++        else r->kind = 0, generic = 1;
++        break;
++    default:
++        generic = 1;
++    }
++    if (generic && r->kind != 1 && *clear) { /* 0x1a6924: clear request */
++        r->kind = 2;
++        if (cur == 3) r->count = 1, r->type[0] = 3, r->level[0] = 0xf;
++        else if (cur == 9) req5(r, 9, 9);
++        else if (cur == 6) req5(r, 6, 6);
++    }
++    /* generic with kind 1: code is 0 here, so no steps (0x1a68ec..0x1a6900) */
++    *clear_reset = *clear != 0; /* 0x1a6e98 */
++    return mode;
++}
++
++static void fill(uint16_t *a, uint8_t from, uint8_t to)
++{
++    uint16_t v = (uint16_t)(from << 4 | to);
++    for (size_t i = 0; i < A9T_N; i++)
++        a[i] = v;
++}
++
++/* 0x1a6ab0..0x1a6e78 (jump table 0x2ac37 on count - 1) */
++void a9t_request_arrays(const struct a9t_request *r, uint8_t *old, uint16_t *const arr[5])
++{
++    const uint8_t *l = r->level;
++    uint8_t to;
++    if (r->count < 1 || r->count > 5)
++        return;
++    uint8_t first = r->count == 1 ? 0xf : l[0];
++    for (size_t i = 0; i < A9T_N; i++)
++        arr[0][i] = (uint16_t)(old[i] << 4 | first);
++    switch (r->count) {
++    case 1: to = 0xf; break;
++    case 2: fill(arr[1], l[0], l[1]); to = l[1]; break;
++    case 3: fill(arr[1], l[0], l[1]); fill(arr[2], l[1], l[2]); to = l[2]; break;
++    case 4:
++        fill(arr[1], l[0], l[1]); fill(arr[2], l[1], l[2]); fill(arr[3], l[2], l[3]);
++        to = l[3];
++        break;
++    default: /* 5: stock writes S+0x48 twice and never S+0x50 (MEASURED) */
++        fill(arr[1], l[0], l[1]); fill(arr[2], l[1], l[2]); fill(arr[3], l[3], l[4]);
++        to = l[4];
++        break;
++    }
++    memset(old, to, A9T_N);
++}
++
++/* frame dispatch 0x1a7c78..0x1a81c4 (jump table 0x2ac4e on the step index) */
++void a9t_update_begin(struct a9t_state *s)
++{
++    s->step = 0; /* 0x1a7abc */
++}
++
++int a9t_update_frame(struct a9t_state *s, const struct a9t_request *r, uint16_t *const arr[5],
++                     uint32_t type, int bin, const uint16_t *pairs, uint8_t *out)
++{
++    uint32_t count = r ? r->count : 0;
++    if (r)
++        s->balanced_full = r->full;
++    if (count == 0 || s->step >= count)
++        return a9t_lookup(s, type, bin, pairs, out);
++    if (s->step > 4) { /* unreachable with count <= 5 */
++        s->step++;
++        return 1;
++    }
++    if (!a9t_lookup(s, r->type[s->step], bin, arr[s->step], out))
++        s->step++;
++    return 1;
++}
+diff --git a/drivers/gpu/drm/a9_eink/a9tcon.h b/drivers/gpu/drm/a9_eink/a9tcon.h
+new file mode 100644
+index 000000000..9b68d66a3
+--- /dev/null
++++ b/drivers/gpu/drm/a9_eink/a9tcon.h
+@@ -0,0 +1,151 @@
++/* a9tcon: standalone software TCON for the Hisense A9 (HLTE556N) E Ink panel.
++ *
++ * C port of scripts/mainline/a9tcon.py, extended with the mode-switch step
++ * sequences and the RGBA -> grey + rotation stage. Checked byte for byte against
++ * the stock composer code running under Unicorn (scripts/mainline/tcon-oracle.py,
++ * test: scripts/mainline/tcon/test-tcon-c.py). docs/mainline-plan.md section 4.
++ *
++ * This file and a9tcon.c carry NO vendor data. The waveform tables, the
++ * temperature bin map, the init flash and the 32x32 dither matrix are copied at
++ * run time from the user's own composer binary by a9t_load() (a9tcon-load.c).
++ *
++ * Core (a9tcon.c): C11, freestanding-friendly. No allocation, no libc beyond
++ * memcpy/memset; every buffer is passed in by the caller. Integer only.
++ *
++ * Geometry: the TCON works on a landscape 1648 x 824 grey/level buffer
++ * (row-major, 1648 bytes per row). A drive frame is 448 x 829 words of 4 bytes
++ * (XRGB8888 on the DSI link); only byte 0 of words 0..411 of rows 5..828 carries
++ * data (4 pixels, 2 bits each).
++ */
++#ifndef A9TCON_H
++#define A9TCON_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++#define A9T_W 1648
++#define A9T_H 824
++#define A9T_N (A9T_W * A9T_H)
++#define A9T_TW 448
++#define A9T_TH 829
++#define A9T_FRAME_BYTES (A9T_TW * A9T_TH * 4) /* 1,485,568 */
++#define A9T_HEAD_ROWS 5
++#define A9T_DATA_WORDS (A9T_W / 4) /* 412 */
++
++/* SurfaceFlinger's portrait buffer: 1648 rows of 832 RGBA pixels (824 used). */
++#define A9T_SRC_STRIDE 832
++#define A9T_SRC_ROWS 1648
++#define A9T_SRC_BYTES (A9T_SRC_STRIDE * A9T_SRC_ROWS * 4)
++
++#define A9T_BINS 14
++#define A9T_SLOTS 257
++
++/* Waveform classes (lookUpTable jump table): */
++enum a9t_class { A9T_CLEAR3, A9T_TYPE2, A9T_BALANCED, A9T_SMOOTH, A9T_SPEED, A9T_NCLASS };
++
++/* Tables lifted from the composer. Raw layout as in the binary: per class,
++ * A9T_BINS bins of 257 rows; row = [length][code per frame ...]. */
++#define A9T_RS_CLEAR 0x6a
++#define A9T_RS_BAL 0x38
++#define A9T_RS_SMOOTH 0x1e
++#define A9T_INIT_STRIDE 0x78
++
++struct a9t_tables {
++    uint8_t bin_map[51];
++    uint8_t dither[32 * 32];
++    uint8_t init[A9T_BINS * A9T_INIT_STRIDE];
++    uint8_t clear3[A9T_BINS * A9T_SLOTS * A9T_RS_CLEAR];
++    uint8_t type2[A9T_BINS * A9T_SLOTS * A9T_RS_CLEAR];
++    uint8_t balanced[A9T_BINS * A9T_SLOTS * A9T_RS_BAL];
++    uint8_t smooth[A9T_BINS * A9T_SLOTS * A9T_RS_SMOOTH];
++    uint8_t speed[A9T_BINS * A9T_SLOTS * A9T_RS_SMOOTH];
++};
++
++/* Mode-switch request (the stock object at this+0x19e7418, "S"). */
++struct a9t_request {
++    uint32_t kind;     /* +0x00: 0 none, 1 mode change, 2 clear request */
++    uint32_t full;     /* +0x04: 1 = Balanced uses the full table (no hold) */
++    uint32_t code;     /* +0x08: transition code */
++    uint32_t count;    /* +0x0c: number of steps (0..5) */
++    uint32_t type[5];  /* +0x10..+0x20: waveform type per step */
++    uint8_t level[5];  /* +0x24..+0x28: target levels of the steps */
++};
++
++/* Engine state (globals in the stock binary). */
++struct a9t_state {
++    const struct a9t_tables *t;
++    uint8_t g2[256], g16[256];
++    uint8_t scratch[A9T_SLOTS]; /* 0x4c86d9; slot 256 survives 256-slot loads */
++    uint32_t counter;           /* 0x4c7fbc, frame index inside one table pass */
++    uint32_t step;              /* 0x4c86d4, step index of a mode switch */
++    int init_done;              /* 0x4c7fb8 bit 0 */
++    uint32_t balanced_full;     /* request S+4, read by lookUpTable */
++    uint8_t *cache;             /* A9T_FRAME_BYTES, frame 0 of a hold pass */
++};
++
++/* Dither working rows (rolling, 4 x 1648 int32). */
++struct a9t_work {
++    int32_t row[4][A9T_W];
++};
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* --- loader (a9tcon-load.c; hosted: needs only memcpy) ------------------- */
++#define A9T_COMPOSER_SHA256 "8c89557bf47b57b1687b9fbcc3e55bedbee175d20f80d14bc5317fcf893df5ed"
++/* Returns 0 on success, -1 on a size or sha256 mismatch. */
++int a9t_load(struct a9t_tables *t, const uint8_t *composer, size_t len);
++/* sizes for FFI users: 0 tables, 1 state, 2 work, 3 request */
++size_t a9t_sizeof(int what);
++void a9t_sha256(const uint8_t *data, size_t len, uint8_t out[32]);
++struct a9t_sha256_ctx {
++    uint32_t h[8];
++    uint8_t buf[64];
++    size_t n;
++    uint64_t total;
++};
++void a9t_sha256_init(struct a9t_sha256_ctx *c);
++void a9t_sha256_update(struct a9t_sha256_ctx *c, const uint8_t *p, size_t len);
++void a9t_sha256_final(struct a9t_sha256_ctx *c, uint8_t out[32]);
++
++/* --- core ------------------------------------------------------------------ */
++void a9t_init(struct a9t_state *s, const struct a9t_tables *t, uint8_t *cache);
++void a9t_set_controls(struct a9t_state *s, int32_t black, int32_t white, int32_t contrast);
++int a9t_temp_bin(const struct a9t_state *s, int32_t t1, int32_t t2);
++
++/* RGBA (A9T_SRC_BYTES, portrait) -> landscape grey (A9T_N). */
++void a9t_rgba_to_grey(const uint8_t *rgba, uint8_t *grey);
++
++/* grey (A9T_N) -> target levels 0..15 (A9T_N). */
++void a9t_condition(const struct a9t_state *s, const uint8_t *grey, uint32_t mode,
++                   uint8_t *levels, struct a9t_work *w);
++/* (old, new) levels -> uint16 index (old<<4|new, or 256 = cleanup sentinel). */
++void a9t_pack(const uint8_t *old, const uint8_t *new_, uint32_t mode, int clear, uint16_t *pairs);
++int a9t_final_type(uint32_t mode, int clear);
++
++/* One lookUpTable call: fills out (A9T_FRAME_BYTES). Returns 1 = more frames. */
++int a9t_lookup(struct a9t_state *s, uint32_t type, int bin, const uint16_t *pairs, uint8_t *out);
++/* One frame of the one-time init flash. Returns 1 = more frames. */
++int a9t_init_frame(struct a9t_state *s, int bin, uint8_t *out);
++
++/* Mode switch. a9t_request_build: the transition handler, run once per update
++ * with the previous mode's low byte and the new mode word. *clear is the
++ * update's clear flag (may be set); *clear_reset is set when the clear flag must
++ * be cleared after this update. Returns the mode word the update runs with.
++ * flag_6c7 = the engine byte this+0x6c7 (0 adds 0x100 to the mode word). */
++uint32_t a9t_request_build(struct a9t_request *r, uint32_t pre_mode, uint32_t cur_mode,
++                           int flag_6c7, int *clear, int *clear_reset);
++/* Fill the step index arrays (5 x A9T_N uint16, persistent between updates)
++ * from old levels, then set old := the last step's level. */
++void a9t_request_arrays(const struct a9t_request *r, uint8_t *old, uint16_t *const arr[5]);
++/* One frame of an update with steps: the steps, then the final pass
++ * (type, pairs). Call a9t_update_begin() once before the first frame. */
++void a9t_update_begin(struct a9t_state *s);
++int a9t_update_frame(struct a9t_state *s, const struct a9t_request *r, uint16_t *const arr[5],
++                     uint32_t type, int bin, const uint16_t *pairs, uint8_t *out);
++
++#ifdef __cplusplus
++}
++#endif
++#endif
+diff --git a/drivers/gpu/drm/a9_eink/kcompat/stddef.h b/drivers/gpu/drm/a9_eink/kcompat/stddef.h
+new file mode 100644
+index 000000000..54671272f
+--- /dev/null
++++ b/drivers/gpu/drm/a9_eink/kcompat/stddef.h
+@@ -0,0 +1,3 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#include <linux/stddef.h>
++#include <linux/types.h>
+diff --git a/drivers/gpu/drm/a9_eink/kcompat/stdint.h b/drivers/gpu/drm/a9_eink/kcompat/stdint.h
+new file mode 100644
+index 000000000..cb90d8471
+--- /dev/null
++++ b/drivers/gpu/drm/a9_eink/kcompat/stdint.h
+@@ -0,0 +1,3 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* a9_eink: lets the freestanding a9tcon core build in the kernel unchanged. */
++#include <linux/types.h>
+diff --git a/drivers/gpu/drm/a9_eink/kcompat/string.h b/drivers/gpu/drm/a9_eink/kcompat/string.h
+new file mode 100644
+index 000000000..d2b7d885f
+--- /dev/null
++++ b/drivers/gpu/drm/a9_eink/kcompat/string.h
+@@ -0,0 +1,2 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#include <linux/string.h>

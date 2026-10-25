@@ -1,0 +1,16 @@
+# Installed only by the explicit Bluetooth build option with a verified HAL.
+# The controller/firmware/address bring-up owner raises ready after its gates.
+# No UART or power GPIO is opened here: Linux serdev/QCA owns those resources.
+service vendor.a9-bt-hal /vendor/bin/hw/android.hardware.bluetooth-service.default
+    class hal
+    user bluetooth
+    group bluetooth net_bt_admin
+    capabilities NET_ADMIN
+    disabled
+    oneshot
+
+on property:vendor.a9.bt.ready=1
+    start vendor.a9-bt-hal
+
+on property:vendor.a9.bt.ready=0
+    stop vendor.a9-bt-hal

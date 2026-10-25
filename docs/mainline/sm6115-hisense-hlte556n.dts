@@ -1,0 +1,712 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
+/*
+ * Hisense A9 (HLTE556N) -- mainline device tree, 2026-10-14, revised 2026-10-15.
+ * Status: builds against linux v7.2.10 (scripts/mainline/kernel/build.sh) and
+ * passes the phone's own ABL DT selection offline with hlte556n-null-overlay.dts
+ * (scripts/abl-check.sh, recovery and boot+dtbo). Booted once (2026-10-15,
+ * unapproved): reset loop, no USB, no log; see docs/mainline-kernel-build.md.
+ *
+ * Every value comes from the stock DT (golden edl_2026-10-14_110759,
+ * lun4/boot_a.bin DTB + lun4/dtbo_a.bin, decompiled with dtc, fixups resolved
+ * with scripts/mainline/dtbo-resolve.py) unless marked INFERRED. "NO UPSTREAM
+ * BINDING" marks compatibles proposed by the A9 patch series
+ * (scripts/mainline/kernel/patches) or not written at all.
+ *
+ * This tree is for the first, DISKLESS boot: console, USB gadget, pstore.
+ * Storage (UFS, SD), GPU and remote processors are disabled. The E Ink stack
+ * is described but powered only on request (see the panel and epd_pmic nodes
+ * and docs/mainline-kernel-build.md section "Safety").
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/iio/qcom,spmi-vadc.h>
+#include "sm6115.dtsi"
+#include "pm6125.dtsi"
+#include "pmi632.dtsi"
+
+/ {
+	model = "Hisense A9 (HLTE556N)";
+	compatible = "hisense,hlte556n", "qcom,sm6115";
+	chassis-type = "handset";
+
+	/*
+	 * Required by the A9's ABL (LinuxLoader 1dd55dcb..., GetSocDtb /
+	 * ReadDtbFindMatch), measured with scripts/abl-check.sh:
+	 *  - the phone reports SoC id 0x1bc rev 0x10000; a DTB with only
+	 *    <0x1a1 0x10000> is rejected. Both pairs are kept, as in stock.
+	 *  - the ABL ALWAYS applies a board overlay matching board-id 0x1000b
+	 *    from the image's recovery_dtbo (recovery boot) or the dtbo
+	 *    partition (normal boot). The stock DTBO fails on a mainline base,
+	 *    so the image carries hlte556n-null-overlay.dts.
+	 *  - compile with dtc -@ (the overlay's fixup needs __symbols__).
+	 */
+	qcom,msm-id = <0x1a1 0x10000>, <0x1bc 0x10000>;
+	qcom,board-id = <0x1000b 0>;
+
+	aliases {
+		serial0 = &uart4;	/* stock qupv3_se4_2uart, earlycon 0x4a90000 */
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+		pinctrl-0 = <&vol_up_n>, <&eink_key_default>;
+		pinctrl-names = "default";
+
+		key-volume-up {
+			label = "Volume Up";
+			gpios = <&pm6125_gpios 5 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_VOLUMEUP>;
+			debounce-interval = <15>;
+			linux,can-disable;
+			wakeup-source;
+		};
+
+		/* Stock key_ai: scancode 0x2fe; vendor layout preserves it for a9service. */
+		key-eink {
+			label = "E Ink";
+			gpios = <&tlmm 84 GPIO_ACTIVE_LOW>;
+			linux,code = <0x2fe>;
+			debounce-interval = <15>;
+			linux,can-disable;
+			wakeup-source;
+		};
+	};
+
+	/* Touch supplies: stock drives them as plain GPIOs (atmel,vccio-gpio / vdd-gpio). */
+	ts_vccio: regulator-ts-vccio {
+		compatible = "regulator-fixed";
+		regulator-name = "ts_vccio";
+		gpio = <&tlmm 21 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+	};
+
+	ts_vdd: regulator-ts-vdd {
+		compatible = "regulator-fixed";
+		regulator-name = "ts_vdd";
+		gpio = <&tlmm 108 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+	};
+
+	/*
+	 * TC358767 VDDC enable (stock qcom,platform-dsi2dpi-vdcc-en-gpio).
+	 * regulator-boot-on: keep the line as the bootloader left it at probe
+	 * (a fixed regulator without it drives the GPIO low at once, which could
+	 * cut the bridge while the bootloader's E Ink rails are still up). Unused,
+	 * it is switched off by the regulator core's late cleanup (~30 s), long
+	 * after the FP9929A driver has powered the rails down.
+	 */
+	bridge_vddc: regulator-bridge-vddc {
+		compatible = "regulator-fixed";
+		regulator-name = "tc358767_vddc";
+		gpio = <&tlmm 31 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-boot-on;
+		/*
+		 * Stock order: vddio (L9 1.8 V) on, 20 ms, then vdcc_en. With
+		 * L9 as the input the regulator core enables it first (at
+		 * registration too, because of regulator-boot-on).
+		 */
+		vin-supply = <&pm6125_l9>;
+		startup-delay-us = <20000>;
+	};
+
+	/*
+	 * TC358767 reference clock: not described in the stock DT. The vendor
+	 * table sets SYS_PLLPARAM REF_FREQ = 19.2 MHz (INFERRED: a 19.2 MHz
+	 * clock reaches the bridge). The A9 init sequence below does not use
+	 * the RefClk for the pixel PLL.
+	 */
+	bridge_refclk: bridge-refclk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <19200000>;
+	};
+
+	/*
+	 * NO UPSTREAM BINDING (proposed, patch 0003): the E Ink "transport"
+	 * panel. 448x829 at 85 Hz, drive data in byte 0 of every XRGB8888
+	 * pixel, produced by the software TCON. Powers the FP9929A in prepare.
+	 * Refuses to do so unless panel_hisense_hlte556n_eink.enable=1.
+	 */
+	eink_panel: panel {
+		compatible = "hisense,hlte556n-eink";
+		vpanel-supply = <&epd_pmic>;
+		xon-gpios = <&tlmm 25 GPIO_ACTIVE_HIGH>;	/* epd-xon */
+		power-gpios = <&tlmm 33 GPIO_ACTIVE_HIGH>;	/* epd-power-on */
+		xoe-gpios = <&tlmm 34 GPIO_ACTIVE_HIGH>;	/* epd-xoe */
+		mode-gpios = <&tlmm 81 GPIO_ACTIVE_HIGH>;	/* epd-mode */
+		mux-gpios = <&tlmm 2 GPIO_ACTIVE_HIGH>;		/* i2c-mux-sel, purpose unknown */
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&bridge_out>;
+			};
+		};
+	};
+
+	/*
+	 * sync_state HOLD (NO DRIVER, on purpose). With fw_devlink strict (the 7.2
+	 * default) a consumer that never probes keeps its suppliers from running
+	 * sync_state(): rpmpd would otherwise vote corner 0 on every domain
+	 * (CX/MX) the moment the display (its only other consumers) binds, gcc's
+	 * of_genpd_sync_state would power off GDSCs it thinks unused, and
+	 * icc_sync_state would drop the boot bandwidth. This node keeps all
+	 * three pending for the whole session, whatever modules are loaded.
+	 * Never write a state_synced file, never use fw_devlink.sync_state=timeout.
+	 */
+	sync-state-hold {
+		compatible = "hisense,hlte556n-sync-hold";
+		power-domains = <&rpmpd SM6115_VDDCX>;
+		clocks = <&gcc GCC_DISP_HF_AXI_CLK>;
+		interconnects = <&bimc MASTER_AMPSS_M0 RPM_ALWAYS_TAG
+				 &bimc SLAVE_EBI_CH0 RPM_ALWAYS_TAG>;
+	};
+
+	/*
+	 * NO UPSTREAM BINDING (proposed, scripts/mainline/eink patch 0007): the
+	 * E Ink display as userspace sees it, 824x1648, with the software TCON
+	 * in the kernel (a9_eink). It scans its drive frames out through the
+	 * transport panel above (msm DSI0 -> TC358767) and reads the FP9929A
+	 * state and the PMI632 E Ink thermistor. epd-supply is only used to
+	 * force the rails down if a pipeline power-down fails. Sends nothing
+	 * unless a9_eink.enable=1.
+	 */
+	eink-display {
+		compatible = "hisense,hlte556n-eink-display";
+		hisense,transport-panel = <&eink_panel>;
+		hisense,epd-pmic = <&epd_pmic>;
+		epd-supply = <&epd_pmic>;
+		io-channels = <&pmi632_adc ADC5_GPIO3_100K_PU>;
+		io-channel-names = "epd-therm";
+	};
+
+	/* NO UPSTREAM BINDING: Sunwave SW9261 fingerprint (GPIO/IRQ shim; matching is a TEE TA). */
+
+	reserved-memory {
+		/*
+		 * Hisense debug regions (stock base DTB), kept out of the kernel's
+		 * reach so that the stock kernel's logs there survive a mainline
+		 * boot.
+		 */
+		hisense_boot_log: memory@b0000000 {
+			reg = <0x0 0xb0000000 0x0 0x80000>;
+			no-map;
+		};
+
+		hisense_subsys_trap: memory@b0080000 {
+			reg = <0x0 0xb0080000 0x0 0x100000>;
+			no-map;
+		};
+
+		hisense_rs_recorder: memory@b0180000 {
+			reg = <0x0 0xb0180000 0x0 0x400000>;
+			no-map;
+		};
+
+		/*
+		 * Same region and record sizes as the stock kernel's ramoops
+		 * (MEASURED: stock base DTB, no ecc-size, no max-reason; layout
+		 * dmesg 0x40000 + console 0x40000 + pmsg 0x40000 in that order in
+		 * both 4.19 and 7.2). Useful ONLY across a warm reset: this phone
+		 * resets with PS_HOLD = HARD_RESET (every stock boot log), DDR is
+		 * not kept and stock pstore is empty in practice. Mainline gets a
+		 * warm reset only with reboot=warm (PSCI SYSTEM_RESET2, untested
+		 * here); records are not compressed (CONFIG_PSTORE_COMPRESS off),
+		 * so the stock kernel could read them.
+		 */
+		ramoops@b0580000 {
+			compatible = "ramoops";
+			reg = <0x0 0xb0580000 0x0 0x100000>;
+			record-size = <0x40000>;
+			console-size = <0x40000>;
+			pmsg-size = <0x40000>;
+		};
+	};
+};
+
+/*
+ * Stock reserves 0x60000000-0x65bfffff ("removed_region"), upstream only
+ * 0x3900000 of it. The rest may belong to TZ/hypervisor (INFERRED); touching
+ * it would end in an XPU reset. Use the stock size.
+ * Other differences are harmless supersets (upstream ADSP 0x2800000 covers the
+ * stock IPA/GPU-zap regions at 0x55600000) and only matter once remoteprocs or
+ * the GPU are enabled (docs/mainline-plan.md section 3.1).
+ */
+&removed_mem {
+	reg = <0x0 0x60000000 0x0 0x5c00000>;
+};
+
+&sleep_clk {
+	clock-frequency = <32764>;	/* stock sleep_clk 0x7ffc */
+};
+
+&xo_board {
+	clock-frequency = <19200000>;
+};
+
+/* --- PMICs ---------------------------------------------------------------- */
+
+&pm6125_gpios {
+	vol_up_n: vol-up-n-state {
+		pins = "gpio5";
+		function = "normal";
+		power-source = <0>;
+		bias-pull-up;
+		input-enable;
+		output-disable;	/* Do not inherit firmware's output-enable state. */
+	};
+};
+
+&pon_pwrkey {
+	status = "okay";
+};
+
+&pon_resin {
+	linux,code = <KEY_VOLUMEDOWN>;	/* stock qcom,pon_2 linux,code 0x72 */
+	status = "okay";
+};
+
+&pmi632_adc {
+	/* E Ink top thermistor: PMI632 GPIO4, VADC channel 0x54, ratiometric. */
+	channel@54 {
+		reg = <ADC5_GPIO3_100K_PU>;
+		qcom,ratiometric;
+		qcom,hw-settle-time = <200>;
+		qcom,pre-scaling = <1 1>;
+		label = "epd_top_therm";
+	};
+};
+
+/*
+ * NO UPSTREAM DRIVER: PMI632 charger (stock qcom,qpnp-smb5) and fuel gauge
+ * (qcom,qpnp-qg, battery profile Hisense_HLTE556N_Highpower_4000mAH_PMI632),
+ * plus the SMB1355 parallel charger at i2c1 0x0c. Mainline neither charges
+ * nor monitors the battery: keep sessions short.
+ */
+
+&rpm_requests {
+	regulators-0 {
+		compatible = "qcom,rpm-pm6125-regulators";
+
+		/* only the rails our nodes use; ranges = stock base DTB */
+		/*
+		 * QUSB2 rails pinned to stock voltages (2026-10-15). The QUSB2
+		 * driver only enables its supplies; with the upstream ranges the
+		 * regulator core starts the rail at its MINIMUM (L4 488 mV, the
+		 * PHY needs 925-970 mV: stock qusb qcom,vdd-voltage-level), and the
+		 * RPM driver sends that voltage on enable (qcom_smd-regulator.c).
+		 */
+		pm6125_l4: l4 {		/* QUSB2 vdd, stock 925000-970000 */
+			regulator-min-microvolt = <928000>;
+			regulator-max-microvolt = <968000>;
+		};
+		pm6125_l5: l5 {		/* SD card I/O (vdd-io) */
+			regulator-min-microvolt = <1648000>;
+			regulator-max-microvolt = <3056000>;
+		};
+		pm6125_l7: l7 {		/* SD card io-bias */
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1304000>;
+		};
+		/*
+		 * 1.8 V panel/bridge I/O: stock dsi_panel_pwr_supply "vddio",
+		 * fixed 1.8 V, enable load 62 mA, 20 ms post-on sleep, enabled
+		 * first in dsi_panel_power_on and kept up (MEASURED, stock dtbo).
+		 */
+		pm6125_l9: l9 {
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+		};
+		pm6125_l11: l11 {	/* UFS vccq2 */
+			regulator-min-microvolt = <1704000>;
+			regulator-max-microvolt = <1952000>;
+		};
+		pm6125_l12: l12 {	/* QUSB2 vdda18 */
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+		};
+		pm6125_l15: l15 {	/* QUSB2 vdda33 */
+			regulator-min-microvolt = <3080000>;
+			regulator-max-microvolt = <3200000>;
+		};
+		/* DSI vdda-1p2: stock pins it at 1.232 V (load 21.8 mA); UFS is off */
+		pm6125_l18: l18 {
+			regulator-min-microvolt = <1232000>;
+			regulator-max-microvolt = <1232000>;
+		};
+		pm6125_l22: l22 {	/* SD card vdd */
+			regulator-min-microvolt = <2952000>;
+			regulator-max-microvolt = <3304000>;
+		};
+		pm6125_l24: l24 {	/* UFS vcc */
+			regulator-min-microvolt = <2704000>;
+			regulator-max-microvolt = <3600000>;
+		};
+	};
+};
+
+/* --- storage: DISABLED for the diskless image ------------------------------ */
+
+&ufs_mem_hc {
+	vcc-supply = <&pm6125_l24>;
+	vccq2-supply = <&pm6125_l11>;
+	status = "disabled";
+};
+
+&ufs_mem_phy {
+	vdda-phy-supply = <&pm6125_l18>;	/* TODO: stock phy supplies not yet mapped */
+	vdda-pll-supply = <&pm6125_l18>;
+	status = "disabled";
+};
+
+&sdhc_2 {
+	/*
+	 * Stock dtbo_a has sdhc_2 status "disabled" and cd-gpios = tlmm 88, the
+	 * same pin as ktd3137-3 hwen. Resolve on the phone (read-only) first.
+	 */
+	vmmc-supply = <&pm6125_l22>;
+	vqmmc-supply = <&pm6125_l5>;
+	status = "disabled";
+};
+
+/* --- USB: device mode only (shell + network gadget) ------------------------ */
+
+&usb {
+	/* no SS PHY: take the PIPE clock from UTMI (dwc3-qcom-legacy, HS-only case) */
+	qcom,select-utmi-as-pipe-clk;
+	status = "okay";
+};
+
+&usb_dwc3 {
+	/delete-property/ usb-role-switch;	/* PMI632 Type-C role switch: later */
+	maximum-speed = "high-speed";
+	dr_mode = "peripheral";
+
+	phys = <&usb_hsphy>;
+	phy-names = "usb2-phy";
+};
+
+&usb_hsphy {
+	/* stock qusb@1613000: vdd L4, vdda18 L12, vdda33 L15 */
+	vdd-supply = <&pm6125_l4>;
+	vdda-pll-supply = <&pm6125_l12>;
+	vdda-phy-dpdm-supply = <&pm6125_l15>;
+	status = "okay";
+};
+
+/* --- GPU, display ------------------------------------------------------------- */
+
+/*
+ * Crypto engine, its BAM and the PRNG: shared with QSEE and unused by this
+ * image. Disabled so that no driver takes their stream IDs into a Linux SMMU
+ * domain or drops the CE1 clock vote (2026-10-15 review, INFERRED risk).
+ */
+&cryptobam {
+	status = "disabled";
+};
+
+&crypto {
+	status = "disabled";
+};
+
+&rng {
+	status = "disabled";
+};
+
+&gpu {
+	status = "disabled";	/* needs a610 zap firmware from the phone's vendor */
+};
+
+&gpu_zap_shader {
+	firmware-name = "qcom/sm6115/hisense/hlte556n/a610_zap.mbn";
+};
+
+/*
+ * MDSS/DSI are described and enabled, but their driver (msm) is a module
+ * that the initramfs loads only with a9.eink=1. Stock DSI: 2 lanes, video
+ * mode, non-burst sync event, h-sync-pulse 1, force-clock-lane-hs.
+ */
+&mdss {
+	/*
+	 * Keep MDSS enabled even while its driver is not loaded: it is a
+	 * consumer of rpmpd (VDDCX), the interconnects and dispcc, and with
+	 * fw_devlink.sync_state=strict (the 7.2 default) a consumer that never
+	 * probes keeps those providers from running sync_state(). That leaves
+	 * the CX corner and NoC bandwidth at their boot (maximum) votes while
+	 * the bootloader's display state is still live (INFERRED; disabling
+	 * MDSS here would let sync_state drop the APPS votes to zero).
+	 */
+	status = "okay";
+};
+
+&mdss_dsi0 {
+	vdda-supply = <&pm6125_l18>;	/* stock qcom,vdda-1p2-supply = pm6125_l18 (1.232 V) */
+	status = "okay";
+};
+
+&mdss_dsi0_out {
+	data-lanes = <0 1>;
+	remote-endpoint = <&bridge_in>;
+};
+
+&mdss_dsi0_phy {
+	/*
+	 * MX at NOM while the DSI link is up, as stock (vdda-0p9 = rwmx, level
+	 * 0x100) and upstream agatti/sm6125 for this 14nm-2290 PHY. Patch 0018
+	 * keeps the vote across rpmpd sync_state.
+	 */
+	power-domains = <&rpmpd SM6115_VDDMX>;
+	required-opps = <&rpmpd_opp_nom>;
+	status = "okay";
+};
+
+/* --- I2C buses --------------------------------------------------------------- */
+
+/* stock qupv3_se0_i2c = i2c@4a80000: E Ink bridge, E Ink PMIC, frontlight 2, haptics */
+&i2c0 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	/*
+	 * Toshiba TC358767 in DSI->DPI mode. toshiba,init-sequence and the DSI
+	 * properties come from the A9 patch 0002; the table is the vendor
+	 * kernel's tc358767_cmd (25 entries, docs/mainline-plan.md section 2.1),
+	 * as <register value delay-after-us>.
+	 */
+	bridge@f {
+		compatible = "toshiba,tc358767";
+		reg = <0x0f>;
+		clock-names = "ref";
+		clocks = <&bridge_refclk>;
+		/* stock dsi2dpi-reset-gpio; the driver drives 1 = out of reset */
+		reset-gpios = <&tlmm 26 GPIO_ACTIVE_HIGH>;
+		vddc-supply = <&bridge_vddc>;
+		toshiba,dsi-video-mode = "non-burst-sync-event";
+		toshiba,dsi-continuous-clock;
+		/* stock qcom,mdss-dsi-h-sync-pulse = <1> (pulse_mode_hsa_he): send HSE (patch 0008) */
+		toshiba,dsi-hse;
+		toshiba,init-sequence =
+			<0x448 0x00000086 0>,	/* POCTRL: S2P, VS_POL, HS_POL */
+			<0x6a0 0x00003080 0>,	/* DP0_SRCCTRL */
+			<0x914 0x00118301 0>,	/* PXL_PLLPARAM: IN_SEL=2, /3 *1 */
+			<0x904 0x00000000 1000>, /* DP1_PLLCTRL off */
+			<0x904 0x00000004 0>,	/* DP1_PLLCTRL PLLUPDATE */
+			<0x908 0x00000001 1000>, /* PXL_PLLCTRL PLLEN */
+			<0x908 0x00000005 0>,	/* PXL_PLLCTRL PLLUPDATE|PLLEN */
+			<0x918 0x00000110 0>,	/* SYS_PLLPARAM: 19.2 MHz, SYSCLK_SEL 1 */
+			<0x800 0x00001100 0>,	/* DP_PHY_CTRL: DP PHYs in reset */
+			<0x800 0x00001100 0>,
+			<0x13c 0x00030005 0>,	/* PPI_TX_RX_TA (NACKs once per power-on) */
+			<0x114 0x00000003 0>,	/* PPI_LPTXTIMECNT */
+			<0x164 0x00000004 0>,	/* PPI_D0S_CLRSIPOCOUNT */
+			<0x168 0x00000004 0>,
+			<0x16c 0x00000004 0>,
+			<0x170 0x00000004 0>,
+			<0x134 0x00000007 0>,	/* PPI_LANEENABLE: clock + 2 lanes */
+			<0x210 0x00000007 0>,	/* DSI_LANEENABLE */
+			<0x104 0x00000001 0>,	/* PPI_STARTPPI */
+			<0x204 0x00000001 0>,	/* DSI_STARTDSI */
+			<0x450 0x03f00100 0>,	/* VPCTRL0: VSDELAY 63, RGB888, FRMSYNC off */
+			<0x454 0x001d0003 0>,	/* HTIM01: HPW 3, HBPR 29 */
+			<0x45c 0x00040002 0>,	/* VTIM01: VSPR 2, VBPR 4 */
+			<0x464 0x00000001 0>,	/* VFUEN0 */
+			<0x510 0x00000001 0>;	/* SYSCTRL: VIDSRC_DSI_RX */
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+				bridge_in: endpoint {
+					remote-endpoint = <&mdss_dsi0_out>;
+					data-lanes = <1 2>;
+				};
+			};
+
+			port@1 {
+				reg = <1>;
+				bridge_out: endpoint {
+					remote-endpoint = <&panel_in>;
+				};
+			};
+		};
+	};
+
+	/*
+	 * NO UPSTREAM BINDING (proposed, patch 0001): FITI FP9929A E Ink power.
+	 * Built-in driver; at probe it only takes the GPIOs and runs the stock
+	 * power-down if the bootloader left the rails up. Power-up needs
+	 * fp9929a.allow_power_on=1. VCOM: androidboot.eink_vcom from the ABL
+	 * (2730 mV on this phone, code 0x7e), else the value below.
+	 */
+	epd_pmic: pmic@48 {
+		compatible = "fitipower,fp9929a";
+		reg = <0x48>;
+		regulator-name = "epd_vpanel";
+		pwrup-gpios = <&tlmm 86 GPIO_ACTIVE_HIGH>;	/* stock fp9929a,pm-pwrup-gpio */
+		vcom-en-gpios = <&tlmm 36 GPIO_ACTIVE_HIGH>;	/* stock fp9929a,pm-pwrcom-gpio */
+		pg-gpios = <&tlmm 82 GPIO_ACTIVE_HIGH>;		/* stock fp9929a,pm-state-gpio: 1 = rails good (MEASURED E3 boot 9, docs/mainline-fp9929a-pg.md) */
+		/*
+		 * Fallback only: the driver prefers androidboot.eink_vcom from the
+		 * ABL (diag +0x12B0, 2730 mV on this phone = code 0x7e, MEASURED in
+		 * the stock boot logs) and refuses power-up on its built-in default.
+		 */
+		fitipower,vcom-millivolt = <2730>;
+	};
+
+	/* NO UPSTREAM BINDING: Awinic AW99703 frontlight, instance 2. Sibling: aw99706.c */
+	backlight@36 {
+		compatible = "awinic,aw99703";	/* proposed, no driver yet */
+		reg = <0x36>;
+		enable-gpios = <&tlmm 85 GPIO_ACTIVE_HIGH>;	/* stock aw99703,hwen-gpio */
+		status = "disabled";
+	};
+
+	/* NO UPSTREAM BINDING: Kinetic KTD3137 frontlight, instance 4 (KTD3136 RFC exists). */
+	backlight@35 {
+		compatible = "kinetic,ktd3137";	/* proposed, no driver yet */
+		reg = <0x35>;
+		enable-gpios = <&tlmm 101 GPIO_ACTIVE_HIGH>;	/* stock hwen-gpio */
+		status = "disabled";
+	};
+
+	/* Stock wiring; a9-aw86xx selects the register layout from the chip ID. */
+	haptics@5a {
+		compatible = "awinic,haptic_hv";
+		reg = <0x5a>;
+		interrupts-extended = <&tlmm 28 IRQ_TYPE_EDGE_FALLING>;
+		reset-gpios = <&tlmm 67 GPIO_ACTIVE_LOW>;
+		status = "okay";
+	};
+};
+
+/* stock qupv3_se1_i2c = i2c@4a84000: frontlight 1, speaker PA, Hi-Fi DAC, SMB1355.
+ * Nothing on it is enabled yet, so the bus stays off. */
+&i2c1 {
+	clock-frequency = <400000>;
+	status = "disabled";
+
+	backlight@36 {
+		compatible = "awinic,aw99703";	/* proposed */
+		reg = <0x36>;
+		enable-gpios = <&tlmm 83 GPIO_ACTIVE_HIGH>;
+		status = "disabled";
+	};
+
+	/* hwen = tlmm 88 (= stock sdhc_2 cd-gpios) */
+	backlight@35 {
+		compatible = "kinetic,ktd3137";	/* proposed */
+		reg = <0x35>;
+		enable-gpios = <&tlmm 88 GPIO_ACTIVE_HIGH>;
+		status = "disabled";
+	};
+
+	amplifier@58 {
+		compatible = "awinic,aw87390";	/* placeholder */
+		reg = <0x58>;
+		reset-gpios = <&tlmm 107 GPIO_ACTIVE_LOW>;
+		status = "disabled";
+	};
+
+	/* NO UPSTREAM BINDING: ESS ES9218 Hi-Fi DAC @0x48 (reset 65, sel 69, osc 66, pa-pwr 68). */
+	/* NO UPSTREAM DRIVER: Qualcomm SMB1355 parallel charger @0x0c (irq tlmm 105). */
+};
+
+/* stock qupv3_se2_i2c = i2c@4a88000: touch */
+&i2c2 {
+	clock-frequency = <400000>;
+	/*
+	 * FIFO mode: GPI DMA is a module the initramfs does not load, and boot 2
+	 * (2026-10-15) showed 4a88000.i2c deferred "Failed to get tx DMA ch".
+	 */
+	/delete-property/ dmas;
+	/delete-property/ dma-names;
+	status = "okay";
+
+	/* Atmel maXTouch, family 0xa4 variant 0x35 (stock atmel_mxt_ts_336u, fw TY001_10AA) */
+	touchscreen@4b {
+		compatible = "atmel,maxtouch";
+		reg = <0x4b>;
+		interrupts-extended = <&tlmm 80 IRQ_TYPE_LEVEL_LOW>;	/* stock flags 0x2008 */
+		reset-gpios = <&tlmm 71 GPIO_ACTIVE_LOW>;
+		vdda-supply = <&ts_vdd>;
+		vdd-supply = <&ts_vccio>;
+	};
+};
+
+&qupv3_id_0 {
+	status = "okay";
+};
+
+&uart4 {
+	status = "okay";
+};
+
+/* --- remote processors (firmware = the phone's own signed images) ------------ */
+
+&remoteproc_adsp {
+	firmware-name = "qcom/sm6115/hisense/hlte556n/adsp.mbn";
+	status = "disabled";	/* stock ADSP region is 0x1e00000, check before enabling */
+};
+
+&remoteproc_cdsp {
+	firmware-name = "qcom/sm6115/hisense/hlte556n/cdsp.mbn";
+	status = "disabled";
+};
+
+&remoteproc_mpss {
+	firmware-name = "qcom/sm6115/hisense/hlte556n/modem.mbn";
+	status = "disabled";
+};
+
+&tlmm {
+	/*
+	 * Reserve EVERY TLMM pin this image does not use (2026-10-15, after
+	 * the first-boot reset loop). gpiolib reads the direction of every
+	 * valid line when the TLMM registers (core initcall, long before any
+	 * log reaches the USB gadget); a read of a TZ-owned pin is an XPU
+	 * violation and resets the SoC at once. Which pins TZ owns on the A9
+	 * is not known: 14-17 (QUP SE5 = TZ fingerprint SPI) is reserved on
+	 * every upstream SM6115/SM4250 board, and stock leaves SE5 unused
+	 * (INFERRED). Reserving the complement of the used set removes the
+	 * question for the first boots. Pins kept valid (all MEASURED from the
+	 * stock DT): 0 1 i2c0, 6 7 i2c2, 12 13 uart4, 2 i2c-mux-sel, 21 108
+	 * touch supplies, 25 33 34 81 panel, 26 31 bridge reset/VDDC, 36 82 86
+	 * FP9929A, 71 80 touch reset/irq, 84 E Ink key. Re-open a pin here
+	 * before enabling a node that uses it.
+	 */
+	gpio-reserved-ranges = <3 3>, <8 4>, <14 7>, <22 3>, <27 4>, <32 1>,
+			       <35 1>, <37 34>, <72 8>, <83 1>, <85 1>,
+			       <87 21>, <109 5>;
+
+	eink_key_default: eink-key-default-state {
+		pins = "gpio84";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+		input-enable;
+		output-disable;
+	};
+};
+
+/*
+ * PMI632 telemetry (scripts/mainline/pmic, docs/mainline-pmic.md; copied into
+ * the tree by build.sh). OBSERVE mode: the driver (built in, patch 0009) never
+ * writes the charger or QG except one verified stock FV write (4.450 V); the
+ * firmware's own charging continues. No hisense,charging-validated: control
+ * mode is compiled out (CONFIG_CHARGER_PMI632_A9_TELEMETRY_ONLY).
+ */
+#include "a9-pmi632.dtsi"
+
+&a9_pmi632_power {
+	status = "okay";
+};

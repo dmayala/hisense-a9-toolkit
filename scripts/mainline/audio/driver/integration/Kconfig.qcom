@@ -1,0 +1,9 @@
+config SND_SOC_A9_ES9218
+ tristate "Experimental Hisense A9 ESS APR/MI2S sound card"
+ depends on QCOM_APR && I2C && GPIOLIB
+ select SND_SOC_QDSP6
+ select SND_SOC_QCOM_COMMON
+ select SND_SOC_ES9218_A9
+ help
+   Isolated A9 HiFi playback path. The first backend is 48 kHz stereo S32_LE
+   using secondary MI2S with 32-bit serial slots. No SoundWire dependency.

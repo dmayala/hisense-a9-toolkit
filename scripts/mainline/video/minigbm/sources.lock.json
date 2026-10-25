@@ -1,0 +1,32 @@
+{
+  "minigbm": {
+    "archive": "minigbm-qpr2.tar.gz",
+    "url": "https://android.googlesource.com/platform/external/minigbm/+archive/b7c93249f685222a524c51403719493cc114ff5d.tar.gz",
+    "tree_sha256": "264a65b4442ab6155cd8866dffaffcb1de49c357bffbba1a464438b30cd3dab7",
+    "revision": "b7c93249f685222a524c51403719493cc114ff5d"
+  },
+  "libdrm": {
+    "archive": "libdrm.tar.gz",
+    "url": "https://android.googlesource.com/platform/external/libdrm/+archive/67cbe8f48064a65de2fca4d6be4885ae277fd089.tar.gz",
+    "tree_sha256": "e28cfd6dec72a2b44ada409dcef3f9f561130760da49665323769c7aceb3a836",
+    "revision": "67cbe8f48064a65de2fca4d6be4885ae277fd089"
+  },
+  "dmabufheap": {
+    "archive": "dmabufheap.tar.gz",
+    "url": "https://android.googlesource.com/platform/system/memory/libdmabufheap/+archive/7b8541c73bf3d507d1ad551b224080109fdbc44c.tar.gz",
+    "tree_sha256": "67ea7f96017c68e8a5443c5623c19738071e89b9bb00b654d65f1dfe10a6b24d",
+    "revision": "7b8541c73bf3d507d1ad551b224080109fdbc44c"
+  },
+  "libion": {
+    "archive": "libion.tar.gz",
+    "url": "https://android.googlesource.com/platform/system/memory/libion/+archive/4e99dc359376c9d7cc0f96831b1822526fb6dd82.tar.gz",
+    "tree_sha256": "e8f91ec0ae51ad910ff9ea355bfb3c7d37767faf70a8ffa020af9a80736a9e5d",
+    "revision": "4e99dc359376c9d7cc0f96831b1822526fb6dd82"
+  },
+  "libsync": {
+    "archive": "libsync.tar.gz",
+    "url": "https://android.googlesource.com/platform/system/core/+archive/68be0c2c0006a0740d0b1809abe4717308f90d15/libsync.tar.gz",
+    "tree_sha256": "1a48f304898159f3ae6afe5d850e409a747eb76944bf78edf148a900f98897c0",
+    "revision": "68be0c2c0006a0740d0b1809abe4717308f90d15"
+  }
+}

@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/leds/hisense,a9-frontlight.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Hisense A9 AW99703 and KTD3137 frontlight LED banks
+
+maintainers:
+  - dmayala <dmayala@users.noreply.github.com>
+
+description: |
+  One LED class device per IC, with a shared raw 11-bit brightness for that
+  IC's connected sinks. These board-specific compatibles select the A9 stock
+  electrical profiles, not the chip reset defaults. AW99703 enables CH1 at
+  4.8 mA full scale; KTD3137 preserves the stock reset CH1..3 enable mask at
+  5 mA full scale (unused grounded sinks are detected by the IC). No per-chip
+  optical gain is applied by the kernel. Warm/white describes the LED bank,
+  center/edge describes its location on the A9 light guide.
+
+allOf:
+  - $ref: /schemas/leds/common.yaml#
+  - if:
+      properties:
+        compatible:
+          const: hisense,a9-aw99703-frontlight
+    then:
+      properties:
+        reg:
+          items:
+            - const: 0x36
+        label:
+          enum: ["a9:warm:center", "a9:white:center"]
+    else:
+      properties:
+        reg:
+          items:
+            - const: 0x35
+        label:
+          enum: ["a9:warm:edge", "a9:white:edge"]
+
+properties:
+  compatible:
+    enum:
+      - hisense,a9-aw99703-frontlight
+      - hisense,a9-ktd3137-frontlight
+
+  reg:
+    maxItems: 1
+
+  enable-gpios:
+    maxItems: 1
+    description: Active-high HWEN, kept at its bootloader level during probe.
+
+  label:
+    description: Stable LED class ABI used by the A9 Android compat daemon.
+
+  default-state:
+    const: keep
+
+required:
+  - compatible
+  - reg
+  - enable-gpios
+  - label
+  - default-state
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+        backlight@36 {
+            compatible = "hisense,a9-aw99703-frontlight";
+            reg = <0x36>;
+            enable-gpios = <&tlmm 83 GPIO_ACTIVE_HIGH>;
+            label = "a9:warm:center";
+            default-state = "keep";
+        };
+    };

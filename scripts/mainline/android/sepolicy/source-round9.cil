@@ -1,0 +1,15 @@
+; R8 OBS ip denied udp_socket/create twice. Its interface-control socket
+; carries SIOC ioctls for link flags/factory-MAC setup, not UDP traffic.
+; No bind/connect/send/receive or network endpoint access is added.
+(allow a9_wifi_radio self (udp_socket (create getattr ioctl)))
+(allowx a9_wifi_radio self (ioctl udp_socket (0x8913 0x8914 0x8924 0x8927 0x8933)))
+; SIOCGIFFLAGS, SIOCSIFFLAGS, SIOCSIFHWADDR, SIOCGIFHWADDR, SIOCGIFINDEX.
+; SRC iplink's compatibility MAC path also queries hardware type/address length
+; with a packet control socket, SIOCGIFINDEX, bind and getsockname. No packet
+; read/write/send/receive permission: this covers metadata, not packet traffic.
+(allow a9_wifi_radio self (packet_socket (create getattr ioctl bind getopt)))
+(allowx a9_wifi_radio self (ioctl packet_socket (0x8933)))
+
+; SRC AOD setup begins with input keyevent, and sleep/wake also use cmd input.
+; R8's named helper could find settings but lacked the input service lookup.
+(typeattributeset a9ml_aod_service (input_service_202504))

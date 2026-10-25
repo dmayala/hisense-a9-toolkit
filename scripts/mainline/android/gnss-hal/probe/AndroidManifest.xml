@@ -1,0 +1,12 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.a9.gnssprobe" android:versionCode="2" android:versionName="2">
+    <uses-sdk android:minSdkVersion="34" android:targetSdkVersion="35" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_LOCATION_EXTRA_COMMANDS" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <application android:label="A9 GNSS diagnostic probe" android:allowBackup="false" android:debuggable="true">
+        <activity android:name=".Start" android:exported="true" />
+        <service android:name=".Probe" android:exported="false" android:foregroundServiceType="location" />
+    </application>
+</manifest>

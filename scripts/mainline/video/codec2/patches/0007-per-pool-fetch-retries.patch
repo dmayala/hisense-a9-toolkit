@@ -1,0 +1,72 @@
+diff --git a/components/VideoFramePool.cpp b/components/VideoFramePool.cpp
+index b524169..72527c6 100644
+--- a/components/VideoFramePool.cpp
++++ b/components/VideoFramePool.cpp
+@@ -187,8 +187,9 @@ void VideoFramePool::getVideoFrameTask() {
+     constexpr size_t kFetchRetryDelayInit = 256;   // Initial delay: 256us
+     constexpr size_t kFetchRetryDelayMax = 16384;  // Max delay: 16ms (1 frame at 60fps)
+     constexpr size_t kFenceWaitTimeoutNs = 16000000;  // 16ms (1 frame at 60fps)
+-    static size_t sNumRetries = 0;
+-    static size_t sDelay = kFetchRetryDelayInit;
++    if (mRetryDelayUs == 0) mRetryDelayUs = kFetchRetryDelayInit;
++    constexpr size_t kFetchErrorDelayInit = 20000;
++    constexpr size_t kFetchErrorDelayMax = 500000;
+ 
+     C2Fence fence;
+     std::shared_ptr<C2GraphicBlock> block;
+@@ -241,20 +242,33 @@ void VideoFramePool::getVideoFrameTask() {
+     }
+ 
+     if (err == C2_TIMED_OUT || err == C2_BLOCKING) {
+-        ALOGV("%s(): fetchGraphicBlock() timeout, waiting %zuus (%zu retry)", __func__, sDelay,
+-              sNumRetries + 1);
++        ALOGV("%s(): fetchGraphicBlock() timeout, waiting %zuus (%zu retry)", __func__, mRetryDelayUs,
++              mNumRetries + 1);
+         mFetchTaskRunner->PostDelayedTask(
+                 FROM_HERE, ::base::BindOnce(&VideoFramePool::getVideoFrameTask, mFetchWeakThis),
+-                ::base::TimeDelta::FromMicroseconds(sDelay));
++                ::base::TimeDelta::FromMicroseconds(mRetryDelayUs));
+ 
+-        sDelay = std::min(sDelay * 4, kFetchRetryDelayMax);  // Exponential backoff
+-        sNumRetries++;
++        mRetryDelayUs = std::min(mRetryDelayUs * 4, kFetchRetryDelayMax);  // Exponential backoff
++        mNumRetries++;
+         return;
+     }
+ 
++    // Retry transient transport/allocation errors without leaving the outstanding
++    // getVideoFrame callback permanently occupied. Stop invalid pools normally.
++    if (err != C2_OK && err != C2_BAD_STATE && err != C2_NO_INIT) {
++        ++mNumFetchErrors;
++        const size_t delay = std::min(kFetchErrorDelayInit * std::min<size_t>(mNumFetchErrors, 25),
++                                      kFetchErrorDelayMax);
++        mFetchTaskRunner->PostDelayedTask(
++                FROM_HERE, ::base::BindOnce(&VideoFramePool::getVideoFrameTask, mFetchWeakThis),
++                ::base::TimeDelta::FromMicroseconds(delay));
++        return;
++    }
++    mNumFetchErrors = 0;
++
+     // Reset to the default value.
+-    sNumRetries = 0;
+-    sDelay = kFetchRetryDelayInit;
++    mNumRetries = 0;
++    mRetryDelayUs = kFetchRetryDelayInit;
+ 
+     if (err != C2_OK) {
+         ALOGE("%s(): Failed to fetch block, err=%d", __func__, err);
+diff --git a/components/include/v4l2_codec2/components/VideoFramePool.h b/components/include/v4l2_codec2/components/VideoFramePool.h
+index 6bebc37..41ca423 100644
+--- a/components/include/v4l2_codec2/components/VideoFramePool.h
++++ b/components/include/v4l2_codec2/components/VideoFramePool.h
+@@ -71,6 +71,10 @@ private:
+     // Holds the number of maximum amount of buffers that VideoFramePool
+     // should provide to client.
+     size_t mMaxBufferCount;
++    // Retry state belongs to this pool; multiple decoders may fetch concurrently.
++    size_t mNumRetries = 0;
++    size_t mRetryDelayUs = 0;
++    size_t mNumFetchErrors = 0;
+     // Contains known buffer ids that are valid for the pool.
+     std::set<uint32_t> mBuffers;
+ 

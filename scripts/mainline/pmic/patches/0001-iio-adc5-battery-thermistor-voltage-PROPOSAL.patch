@@ -1,0 +1,17 @@
+Subject: [PROPOSAL 1/3] iio: adc: adc5: expose 30k battery thermistor voltage
+
+A9 needs its stock 10k NTC curve, not a generic temperature lookup.
+No shared kernel source has been edited. Not hardware validated.
+
+--- a/drivers/iio/adc/qcom-spmi-adc5.c
++++ b/drivers/iio/adc/qcom-spmi-adc5.c
+@@ -540,6 +540,9 @@
+ 					SCALE_HW_CALIB_DEFAULT)
+ 	[ADC5_MID_CHG_DIV6]	= ADC5_CHAN_VOLT("chg_mid_chg", 3,
+ 					SCALE_HW_CALIB_DEFAULT)
++	/* Battery thermistor voltage; the consumer supplies the NTC curve. */
++	[ADC5_BAT_THERM_30K_PU] = ADC5_CHAN_VOLT("bat_therm_30k_uv", 0,
++					SCALE_HW_CALIB_DEFAULT)
+ 	[ADC5_XO_THERM_100K_PU]	= ADC5_CHAN_TEMP("xo_therm", 0,
+ 					SCALE_HW_CALIB_XOTHERM)
+ 	[ADC5_BAT_ID_100K_PU]	= ADC5_CHAN_TEMP("bat_id", 0,

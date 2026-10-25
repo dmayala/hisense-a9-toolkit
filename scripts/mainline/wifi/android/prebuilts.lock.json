@@ -1,0 +1,157 @@
+{
+  "build": "15581820",
+  "android_sdk": 36,
+  "abi": "aarch64",
+  "files": [
+    {
+      "source": "apex/com.android.hardware.wifi/root/bin/hw/android.hardware.wifi-service",
+      "bytes": 516184,
+      "sha256": "73c37d8e5ffeb468fcea4410d21b5137e13321b7815d9b81dee293301e7215a1"
+    },
+    {
+      "source": "apex/com.android.hardware.wifi/root/etc/vintf/android.hardware.wifi-service.xml",
+      "bytes": 297,
+      "sha256": "b0244c7741b58325669b372154776f5b800f6c19c73f08688ad1aaa45ba596a8"
+    },
+    {
+      "source": "apex/com.android.hardware.wifi/root/lib64/android.hardware.wifi-V4-ndk.so",
+      "bytes": 598672,
+      "sha256": "75200054231eedde672c004c17636e4b33c80dabd4c76c7c4730d2dec0644949"
+    },
+    {
+      "source": "apex/com.android.hardware.wifi/root/lib64/android.hardware.wifi.common-V2-ndk.so",
+      "bytes": 51496,
+      "sha256": "df040ef6af7360e5395556022b3dd46ad02771b79b8a19b587bb0752d6e90729"
+    },
+    {
+      "source": "apex/com.android.hardware.wifi/root/lib64/libbase.so",
+      "bytes": 235008,
+      "sha256": "3e3c465e5a496f7c1def3502b9209822173fc8aee7f78cc8ab88b6993481127a"
+    },
+    {
+      "source": "apex/com.android.hardware.wifi/root/lib64/libc++.so",
+      "bytes": 1109112,
+      "sha256": "dd327fb7c8d4abcb0fbb5bb839a946d365102af120466b956637e3559f4353e8"
+    },
+    {
+      "source": "apex/com.android.hardware.wifi/root/lib64/libcutils.so",
+      "bytes": 118232,
+      "sha256": "4d0c90b436b6f2c73324c5f9b90515f91872a60bf31102c2c30430107d18bcd6"
+    },
+    {
+      "source": "apex/com.android.hardware.wifi/root/lib64/libnl.so",
+      "bytes": 286312,
+      "sha256": "17a1d9ad55a3bd41b610467e9b78df38e1d0437b16f9492b736a8f3efa348457"
+    },
+    {
+      "source": "apex/com.android.hardware.wifi/root/lib64/libutils.so",
+      "bytes": 168392,
+      "sha256": "8ba6184a98a341f4232794d74a4d8bae40dcce1ede28eb9d29cf5a7580ff30bd"
+    },
+    {
+      "source": "apex/com.android.hardware.wifi/root/lib64/libwifi-hal.so",
+      "bytes": 88352,
+      "sha256": "761f5c072df9d70334be6f6538e4c9bd5f5a1207c0dd8d66c1831ec6e25fc0fd"
+    },
+    {
+      "source": "apex/com.android.hardware.wifi/root/lib64/libwifi-system-iface.so",
+      "bytes": 36008,
+      "sha256": "b19431185579295f9b1211d325d9f902b15fa37a2e173b8b7f24108fa52d46f4"
+    },
+    {
+      "source": "apex/com.android.hardware.wifi/root/lib64/libxml2.so",
+      "bytes": 1208664,
+      "sha256": "17d79c4ecf744ad1fa9e8568141ba8b61526334c09546d6039360dae4c291e5b"
+    },
+    {
+      "source": "apex/com.google.cf.wpa_supplicant/root/bin/hw/hostapd",
+      "bytes": 1727264,
+      "sha256": "51883d4dad31bb37a13e7c33d7bc3a265bac0d5d66515d0862205a177a11d159"
+    },
+    {
+      "source": "apex/com.google.cf.wpa_supplicant/root/bin/hw/wpa_supplicant",
+      "bytes": 3516328,
+      "sha256": "0fd935d19269bdbfd4c494742e63a79c8a6f39b44dee39c7d7fbd03c9e2e5d9f"
+    },
+    {
+      "source": "apex/com.google.cf.wpa_supplicant/root/etc/vintf/android.hardware.wifi.hostapd.xml.prebuilt",
+      "bytes": 414,
+      "sha256": "373c690c73c761362be526014e85a51dd6eb2c9a09b0d1af6e0275109e74d8e8"
+    },
+    {
+      "source": "apex/com.google.cf.wpa_supplicant/root/etc/vintf/android.hardware.wifi.supplicant.xml.prebuilt",
+      "bytes": 445,
+      "sha256": "da0ae423287003fa03917cae2d2f99ae50e78b61519b0a3620b5969834c041ac"
+    },
+    {
+      "source": "apex/com.google.cf.wpa_supplicant/root/lib64/android.hardware.security.keymint-V1-ndk.so",
+      "bytes": 154016,
+      "sha256": "e94e713db5c4bee592aff822f64dd49d4f399adc27d504b49c4377d6eb9dd335"
+    },
+    {
+      "source": "apex/com.google.cf.wpa_supplicant/root/lib64/android.hardware.security.secureclock-V1-ndk.so",
+      "bytes": 69136,
+      "sha256": "2ff18384ef275c1300541ba55cfe53091bc72b690c7e0caa79907a1c5aad8dfe"
+    },
+    {
+      "source": "apex/com.google.cf.wpa_supplicant/root/lib64/android.hardware.wifi.common-V2-ndk.so",
+      "bytes": 51496,
+      "sha256": "df040ef6af7360e5395556022b3dd46ad02771b79b8a19b587bb0752d6e90729"
+    },
+    {
+      "source": "apex/com.google.cf.wpa_supplicant/root/lib64/android.hardware.wifi.hostapd-V3-ndk.so",
+      "bytes": 85888,
+      "sha256": "d6754295bfa1fbe7533ed2e52623e0c12b4d8ff050e95d431d39860a07b3ef1f"
+    },
+    {
+      "source": "apex/com.google.cf.wpa_supplicant/root/lib64/android.hardware.wifi.supplicant-V5-ndk.so",
+      "bytes": 664488,
+      "sha256": "5123e93e365c797692f3747639064b4631daa39d03e3b0aef7ef21406fc350be"
+    },
+    {
+      "source": "apex/com.google.cf.wpa_supplicant/root/lib64/android.system.keystore2-V1-ndk.so",
+      "bytes": 119384,
+      "sha256": "e3e24e8bdde0c9fb87d40dd5e32893a20b54ef60b92acf8bfe0b4cc341fa4111"
+    },
+    {
+      "source": "apex/com.google.cf.wpa_supplicant/root/lib64/libbase.so",
+      "bytes": 235008,
+      "sha256": "3e3c465e5a496f7c1def3502b9209822173fc8aee7f78cc8ab88b6993481127a"
+    },
+    {
+      "source": "apex/com.google.cf.wpa_supplicant/root/lib64/libc++.so",
+      "bytes": 1109112,
+      "sha256": "dd327fb7c8d4abcb0fbb5bb839a946d365102af120466b956637e3559f4353e8"
+    },
+    {
+      "source": "apex/com.google.cf.wpa_supplicant/root/lib64/libcrypto.so",
+      "bytes": 1724576,
+      "sha256": "8740b585b28f38d914444e7b5efa623c34118b514b7870ecf329560c194f0de1"
+    },
+    {
+      "source": "apex/com.google.cf.wpa_supplicant/root/lib64/libcutils.so",
+      "bytes": 118232,
+      "sha256": "4d0c90b436b6f2c73324c5f9b90515f91872a60bf31102c2c30430107d18bcd6"
+    },
+    {
+      "source": "apex/com.google.cf.wpa_supplicant/root/lib64/libkeystore-engine-wifi-hidl.so",
+      "bytes": 69352,
+      "sha256": "b5085c458a4bd66deae58a4364e70a62b4ac415b197fefc504058d82938ef7da"
+    },
+    {
+      "source": "apex/com.google.cf.wpa_supplicant/root/lib64/libnl.so",
+      "bytes": 286312,
+      "sha256": "17a1d9ad55a3bd41b610467e9b78df38e1d0437b16f9492b736a8f3efa348457"
+    },
+    {
+      "source": "apex/com.google.cf.wpa_supplicant/root/lib64/libssl.so",
+      "bytes": 637568,
+      "sha256": "7e426d841a894bc85cad1f9a836016c8b5a3225e48213bee62d7752c3947c3cd"
+    },
+    {
+      "source": "apex/com.google.cf.wpa_supplicant/root/lib64/libutils.so",
+      "bytes": 168392,
+      "sha256": "8ba6184a98a341f4232794d74a4d8bae40dcce1ede28eb9d29cf5a7580ff30bd"
+    }
+  ]
+}

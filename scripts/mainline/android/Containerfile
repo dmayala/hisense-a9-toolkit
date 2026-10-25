@@ -1,0 +1,23 @@
+# A9 Android image tooling container (rootless podman). Only what the host
+# (NixOS, no FHS) cannot provide natively: AOSP's own secilc, built from
+# platform/external/selinux at the Android 16 tag that matches the GSI's
+# plat_sepolicy.cil. Everything else (mke2fs, e2fsdroid, img2simg, mkbootimg,
+# avbtool) is native on the host (nix android-tools / e2fsprogs).
+#
+# Build:  podman build -t a9-android-tools -f scripts/mainline/android/Containerfile scripts/mainline/android
+# Use:    podman run --rm -v ~/A9-build/mainline/android:/w a9-android-tools secilc ...
+FROM docker.io/library/ubuntu:24.04
+ARG SELINUX_TAG=android-16.0.0_r4
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        build-essential flex bison git ca-certificates pkg-config python3 e2fsprogs \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 --branch "$SELINUX_TAG" https://android.googlesource.com/platform/external/selinux /src/selinux \
+    && cd /src/selinux \
+    && git log -1 --format='%H %cd' > /opt/selinux-src.txt \
+    && make -C libsepol -j"$(nproc)" install CFLAGS="-O2 -Wno-error" DESTDIR=/opt/se PREFIX=/usr SHLIBDIR=/usr/lib LIBDIR=/usr/lib \
+    && make -C secilc -j"$(nproc)" secilc CFLAGS="-O2 -Wno-error" CPPFLAGS=-I/opt/se/usr/include LIBSEPOLA=/opt/se/usr/lib/libsepol.a \
+           LDFLAGS="-static -L/opt/se/usr/lib" LDLIBS= \
+    && install -m 0755 secilc/secilc /usr/local/bin/secilc \
+    && echo "$SELINUX_TAG $(cat /opt/selinux-src.txt)" > /opt/secilc-version.txt \
+    && rm -rf /src/selinux
+WORKDIR /w

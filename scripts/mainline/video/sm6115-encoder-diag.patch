@@ -1,0 +1,329 @@
+--- /dev/null
++++ b/drivers/media/platform/qcom/venus/a9-enc-diag.h
+@@ -0,0 +1,16 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef A9_ENC_DIAG_H
++#define A9_ENC_DIAG_H
++/* Numeric state only: no DMA addresses, media bytes, pointers or identifiers. */
++static inline bool a9_enc_enabled(struct venus_inst *inst)
++{
++	return inst->session_type == VIDC_SESSION_TYPE_ENC && IS_AR50_LITE(inst->core);
++}
++static inline void a9_enc_trace(struct venus_inst *inst, const char *op,
++			       const char *phase, int ret)
++{
++	if (a9_enc_enabled(inst))
++		dev_info(inst->core->dev, "A9_VENUS_ENC op=%s phase=%s rc=%d state=%u codec=%#x\n",
++			 op, phase, ret, inst->state, inst->hfi_codec);
++}
++#endif
+--- a/drivers/media/platform/qcom/venus/helpers.c
++++ b/drivers/media/platform/qcom/venus/helpers.c
+@@ -13,6 +13,7 @@
+ #include <asm/div64.h>
+ 
+ #include "core.h"
++#include "a9-enc-diag.h"
+ #include "helpers.h"
+ #include "hfi_helper.h"
+ #include "pm_helpers.h"
+@@ -680,6 +681,9 @@
+ 
+ 	ret = platform_get_bufreq(inst, type, req);
+ 	if (!ret) {
++		if (a9_enc_enabled(inst))
++			dev_info(inst->core->dev, "A9_VENUS_ENC op=bufreq source=platform type=%#x size=%u count=%u min=%u\n",
++				 type, req->size, req->count_actual, hfi_bufreq_get_count_min(req, ver));
+ 		if (type == HFI_BUFFER_OUTPUT || type == HFI_BUFFER_OUTPUT2)
+ 			inst->fw_min_cnt = hfi_bufreq_get_count_min(req, ver);
+ 		return 0;
+@@ -696,6 +700,9 @@
+ 			continue;
+ 
+ 		memcpy(req, &hprop.bufreq[i], sizeof(*req));
++		if (a9_enc_enabled(inst))
++			dev_info(inst->core->dev, "A9_VENUS_ENC op=bufreq source=firmware type=%#x size=%u count=%u min=%u\n",
++				 type, req->size, req->count_actual, hfi_bufreq_get_count_min(req, ver));
+ 		ret = 0;
+ 		break;
+ 	}
+--- a/drivers/media/platform/qcom/venus/hfi.c
++++ b/drivers/media/platform/qcom/venus/hfi.c
+@@ -11,6 +11,7 @@
+ #include <linux/videodev2.h>
+ 
+ #include "core.h"
++#include "a9-enc-diag.h"
+ #include "hfi.h"
+ #include "hfi_cmds.h"
+ #include "hfi_venus.h"
+@@ -143,6 +144,7 @@
+ 	int ret;
+ 
+ 	ret = wait_for_completion_timeout(&inst->done, TIMEOUT);
++	a9_enc_trace(inst, command, "response", ret ? (inst->error ? -EIO : 0) : -ETIMEDOUT);
+ 	if (!ret) {
+ 		dev_err(inst->core->dev, "%s: response timed out (state %u, codec %#x)\n",
+ 			command, inst->state, inst->hfi_codec);
+@@ -218,7 +220,9 @@
+ 	inst->hfi_codec = to_codec_type(pixfmt);
+ 	reinit_completion(&inst->done);
+ 
++	a9_enc_trace(inst, __func__, "send", 0);
+ 	ret = ops->session_init(inst, inst->session_type, inst->hfi_codec);
++	a9_enc_trace(inst, __func__, "queued", ret);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -260,7 +264,9 @@
+ 
+ 	reinit_completion(&inst->done);
+ 
++	a9_enc_trace(inst, __func__, "send", 0);
+ 	ret = ops->session_end(inst);
++	a9_enc_trace(inst, __func__, "queued", ret);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -288,7 +294,9 @@
+ 
+ 	reinit_completion(&inst->done);
+ 
++	a9_enc_trace(inst, __func__, "send", 0);
+ 	ret = ops->session_start(inst);
++	a9_enc_trace(inst, __func__, "queued", ret);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -315,7 +323,9 @@
+ 
+ 	reinit_completion(&inst->done);
+ 
++	a9_enc_trace(inst, __func__, "send", 0);
+ 	ret = ops->session_stop(inst);
++	a9_enc_trace(inst, __func__, "queued", ret);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -353,7 +363,9 @@
+ 
+ 	reinit_completion(&inst->done);
+ 
++	a9_enc_trace(inst, __func__, "send", 0);
+ 	ret = ops->session_abort(inst);
++	a9_enc_trace(inst, __func__, "queued", ret);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -378,7 +390,9 @@
+ 
+ 	reinit_completion(&inst->done);
+ 
++	a9_enc_trace(inst, __func__, "send", 0);
+ 	ret = ops->session_load_res(inst);
++	a9_enc_trace(inst, __func__, "queued", ret);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -404,7 +418,9 @@
+ 
+ 	reinit_completion(&inst->done);
+ 
++	a9_enc_trace(inst, __func__, "send", 0);
+ 	ret = ops->session_release_res(inst);
++	a9_enc_trace(inst, __func__, "queued", ret);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -428,7 +444,9 @@
+ 
+ 	reinit_completion(&inst->done);
+ 
++	a9_enc_trace(inst, __func__, "send", 0);
+ 	ret = ops->session_flush(inst, type);
++	a9_enc_trace(inst, __func__, "queued", ret);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -445,11 +463,19 @@
+ int hfi_session_set_buffers(struct venus_inst *inst, struct hfi_buffer_desc *bd)
+ {
+ 	const struct hfi_ops *ops = inst->core->ops;
+-
+-	if (test_bit(0, &inst->core->sys_error))
+-		return -EIO;
+-
+-	return ops->session_set_buffers(inst, bd);
++	int ret;
++
++	if (test_bit(0, &inst->core->sys_error))
++		return -EIO;
++
++
++	if (a9_enc_enabled(inst))
++		dev_info(inst->core->dev, "A9_VENUS_ENC op=set_buffers type=%#x size=%u count=%u\n",
++			 bd->buffer_type, bd->buffer_size, bd->num_buffers);
++	a9_enc_trace(inst, __func__, "send", 0);
++	ret = ops->session_set_buffers(inst, bd);
++	a9_enc_trace(inst, __func__, "queued", ret);
++	return ret;
+ }
+ 
+ int hfi_session_unset_buffers(struct venus_inst *inst,
+@@ -463,7 +489,9 @@
+ 
+ 	reinit_completion(&inst->done);
+ 
++	a9_enc_trace(inst, __func__, "send", 0);
+ 	ret = ops->session_unset_buffers(inst, bd);
++	a9_enc_trace(inst, __func__, "queued", ret);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -491,7 +519,9 @@
+ 
+ 	reinit_completion(&inst->done);
+ 
++	a9_enc_trace(inst, __func__, "send", 0);
+ 	ret = ops->session_get_property(inst, ptype);
++	a9_enc_trace(inst, __func__, "queued", ret);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -508,6 +538,7 @@
+ int hfi_session_set_property(struct venus_inst *inst, u32 ptype, void *pdata)
+ {
+ 	const struct hfi_ops *ops = inst->core->ops;
++	int ret;
+ 
+ 	if (test_bit(0, &inst->core->sys_error))
+ 		return -EIO;
+@@ -515,24 +546,42 @@
+ 	if (inst->state < INST_INIT || inst->state >= INST_STOP)
+ 		return -EINVAL;
+ 
+-	return ops->session_set_property(inst, ptype, pdata);
++
++	if (a9_enc_enabled(inst))
++		dev_info(inst->core->dev, "A9_VENUS_ENC op=set_property type=%#x\n", ptype);
++	a9_enc_trace(inst, __func__, "send", 0);
++	ret = ops->session_set_property(inst, ptype, pdata);
++	a9_enc_trace(inst, __func__, "queued", ret);
++	return ret;
+ }
+ EXPORT_SYMBOL_GPL(hfi_session_set_property);
+ 
+ int hfi_session_process_buf(struct venus_inst *inst, struct hfi_frame_data *fd)
+ {
+ 	const struct hfi_ops *ops = inst->core->ops;
+-
+-	if (test_bit(0, &inst->core->sys_error))
+-		return -EIO;
+-
+-	if (fd->buffer_type == HFI_BUFFER_INPUT)
+-		return ops->session_etb(inst, fd);
+-	else if (fd->buffer_type == HFI_BUFFER_OUTPUT ||
+-		 fd->buffer_type == HFI_BUFFER_OUTPUT2)
+-		return ops->session_ftb(inst, fd);
+-
+-	return -EINVAL;
++	bool input = fd->buffer_type == HFI_BUFFER_INPUT;
++	u32 seen = input ? inst->sequence_out : inst->sequence_cap;
++	bool trace = a9_enc_enabled(inst) && (seen < 2 || (fd->flags & HFI_BUFFERFLAG_EOS));
++	int ret;
++
++
++	if (test_bit(0, &inst->core->sys_error))
++		return -EIO;
++
++
++	if (trace) {
++		dev_info(inst->core->dev, "A9_VENUS_ENC op=buffer.begin type=%#x alloc=%u filled=%u offset=%u flags=%#x tag=%u\n",
++			 fd->buffer_type, fd->alloc_len, fd->filled_len, fd->offset, fd->flags, fd->clnt_data);
++	}
++	if (input)
++		ret = ops->session_etb(inst, fd);
++	else if (fd->buffer_type == HFI_BUFFER_OUTPUT || fd->buffer_type == HFI_BUFFER_OUTPUT2)
++		ret = ops->session_ftb(inst, fd);
++	else
++		ret = -EINVAL;
++	if (trace)
++		a9_enc_trace(inst, __func__, "buffer.end", ret);
++	return ret;
+ }
+ EXPORT_SYMBOL_GPL(hfi_session_process_buf);
+ 
+--- a/drivers/media/platform/qcom/venus/venc.c
++++ b/drivers/media/platform/qcom/venus/venc.c
+@@ -17,6 +17,7 @@
+ #include "hfi_venus_io.h"
+ #include "hfi_parser.h"
+ #include "core.h"
++#include "a9-enc-diag.h"
+ #include "helpers.h"
+ #include "venc.h"
+ #include "pm_helpers.h"
+@@ -1256,7 +1257,9 @@
+ 	struct venus_inst *inst = vb2_get_drv_priv(q);
+ 	int ret;
+ 
++	a9_enc_trace(inst, __func__, "lock.begin", 0);
+ 	mutex_lock(&inst->lock);
++	a9_enc_trace(inst, __func__, "lock.end", 0);
+ 
+ 	if (q->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
+ 		inst->streamon_out = 1;
+@@ -1273,28 +1276,40 @@
+ 	inst->sequence_cap = 0;
+ 	inst->sequence_out = 0;
+ 
++	a9_enc_trace(inst, "venc_pm_get", "begin", 0);
+ 	ret = venc_pm_get(inst);
++	a9_enc_trace(inst, "venc_pm_get", "end", ret);
+ 	if (ret)
+ 		goto error;
+ 
++	a9_enc_trace(inst, "venus_pm_acquire_core", "begin", 0);
+ 	ret = venus_pm_acquire_core(inst);
++	a9_enc_trace(inst, "venus_pm_acquire_core", "end", ret);
+ 	if (ret)
+ 		goto put_power;
+ 
++	a9_enc_trace(inst, "venc_pm_put", "begin", 0);
+ 	ret = venc_pm_put(inst, true);
++	a9_enc_trace(inst, "venc_pm_put", "end", ret);
+ 	if (ret)
+ 		goto error;
+ 
++	a9_enc_trace(inst, "venc_set_properties", "begin", 0);
+ 	ret = venc_set_properties(inst);
++	a9_enc_trace(inst, "venc_set_properties", "end", ret);
+ 	if (ret)
+ 		goto error;
+ 
++	a9_enc_trace(inst, "venc_verify_conf", "begin", 0);
+ 	ret = venc_verify_conf(inst);
++	a9_enc_trace(inst, "venc_verify_conf", "end", ret);
+ 	if (ret)
+ 		goto error;
+ 
++	a9_enc_trace(inst, "venus_helper_set_num_bufs", "begin", 0);
+ 	ret = venus_helper_set_num_bufs(inst, inst->num_input_bufs,
+ 					inst->num_output_bufs, 0);
++	a9_enc_trace(inst, "venus_helper_set_num_bufs", "end", ret);
+ 	if (ret)
+ 		goto error;
+ 
+@@ -1359,6 +1374,12 @@
+ 	struct vb2_v4l2_buffer *vbuf;
+ 	struct vb2_buffer *vb;
+ 	unsigned int type;
++
++	if (a9_enc_enabled(inst) &&
++	    ((buf_type == HFI_BUFFER_INPUT ? inst->sequence_out : inst->sequence_cap) < 2 ||
++	     (flags & V4L2_BUF_FLAG_LAST)))
++		dev_info(inst->core->dev, "A9_VENUS_ENC op=buffer.done type=%#x used=%u offset=%u flags=%#x hfi_flags=%#x tag=%u\n",
++			 buf_type, bytesused, data_offset, flags, hfi_flags, tag);
+ 
+ 	venc_pm_touch(inst);
+ 

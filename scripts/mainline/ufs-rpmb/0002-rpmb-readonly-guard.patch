@@ -1,0 +1,57 @@
+--- a/drivers/ufs/core/ufshcd.c
++++ b/drivers/ufs/core/ufshcd.c
+@@ -3008,6 +3008,10 @@
+ 		ufshcd_upiu_wlun_to_scsi_wlun(UFS_UPIU_UFS_DEVICE_WLUN);
+ }
+ 
++#ifdef CONFIG_SCSI_UFSHCD_A9_QUERY
++#include "a9-ufs-rpmb-readonly.h"
++#endif
++
+ /*
+  * Associate the UFS controller queue with the default and poll HCTX types.
+  * Initialize the mq_map[] arrays.
+@@ -3063,6 +3067,17 @@
+ 	int err = 0;
+ 	struct ufs_hw_queue *hwq = NULL;
+ 
++#ifdef CONFIG_SCSI_UFSHCD_A9_QUERY
++	/* All SG_IO/legacy/native/compat SCSI paths converge here. */
++	if (cmd->device->lun ==
++	    ufshcd_upiu_wlun_to_scsi_wlun(UFS_UPIU_RPMB_WLUN) &&
++	    !a9_ufs_rpmb_cmd_readonly(cmd)) {
++		/* A write-protect sense, not a host error that could reset UFS. */
++		scsi_build_sense(cmd, 0, DATA_PROTECT, 0x27, 0);
++		scsi_done(cmd);
++		return 0;
++	}
++#endif
+ 	switch (hba->ufshcd_state) {
+ 	case UFSHCD_STATE_OPERATIONAL:
+ 		break;
+@@ -7682,6 +7697,13 @@
+ 	enum utp_ocs ocs_value;
+ 	u8 tm_f = req_upiu->header.tm_function;
+ 
++#ifdef CONFIG_SCSI_UFSHCD_A9_QUERY
++	/* Raw BSG UPIUs must not bypass the stock RPMB SG read-only path. */
++	if (req_upiu->header.lun == UFS_UPIU_RPMB_WLUN) {
++		pr_info_ratelimited("A9_RPMB_GUARD mode=1 allowed=0 operation=0 reason=6\n");
++		return -EACCES;
++	}
++#endif
+ 	switch (msgcode) {
+ 	case UPIU_TRANSACTION_NOP_OUT:
+ 		cmd_type = DEV_CMD_TYPE_NOP;
+@@ -7752,6 +7774,11 @@
+ 	u16 ehs_len;
+ 	int ehs = (hba->capabilities & MASK_EHSLUTRD_SUPPORTED) ? 2 : 0;
+ 
++#ifdef CONFIG_SCSI_UFSHCD_A9_QUERY
++	/* Advanced RPMB also bypasses queuecommand. The stock route is legacy SG. */
++	pr_info_ratelimited("A9_RPMB_GUARD mode=1 allowed=0 operation=0 reason=6\n");
++	return -EACCES;
++#endif
+ 	ufshcd_dev_man_lock(hba);
+ 
+ 	cmd = ufshcd_get_dev_mgmt_cmd(hba);

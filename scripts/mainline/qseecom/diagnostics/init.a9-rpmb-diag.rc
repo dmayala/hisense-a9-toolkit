@@ -1,0 +1,10 @@
+# Independent of the boot logger: read-only kmsg cursor and logdw submission.
+service a9_rpmb_diag /vendor/bin/a9-rpmb-diag
+    class core
+    user root
+    group root log
+    capabilities SYSLOG
+    seclabel u:r:a9_rpmb_diag:s0
+
+on init
+    start a9_rpmb_diag

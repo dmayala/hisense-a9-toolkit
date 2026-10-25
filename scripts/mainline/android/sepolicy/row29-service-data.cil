@@ -1,0 +1,14 @@
+; Read-only identity checks for the mounted ROW29 /data in the shared service
+; guard. No block-device opens, DM ioctls, sysfs writes or data access grants.
+(allow a9ml_sensors sysfs_dm_202504 (dir (read open search getattr)))
+(allow a9ml_sensors sysfs_dm_202504 (file (read open getattr)))
+(allow a9ml_sensors sysfs_dm_202504 (lnk_file (read getattr)))
+(allow a9ml_sensors sysfs_devices_block_202504 (dir (read open search getattr)))
+(allow a9ml_sensors sysfs_devices_block_202504 (file (read open getattr)))
+(allow a9ml_sensors sysfs_devices_block_202504 (lnk_file (read getattr)))
+(allow a9_wifi_radio sysfs_dm_202504 (dir (read open search getattr)))
+(allow a9_wifi_radio sysfs_dm_202504 (file (read open getattr)))
+(allow a9_wifi_radio sysfs_dm_202504 (lnk_file (read getattr)))
+(allow a9_wifi_radio sysfs_devices_block_202504 (dir (read open search getattr)))
+(allow a9_wifi_radio sysfs_devices_block_202504 (file (read open getattr)))
+(allow a9_wifi_radio sysfs_devices_block_202504 (lnk_file (read getattr)))

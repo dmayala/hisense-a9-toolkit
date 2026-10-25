@@ -1,0 +1,187 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: A9 project <dmayala@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 08:29:21 -0700
+Subject: [PATCH 0045] thermal: do not narrow hardware trip windows while a
+ temperature is emulated (Hisense A9)
+
+With an emulated temperature the core programs the sensor's trip window
+around the EMULATED value, which usually excludes the REAL one. A sensor
+with level-triggered threshold interrupts (qcom tsens, uplow
+IRQ_TYPE_LEVEL_HIGH) then asserts at once and keeps asserting: its
+interrupt thread re-runs the zone update, the window is unchanged so
+thermal_zone_set_trips() reprograms nothing, and the thread (SCHED_FIFO,
+IRQF_ONESHOT) re-enters without end, taking and releasing tz->lock once
+per round. On the Hisense A9, emul_temp 92000 on cpu0123-thermal (real
+39 C, window 88..95 C) hung the phone; the likely cause is the saturated
+CPU that takes the tsens interrupt (inferred, not measured).
+
+Open the window fully while emulating. The emulated value is then
+re-evaluated only by the zone's polling: passive polling once a passive
+trip is crossed, otherwise only at the emul_temp write itself. The real
+window is programmed again when emulation is cleared.
+
+KUnit: a level-IRQ model asserted while the real temperature is outside
+the last window: emulated 92 C and 111 C leave it unasserted (without the
+fix it storms: 2 cases fail).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/thermal/.kunitconfig            |  1 +
+ drivers/thermal/thermal_confirm_kunit.c | 97 +++++++++++++++++++++++++
+ drivers/thermal/thermal_trip.c          | 17 +++++
+ 3 files changed, 115 insertions(+)
+
+diff --git a/drivers/thermal/.kunitconfig b/drivers/thermal/.kunitconfig
+index a0f39cad3..372b4399b 100644
+--- a/drivers/thermal/.kunitconfig
++++ b/drivers/thermal/.kunitconfig
+@@ -2,3 +2,4 @@ CONFIG_KUNIT=y
+ CONFIG_THERMAL=y
+ CONFIG_THERMAL_CRITICAL_CONFIRM_SAMPLES=3
+ CONFIG_THERMAL_CRITICAL_CONFIRM_KUNIT_TEST=y
++CONFIG_THERMAL_EMULATION=y
+diff --git a/drivers/thermal/thermal_confirm_kunit.c b/drivers/thermal/thermal_confirm_kunit.c
+index 164d9ec32..9df5de9e8 100644
+--- a/drivers/thermal/thermal_confirm_kunit.c
++++ b/drivers/thermal/thermal_confirm_kunit.c
+@@ -10,6 +10,8 @@
+ #include <linux/jiffies.h>
+ #include <linux/thermal.h>
+ 
++#include "thermal_core.h"
++
+ struct kt_zone {
+ 	int temp, err;
+ 	int crit_calls;
+@@ -191,5 +193,100 @@ static struct kunit_suite kt_suite = {
+ };
+ kunit_test_suite(kt_suite);
+ 
++#ifdef CONFIG_THERMAL_EMULATION
++/*
++ * Emulation vs hardware trip windows. A model of a level-triggered sensor
++ * (qcom tsens): its interrupt is asserted while the REAL temperature lies
++ * outside the last programmed window; an asserted interrupt makes the
++ * interrupt thread call thermal_zone_device_update() again.
++ */
++static const struct thermal_trip ke_trips[] = {
++	{ .temperature = 90000, .hysteresis = 2000, .type = THERMAL_TRIP_PASSIVE },
++	{ .temperature = 110000, .hysteresis = 1000, .type = THERMAL_TRIP_CRITICAL },
++};
++
++static bool ke_irq_asserted(struct kt_zone *z)
++{
++	return z->set_trips_calls && (z->temp < z->last_low || z->temp > z->last_high);
++}
++
++static void ke_emulate(struct thermal_zone_device *tz, int t)
++{
++	mutex_lock(&tz->lock);
++	tz->emul_temperature = t;	/* what emul_temp_store does */
++	mutex_unlock(&tz->lock);
++	thermal_zone_device_update(tz, THERMAL_EVENT_UNSPECIFIED);
++}
++
++static int ke_init(struct kunit *test)
++{
++	struct kt_zone *z = kunit_kzalloc(test, sizeof(*z), GFP_KERNEL);
++
++	KUNIT_ASSERT_NOT_NULL(test, z);
++	z->temp = 39000;	/* the real sensor */
++	z->tz = thermal_zone_device_register_with_trips("kt-emul", ke_trips, ARRAY_SIZE(ke_trips),
++							z, &kt_ops, NULL, 250, 0);
++	KUNIT_ASSERT_FALSE(test, IS_ERR(z->tz));
++	KUNIT_ASSERT_EQ(test, thermal_zone_device_enable(z->tz), 0);
++	test->priv = z;
++	return 0;
++}
++
++/* emulating 92 C (passive) with a real 39 C must not leave the interrupt asserted */
++static void ke_passive_no_irq_storm(struct kunit *test)
++{
++	struct kt_zone *z = test->priv;
++	int i, storm = 0;
++
++	thermal_zone_device_update(z->tz, THERMAL_EVENT_UNSPECIFIED);
++	KUNIT_EXPECT_FALSE(test, ke_irq_asserted(z));
++	ke_emulate(z->tz, 92000);
++	/* the interrupt thread's loop, bounded here */
++	for (i = 0; i < 100 && ke_irq_asserted(z); i++, storm++)
++		thermal_zone_device_update(z->tz, THERMAL_EVENT_UNSPECIFIED);
++	KUNIT_EXPECT_EQ(test, storm, 0);
++	KUNIT_EXPECT_EQ(test, z->last_low, -INT_MAX);
++	KUNIT_EXPECT_EQ(test, z->last_high, INT_MAX);
++	KUNIT_EXPECT_EQ(test, z->tz->temperature, 92000);	/* emulation still evaluated */
++	ke_emulate(z->tz, 0);					/* clear */
++	KUNIT_EXPECT_FALSE(test, ke_irq_asserted(z));
++	KUNIT_EXPECT_EQ(test, z->tz->temperature, 39000);
++	KUNIT_EXPECT_NE(test, z->last_high, INT_MAX);		/* real window programmed again */
++	KUNIT_EXPECT_EQ(test, z->crit_calls, 0);
++}
++
++/* an emulated critical crossing: confirmation window opened, no storm, acts once */
++static void ke_critical_no_irq_storm(struct kunit *test)
++{
++	struct kt_zone *z = test->priv;
++	int i, storm = 0;
++
++	if (CONFIG_THERMAL_CRITICAL_CONFIRM_SAMPLES != 3)
++		kunit_skip(test, "needs CONFIG_THERMAL_CRITICAL_CONFIRM_SAMPLES=3");
++	ke_emulate(z->tz, 111000);
++	for (i = 0; i < 100 && ke_irq_asserted(z); i++, storm++)
++		thermal_zone_device_update(z->tz, THERMAL_EVENT_UNSPECIFIED);
++	KUNIT_EXPECT_EQ(test, storm, 0);
++	for (i = 0; i < 30 && !z->crit_calls; i++)
++		msleep(100);
++	KUNIT_EXPECT_EQ(test, z->crit_calls, 1);
++	ke_emulate(z->tz, 0);
++}
++
++static struct kunit_case ke_cases[] = {
++	KUNIT_CASE_SLOW(ke_passive_no_irq_storm),
++	KUNIT_CASE_SLOW(ke_critical_no_irq_storm),
++	{}
++};
++
++static struct kunit_suite ke_suite = {
++	.name = "thermal-emulation-trip-window",
++	.init = ke_init,
++	.exit = kt_exit,
++	.test_cases = ke_cases,
++};
++kunit_test_suite(ke_suite);
++#endif
++
+ MODULE_DESCRIPTION("KUnit test of thermal critical-trip confirmation");
+ MODULE_LICENSE("GPL");
+diff --git a/drivers/thermal/thermal_trip.c b/drivers/thermal/thermal_trip.c
+index 4b8238468..f501b1042 100644
+--- a/drivers/thermal/thermal_trip.c
++++ b/drivers/thermal/thermal_trip.c
+@@ -60,6 +60,23 @@ void thermal_zone_set_trips(struct thermal_zone_device *tz, int low, int high)
+ 	if (!tz->ops.set_trips)
+ 		return;
+ 
++	/*
++	 * While a temperature is emulated, the window around the EMULATED value
++	 * usually excludes the REAL one, so a sensor with level-triggered
++	 * threshold interrupts (qcom tsens) asserts at once and keeps asserting:
++	 * its interrupt thread re-runs the zone update, the window is unchanged,
++	 * nothing is reprogrammed, and the thread re-enters without end, taking
++	 * tz->lock once per round (Hisense A9, 92 C on cpu0123-thermal: the
++	 * phone hung). Open the window fully instead. The emulated value is
++	 * then re-evaluated only by the zone's polling (passive polling once a
++	 * passive trip is crossed, else only at the emul_temp write); the real
++	 * window is programmed again when emulation is cleared.
++	 */
++	if (IS_ENABLED(CONFIG_THERMAL_EMULATION) && tz->emul_temperature) {
++		low = -INT_MAX;
++		high = INT_MAX;
++	}
++
+ 	/* No need to change trip points */
+ 	if (tz->prev_low_trip == low && tz->prev_high_trip == high)
+ 		return;
+-- 
+2.51.0
+

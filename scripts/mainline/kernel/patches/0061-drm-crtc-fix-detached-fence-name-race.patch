@@ -1,0 +1,55 @@
+From: André Draszik <andre.draszik@linaro.org>
+Subject: [PATCH] drm/crtc: fix detached fence name race and protect teardown
+
+Backport the paired v3 drm_crtc dma_fence_ops fixes. Signaling can clear
+fence->ops after a name callback has been selected inside an RCU read-side
+section. Remove the racy BUG_ON and wait a grace period before CRTC cleanup
+invalidates callback data. Both driver_name and timeline_name are covered.
+
+Sources (also carried in Android common as bbea9e696f0c and 57acb869490b):
+Link: https://lore.kernel.org/all/20260721-linux-drm_crtc_fix2-v3-1-afa8c71506e6@linaro.org/
+Link: https://lore.kernel.org/all/20260721-linux-drm_crtc_fix2-v3-2-afa8c71506e6@linaro.org/
+Fixes: 541c8f2468b9 ("dma-buf: detach fence ops on signal v3")
+Fixes: 6d6003c4b613 ("drm/fence: add fence timeline to drm_crtc")
+Signed-off-by: André Draszik <andre.draszik@linaro.org>
+---
+--- a/drivers/gpu/drm/drm_crtc.c
++++ b/drivers/gpu/drm/drm_crtc.c
+@@ -154,11 +154,8 @@
+ #endif
+ }
+ 
+-static const struct dma_fence_ops drm_crtc_fence_ops;
+-
+ static struct drm_crtc *fence_to_crtc(struct dma_fence *fence)
+ {
+-	BUG_ON(rcu_access_pointer(fence->ops) != &drm_crtc_fence_ops);
+ 	return container_of(fence->extern_lock, struct drm_crtc, fence_lock);
+ }
+ 
+@@ -493,13 +490,22 @@
+  * drm_crtc_cleanup - Clean up the core crtc usage
+  * @crtc: CRTC to cleanup
+  *
+- * This function cleans up @crtc and removes it from the DRM mode setting
+- * core. Note that the function does *not* free the crtc structure itself,
+- * this is the responsibility of the caller.
++ * This function cleans up @crtc and removes it from the DRM mode setting core,
++ * after first waiting an RCU grace period to ensure @crtc->dev can safely be
++ * dereferenced by our dma_fence_ops.
++ *
++ * Note that the function does *not* free the crtc structure itself, this is the
++ * responsibility of the caller.
+  */
+ void drm_crtc_cleanup(struct drm_crtc *crtc)
+ {
+ 	struct drm_device *dev = crtc->dev;
++
++	/* Ensure our dma_fence_ops remain valid for an RCU grace period after
++	 * the fence is signaled. This is necessary because our dma_fence_ops
++	 * dereference crtc->dev.
++	 */
++	synchronize_rcu();
+ 
+ 	/* Note that the crtc_list is considered to be static; should we
+ 	 * remove the drm_crtc at runtime we would have to decrement all

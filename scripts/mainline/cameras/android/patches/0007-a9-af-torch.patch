@@ -1,0 +1,607 @@
+diff --git a/include/libcamera/internal/camera_lens.h b/include/libcamera/internal/camera_lens.h
+--- a/include/libcamera/internal/camera_lens.h
++++ b/include/libcamera/internal/camera_lens.h
+@@ -28,6 +28,7 @@
+ 
+ 	int init();
+ 	int setFocusPosition(int32_t position);
++	void park();
+ 
+ 	const std::string &model() const { return model_; }
+ 
+diff --git a/src/android/camera3_hal.cpp b/src/android/camera3_hal.cpp
+--- a/src/android/camera3_hal.cpp
++++ b/src/android/camera3_hal.cpp
+@@ -48,7 +48,7 @@
+ static int hal_set_torch_mode([[maybe_unused]] const char *camera_id,
+ 			      [[maybe_unused]] bool enabled)
+ {
+-	return -ENOSYS;
++	return CameraHalManager::instance()->setTorchMode(camera_id, enabled);
+ }
+ 
+ /*
+diff --git a/src/android/camera_capabilities.cpp b/src/android/camera_capabilities.cpp
+--- a/src/android/camera_capabilities.cpp
++++ b/src/android/camera_capabilities.cpp
+@@ -6,6 +6,7 @@
+  */
+ 
+ #include "camera_capabilities.h"
++#include "camera_torch.h"
+ 
+ #include <algorithm>
+ #include <array>
+@@ -982,7 +983,9 @@
+ 		availableRequestKeys_.insert(ANDROID_LENS_FOCUS_DISTANCE);
+ 		availableResultKeys_.insert(ANDROID_LENS_FOCUS_DISTANCE);
+ 		availableCharacteristicsKeys_.insert(ANDROID_LENS_INFO_FOCUS_DISTANCE_CALIBRATION);
+-		uint8_t calibration = ANDROID_LENS_INFO_FOCUS_DISTANCE_CALIBRATION_APPROXIMATE;
++		uint8_t calibration = camera_->properties().get(properties::Model).value_or("") == "s5k3l6"
++			? ANDROID_LENS_INFO_FOCUS_DISTANCE_CALIBRATION_UNCALIBRATED
++			: ANDROID_LENS_INFO_FOCUS_DISTANCE_CALIBRATION_APPROXIMATE;
+ 		staticMetadata_->addEntry(ANDROID_LENS_INFO_FOCUS_DISTANCE_CALIBRATION,
+ 					  calibration);
+ 	}
+@@ -1263,7 +1266,8 @@
+ 		    ANDROID_SYNC_MAX_LATENCY_UNKNOWN);
+ 
+ 	/* Flash static metadata. */
+-	char flashAvailable = ANDROID_FLASH_INFO_AVAILABLE_FALSE;
++	char flashAvailable = A9Torch::available(camera_.get())
++		? ANDROID_FLASH_INFO_AVAILABLE_TRUE : ANDROID_FLASH_INFO_AVAILABLE_FALSE;
+ 	staticMetadata_->addEntry(ANDROID_FLASH_INFO_AVAILABLE,
+ 				  flashAvailable);
+ 
+diff --git a/src/android/camera_device.cpp b/src/android/camera_device.cpp
+--- a/src/android/camera_device.cpp
++++ b/src/android/camera_device.cpp
+@@ -380,6 +380,12 @@
+ 		return ret;
+ 	}
+ 
++	ret = torch_.acquireCamera(camera_.get());
++	if (ret) {
++		camera_->release();
++		return ret;
++	}
++
+ 	/* Initialize the hw_device_t in the instance camera3_module_t. */
+ 	camera3Device_.common.tag = HARDWARE_DEVICE_TAG;
+ 	camera3Device_.common.version = CAMERA_DEVICE_API_VERSION_3_3;
+@@ -400,11 +406,18 @@
+ {
+ 	stop();
+ 
++	torch_.releaseCamera();
+ 	camera_->release();
+ }
+ 
++int CameraDevice::setTorchMode(bool enabled, std::function<void(int)> callback)
++{
++	return torch_.setModule(camera_.get(), enabled, std::move(callback));
++}
++
+ void CameraDevice::flush()
+ {
++	torch_.off();
+ 	{
+ 		MutexLocker stateLock(stateMutex_);
+ 		if (state_ != State::Running)
+@@ -421,6 +434,7 @@
+ 
+ void CameraDevice::stop()
+ {
++	torch_.off();
+ 	MutexLocker stateLock(stateMutex_);
+ 
+ 	camera_->stop();
+@@ -831,6 +845,7 @@
+ 
+ void CameraDevice::abortRequest(Camera3RequestDescriptor *descriptor) const
+ {
++	const_cast<CameraDevice *>(this)->torch_.off();
+ 	notifyError(descriptor->frameNumber_, nullptr, CAMERA3_MSG_ERROR_REQUEST);
+ 
+ 	for (auto &buffer : descriptor->buffers_) {
+@@ -911,6 +926,7 @@
+ 
+ int CameraDevice::processCaptureRequest(camera3_capture_request_t *camera3Request)
+ {
++    A9Torch::RequestGuard torchGuard(torch_);
+ 	if (!isValidRequest(camera3Request))
+ 		return -EINVAL;
+ 
+@@ -1097,14 +1113,27 @@
+ 		state_ = State::Running;
+ 	}
+ 
++	camera_metadata_ro_entry_t flashEntry;
++	uint8_t flashMode = ANDROID_FLASH_MODE_OFF;
++	if (descriptor->settings_.getEntry(ANDROID_FLASH_MODE, &flashEntry))
++		flashMode = *flashEntry.data.u8;
++	int torchRet = torch_.setCapture(flashMode);
++	if (torchRet < 0)
++		return torchRet;
++	descriptor->torchFired_ = torchRet > 0;
+ 	Request *request = descriptor->request_.get();
+-
++	Camera3RequestDescriptor *rawDescriptor = descriptor.get();
+ 	{
+ 		MutexLocker descriptorsLock(descriptorsMutex_);
+ 		descriptors_.push(std::move(descriptor));
+ 	}
+-
+-	camera_->queueRequest(request);
++	int queueRet = camera_->queueRequest(request);
++	if (queueRet < 0) {
++		abortRequest(rawDescriptor);
++		completeDescriptor(rawDescriptor);
++	} else {
++		torchGuard.queued();
++	}
+ 
+ 	return 0;
+ }
+@@ -1544,10 +1573,12 @@
+ 	value = ANDROID_CONTROL_VIDEO_STABILIZATION_MODE_OFF;
+ 	resultMetadata->addEntry(ANDROID_CONTROL_VIDEO_STABILIZATION_MODE, value);
+ 
+-	value = ANDROID_FLASH_MODE_OFF;
++	value = descriptor.torchFired_ ? ANDROID_FLASH_MODE_TORCH : ANDROID_FLASH_MODE_OFF;
+ 	resultMetadata->addEntry(ANDROID_FLASH_MODE, value);
+ 
+-	value = ANDROID_FLASH_STATE_UNAVAILABLE;
++	value = A9Torch::hasDevice(camera_.get())
++		? (descriptor.torchFired_ ? ANDROID_FLASH_STATE_FIRED : ANDROID_FLASH_STATE_READY)
++		: ANDROID_FLASH_STATE_UNAVAILABLE;
+ 	resultMetadata->addEntry(ANDROID_FLASH_STATE, value);
+ 
+ 	float aperture = capabilities_.aperture();
+diff --git a/src/android/camera_device.h b/src/android/camera_device.h
+--- a/src/android/camera_device.h
++++ b/src/android/camera_device.h
+@@ -27,6 +27,7 @@
+ #include <libcamera/request.h>
+ #include <libcamera/stream.h>
+ 
++#include "camera_torch.h"
+ #include "camera_capabilities.h"
+ #include "camera_metadata.h"
+ #include "camera_stream.h"
+@@ -48,6 +49,8 @@
+ 	int open(const hw_module_t *hardwareModule);
+ 	void close();
+ 	void flush();
++	int setTorchMode(bool enabled, std::function<void(int)> callback);
++	void setTorchCallback(std::function<void(int)> callback) { torch_.setCallback(std::move(callback)); }
+ 
+ 	unsigned int id() const { return id_; }
+ 	camera3_device_t *camera3Device() { return &camera3Device_; }
+@@ -103,6 +106,7 @@
+ 	std::unique_ptr<CameraMetadata> getResultMetadata(
+ 		const Camera3RequestDescriptor &descriptor) const;
+ 
++	A9Torch torch_;
+ 	unsigned int id_;
+ 	camera3_device_t camera3Device_;
+ 
+diff --git a/src/android/camera_hal_manager.cpp b/src/android/camera_hal_manager.cpp
+--- a/src/android/camera_hal_manager.cpp
++++ b/src/android/camera_hal_manager.cpp
+@@ -323,6 +323,26 @@
+ 	return 0;
+ }
+ 
++int CameraHalManager::setTorchMode(const char *id, bool enabled)
++{
++	if (!id || !*id)
++		return -EINVAL;
++	char *end = nullptr;
++	unsigned long number = strtoul(id, &end, 10);
++	if (*end || number > std::numeric_limits<unsigned int>::max())
++		return -EINVAL;
++	MutexLocker lock(mutex_);
++	CameraDevice *camera = cameraDeviceFromHalId(number);
++	if (!camera)
++		return -EINVAL;
++	const std::string cameraId(id);
++	return camera->setTorchMode(enabled, [this, cameraId](int status) {
++		if (callbacks_ && callbacks_->torch_mode_status_change)
++			callbacks_->torch_mode_status_change(callbacks_, cameraId.c_str(),
++				status);
++	});
++}
++
+ void CameraHalManager::setCallbacks(const camera_module_callbacks_t *callbacks)
+ {
+ 	callbacks_ = callbacks;
+@@ -339,6 +359,11 @@
+ 	 */
+ 	for (const std::unique_ptr<CameraDevice> &camera : cameras_) {
+ 		unsigned int id = camera->id();
++		const std::string cameraId = std::to_string(id);
++		camera->setTorchCallback([callbacks, cameraId](int status) {
++			if (callbacks && callbacks->torch_mode_status_change)
++				callbacks->torch_mode_status_change(callbacks, cameraId.c_str(), status);
++		});
+ 		if (id >= firstExternalCameraId_)
+ 			callbacks_->camera_device_status_change(callbacks_, id,
+ 								CAMERA_DEVICE_STATUS_PRESENT);
+diff --git a/src/android/camera_hal_manager.h b/src/android/camera_hal_manager.h
+--- a/src/android/camera_hal_manager.h
++++ b/src/android/camera_hal_manager.h
+@@ -40,6 +40,7 @@
+ 	unsigned int numCameras() const;
+ 	int getCameraInfo(unsigned int id, struct camera_info *info);
+ 	void setCallbacks(const camera_module_callbacks_t *callbacks);
++	int setTorchMode(const char *id, bool enabled);
+ 
+ private:
+ 	LIBCAMERA_DISABLE_COPY_AND_MOVE(CameraHalManager)
+diff --git a/src/android/camera_request.h b/src/android/camera_request.h
+--- a/src/android/camera_request.h
++++ b/src/android/camera_request.h
+@@ -76,6 +76,7 @@
+ 	std::unique_ptr<libcamera::Request> request_;
+ 	std::unique_ptr<CameraMetadata> resultMetadata_;
+ 
++	bool torchFired_ = false;
+ 	bool complete_ = false;
+ 	Status status_ = Status::Success;
+ 
+diff --git a/src/android/camera_torch.h b/src/android/camera_torch.h
+new file mode 100644
+--- /dev/null
++++ b/src/android/camera_torch.h
+@@ -0,0 +1,179 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++#pragma once
++#include <hardware/camera_common.h>
++#include <system/camera_metadata.h>
++#include <cerrno>
++#include <chrono>
++#include <condition_variable>
++#include <fcntl.h>
++#include <functional>
++#include <linux/videodev2.h>
++#include <mutex>
++#include <string>
++#include <sys/ioctl.h>
++#include <thread>
++#include <unistd.h>
++#include <libcamera/camera.h>
++#include <libcamera/property_ids.h>
++
++/* One graph-discovered V4L2 device for both Android torch interfaces. The
++ * kernel owns fault/close/deadline shutdown; this thread reports auto-off. */
++class A9Torch {
++public:
++	A9Torch() : worker_([this] { watch(); }) {}
++	~A9Torch()
++	{
++		{ std::lock_guard<std::mutex> lock(mutex_); quitting_ = true; }
++		wake_.notify_all();
++		worker_.join();
++		off();
++		if (fd_ >= 0) ::close(fd_);
++	}
++	static bool hasDevice(const libcamera::Camera *camera)
++	{
++		return camera->properties().get(libcamera::properties::draft::A9TorchDevice).has_value();
++	}
++	static bool available(const libcamera::Camera *camera)
++	{
++		auto path = camera->properties().get(libcamera::properties::draft::A9TorchDevice);
++		if (!path) return false;
++		int fd = ::open(std::string(*path).c_str(), O_RDWR | O_CLOEXEC);
++		if (fd < 0) return false;
++		v4l2_queryctrl info{}; info.id = V4L2_CID_FLASH_LED_MODE;
++		bool ok = ioctl(fd, VIDIOC_QUERYCTRL, &info) == 0 && info.maximum == V4L2_FLASH_LED_MODE_TORCH;
++		::close(fd);
++		return ok;
++	}
++	void setCallback(std::function<void(int)> callback)
++	{
++		std::lock_guard<std::mutex> lock(mutex_); callback_ = std::move(callback);
++	}
++	int acquireCamera(const libcamera::Camera *camera)
++	{
++		std::function<void(int)> notify;
++		{
++			std::lock_guard<std::mutex> lock(mutex_);
++			if (cameraOpen_) return -EBUSY;
++			if (hasDevice(camera)) {
++				int ret = init(camera);
++				if (ret) return ret;
++				ret = mode(false);
++				if (ret < 0) return ret;
++				notify = callback_;
++			}
++			cameraOpen_ = true;
++		}
++		if (notify) notify(TORCH_MODE_STATUS_NOT_AVAILABLE);
++		return 0;
++	}
++	void releaseCamera()
++	{
++		off();
++		std::function<void(int)> notify;
++		{
++			std::lock_guard<std::mutex> lock(mutex_);
++			cameraOpen_ = false; notify = callback_;
++		}
++		if (notify) notify(TORCH_MODE_STATUS_AVAILABLE_OFF);
++	}
++	int setModule(const libcamera::Camera *camera, bool on, std::function<void(int)> callback)
++	{
++		{
++			std::lock_guard<std::mutex> lock(mutex_);
++			if (cameraOpen_) return -EBUSY;
++			int ret = init(camera);
++			if (ret) return ret;
++			ret = mode(on);
++			if (ret < 0) return ret;
++			callback_ = callback;
++			moduleOn_ = on;
++		}
++		callback(on ? TORCH_MODE_STATUS_AVAILABLE_ON : TORCH_MODE_STATUS_AVAILABLE_OFF);
++		wake_.notify_all();
++		return 0;
++	}
++	int setCapture(uint8_t value)
++	{
++		std::lock_guard<std::mutex> lock(mutex_);
++		if (value != ANDROID_FLASH_MODE_OFF && value != ANDROID_FLASH_MODE_TORCH) {
++			mode(false); return -EINVAL; /* no synchronized flash */
++		}
++		if (value == ANDROID_FLASH_MODE_OFF) {
++			if (fd_ < 0) return 0;
++			return mode(false);
++		}
++		if (!cameraOpen_ || fd_ < 0) return -ENOSYS;
++		return mode(true);
++	}
++	void off()
++	{
++		std::lock_guard<std::mutex> lock(mutex_);
++		if (fd_ >= 0) mode(false);
++		moduleOn_ = false;
++	}
++	class RequestGuard {
++	public:
++		explicit RequestGuard(A9Torch &torch) : torch_(torch) {}
++		~RequestGuard() { if (!queued_) torch_.off(); }
++		void queued() { queued_ = true; }
++	private:
++		A9Torch &torch_;
++		bool queued_ = false;
++	};
++private:
++	int init(const libcamera::Camera *camera)
++	{
++		if (fd_ >= 0) return 0;
++		auto path = camera->properties().get(libcamera::properties::draft::A9TorchDevice);
++		if (!path) return -ENOSYS;
++		fd_ = ::open(std::string(*path).c_str(), O_RDWR | O_CLOEXEC);
++		return fd_ < 0 ? -errno : 0;
++	}
++	int readMode()
++	{
++		v4l2_control ctrl{}; ctrl.id = V4L2_CID_FLASH_LED_MODE;
++		if (ioctl(fd_, VIDIOC_G_CTRL, &ctrl) < 0) return -errno;
++		return ctrl.value == V4L2_FLASH_LED_MODE_TORCH ? 1 : 0;
++	}
++	int mode(bool on)
++	{
++		if (fd_ < 0) return on ? -ENODEV : 0;
++		v4l2_control ctrl{}; ctrl.id = V4L2_CID_FLASH_LED_MODE;
++		ctrl.value = on ? V4L2_FLASH_LED_MODE_TORCH : V4L2_FLASH_LED_MODE_NONE;
++		if (ioctl(fd_, VIDIOC_S_CTRL, &ctrl) < 0) {
++			int ret = -errno;
++			ctrl.value = V4L2_FLASH_LED_MODE_NONE;
++			ioctl(fd_, VIDIOC_S_CTRL, &ctrl);
++			::close(fd_); fd_ = -1;
++			return ret;
++		}
++		int state = readMode();
++		if (state < 0 || state != on) {
++			::close(fd_); fd_ = -1;
++			return state < 0 ? state : -EIO;
++		}
++		return state;
++	}
++	void watch()
++	{
++		std::unique_lock<std::mutex> lock(mutex_);
++		while (!quitting_) {
++			wake_.wait_for(lock, std::chrono::milliseconds(100));
++			if (quitting_) break;
++			if (!moduleOn_ || fd_ < 0) continue;
++			int state = readMode();
++			if (state > 0) continue;
++			mode(false); moduleOn_ = false;
++			auto callback = callback_;
++			lock.unlock();
++			if (callback) callback(TORCH_MODE_STATUS_AVAILABLE_OFF);
++			lock.lock();
++		}
++	}
++	std::mutex mutex_;
++	std::condition_variable wake_;
++	int fd_ = -1;
++	bool cameraOpen_ = false, moduleOn_ = false, quitting_ = false;
++	std::function<void(int)> callback_;
++	std::thread worker_;
++};
+diff --git a/src/ipa/simple/data/s5k3l6.yaml b/src/ipa/simple/data/s5k3l6.yaml
+--- a/src/ipa/simple/data/s5k3l6.yaml
++++ b/src/ipa/simple/data/s5k3l6.yaml
+@@ -18,4 +18,21 @@
+   #                0, 0, 1]
+   - Adjust:
+   - Agc:
++  # Stock fallback range. Per-unit EEPROM endpoints are not yet read.
++  - Af:
++      infinityDac: 116
++      macroDac: 515
++      infinityMargin: 0.0
++      macroMargin: 0.0
++      macroDioptres: 10.0
++      defaultDioptres: 0.0
++      coarseSteps: 8
++      fineSteps: 2
++      settleFrames: 3
++      minContrast: 0.0001
++      minPeakRatio: 1.10
++      stopRatio: 0.70
++      rescanDrop: 0.65
++      rescanRise: 1.60
++      rescanCount: 3
+ ...
+diff --git a/src/libcamera/camera_lens.cpp b/src/libcamera/camera_lens.cpp
+--- a/src/libcamera/camera_lens.cpp
++++ b/src/libcamera/camera_lens.cpp
+@@ -73,6 +73,7 @@
+ 		return ret;
+ 
+ 	model_ = subdev_->model();
++	park();
+ 	return 0;
+ }
+ 
+@@ -84,8 +85,20 @@
+  *
+  * \return 0 on success or -EINVAL otherwise
+  */
++void CameraLens::park()
++{
++	/* Closing the A9 lens invokes its stock ramp/standby/runtime suspend. */
++	if (entity_->name().starts_with("dw9714p-a9 "))
++		subdev_->close();
++}
++
+ int CameraLens::setFocusPosition(int32_t position)
+ {
++	if (!subdev_->isOpen()) {
++		int ret = subdev_->open();
++		if (ret < 0)
++			return ret;
++	}
+ 	ControlList lensCtrls(subdev_->controls());
+ 	lensCtrls.set(V4L2_CID_FOCUS_ABSOLUTE, static_cast<int32_t>(position));
+ 
+diff --git a/src/libcamera/pipeline/simple/simple.cpp b/src/libcamera/pipeline/simple/simple.cpp
+--- a/src/libcamera/pipeline/simple/simple.cpp
++++ b/src/libcamera/pipeline/simple/simple.cpp
+@@ -28,6 +28,7 @@
+ #include <libcamera/camera.h>
+ #include <libcamera/color_space.h>
+ #include <libcamera/control_ids.h>
++#include <libcamera/property_ids.h>
+ #include <libcamera/geometry.h>
+ #include <libcamera/pixel_format.h>
+ #include <libcamera/stream.h>
+@@ -391,6 +392,7 @@
+ 	void metadataReady(uint32_t frame, const ControlList &metadata);
+ 	void setSensorControls(const ControlList &sensorControls);
+ 	void setLensControls(const ControlList &lensControls);
++	bool lensFailed_ = false;
+ };
+ 
+ class SimpleCameraConfiguration : public CameraConfiguration
+@@ -671,6 +673,15 @@
+ 	}
+ 
+ 	properties_ = sensor_->properties();
++	/* Discover only a flash ancillary of this sensor, never another camera. */
++	for (MediaEntity *ancillary : sensor_->entity()->ancillaryEntities()) {
++		if (ancillary->function() != MEDIA_ENT_F_FLASH || ancillary->name() != "a9-rear-torch")
++			continue;
++		V4L2Subdevice torch(ancillary);
++		if (torch.open() == 0 && torch.controls().count(V4L2_CID_FLASH_LED_MODE))
++			properties_.set(properties::draft::A9TorchDevice, ancillary->deviceNode());
++	}
++
+ 
+ 	/* Find the first subdev that can generate a frame start signal, if any. */
+ 	frameStartEmitter_ = nullptr;
+@@ -1092,6 +1103,8 @@
+ 		return;
+ 
+ 	info->request->_d()->metadata().merge(metadata);
++	if (lensFailed_)
++		info->request->_d()->metadata().set(controls::AfState, controls::AfStateFailed);
+ 	info->metadataProcessed = true;
+ 	tryCompleteRequest(info->request);
+ }
+@@ -1146,6 +1159,7 @@
+ 
+ 	const ControlValue &focus = lensControls.get(V4L2_CID_FOCUS_ABSOLUTE);
+ 	const int ret = lens->setFocusPosition(focus.get<int32_t>());
++	if (ret < 0) lensFailed_ = true;
+ 	if (a6lQualityDebug(qualityFrame_))
+ 		LOG(SimplePipeline, Info) << "A6L_QUALITY_LENS frame=" << qualityFrame_
+ 			<< " mono_ns=" << a6lQualityMonotonicNs() << " dac=" << focus.get<int32_t>()
+@@ -1923,6 +1937,8 @@
+ 
+ 	data->clearIncompleteRequests();
+ 	data->conversionBuffers_.clear();
++	if (CameraLens *lens = data->sensor_->focusLens())
++		lens->park();
+ 
+ 	releasePipeline(data);
+ }
+diff --git a/src/libcamera/property_ids_draft.yaml b/src/libcamera/property_ids_draft.yaml
+--- a/src/libcamera/property_ids_draft.yaml
++++ b/src/libcamera/property_ids_draft.yaml
+@@ -6,6 +6,12 @@
+ ---
+ vendor: draft
+ controls:
++  - A9TorchDevice:
++      type: string
++      description: |
++        Device node of the torch ancillary linked to this sensor. A9 private
++        property for the Android HAL; only NONE and TORCH are implemented.
++
+   - ColorFilterArrangement:
+       type: int32_t
+       vendor: draft
+diff --git a/src/libcamera/software_isp/swstats_cpu.cpp b/src/libcamera/software_isp/swstats_cpu.cpp
+--- a/src/libcamera/software_isp/swstats_cpu.cpp
++++ b/src/libcamera/software_isp/swstats_cpu.cpp
+@@ -224,6 +224,10 @@
+ 	const uint16_t *src0 = (const uint16_t *)src[1] + window_.x;
+ 	const uint16_t *src1 = (const uint16_t *)src[2] + window_.x;
+ 
++	const bool sharp = sharpRow(stats);
++	int prevG = -1;
++	uint64_t sharpSum = 0;
++	uint32_t sharpCount = 0;
+ 	SWSTATS_START_LINE_STATS(uint16_t)
+ 
+ 	if (swapLines_)
+@@ -237,12 +241,22 @@
+ 		r = src1[x + 1];
+ 
+ 		g = (g + g2) / 2;
++		if (sharp && x >= window_.width / 4 && x < window_.width * 3 / 4) {
++			if (prevG >= 0) {
++				const int d = static_cast<int>(g) - prevG;
++				sharpSum += static_cast<uint64_t>(d * d);
++				sharpCount++;
++			}
++			prevG = g;
++		}
+ 
+ 		/* divide Y by 4 for 10 -> 8 bpp value */
+ 		SWSTATS_ACCUMULATE_LINE_STATS(4)
+ 	}
+ 
+ 	SWSTATS_FINISH_LINE_STATS()
++	stats.sharpness += sharpSum / 16;
++	stats.sharpnessCount += sharpCount;
+ }
+ 
+ void SwStatsCpu::statsBGGR12Line0(const uint8_t *src[], SwIspStats &stats)

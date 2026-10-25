@@ -1,0 +1,20 @@
+# Reference only: scripts/mainline/android/vendor/etc/init/a9-eink-compat.rc
+# owns the shipped integration. A16 rejects vendor override of a system service.
+# Mirror its separate-service handoff here; install only ONE copy of this rc.
+service a9_eink_compat /vendor/bin/a9-eink-compat
+    disabled
+    user root
+    group root system
+    seclabel u:r:phhsu_daemon:s0
+    restart_period 5
+
+on property:init.svc.a9_eink_server=running
+    stop a9_eink_server
+    start a9_eink_compat
+
+# stop is asynchronous: an occupied abstract socket makes the daemon exit 1;
+# init retries this non-oneshot service after restart_period. A production
+# handoff should wait for the stock service to finish stopping (see spec).
+# No property triggers here: native Bionic property notifications handle both
+# initial values and later writes. No old backlight names are exposed, so the
+# ROM's legacy init writes/chmod/chcon cannot double-apply the brightness gain.

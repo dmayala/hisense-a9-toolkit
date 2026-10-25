@@ -1,0 +1,208 @@
+From df2aa906a4c4fcdac9c9bc386a0643c2402a8c40 Mon Sep 17 00:00:00 2001
+From: dmayala <dmayala@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 01:12:48 +0000
+Subject: [PATCH 0037] drm/a9_eink: redraw changed tone controls and add a
+ held contrast pattern
+
+A changed control must redraw the whole image, not just the next UI damage
+rectangle. Queue a normal full Clear on effective value changes; repeated
+same-value writes remain no-ops. Preserve stock defaults and arithmetic.
+
+Add root-only eink/test_pattern (contrast/off). Generate black/white/ramp
+and grey-27 references as normal grey input, force normal full Clear jobs,
+and keep the real UI shadow current while holding the diagnostic. Off
+restores the newest UI with a full Clear. Neither input selection nor
+control writes alter drive gates, fault state, waveform tables, bins,
+VCOM, progress deadlines or PMIC caps.
+
+Apply on 0001-0036. Host tests and captured-input stock/CLI/engine replay,
+plus the deciding coordinator-only experiment, live in the project tree.
+Ship the Android setup companion to retain root ownership of the diagnostic.
+Digital endpoint parity does not establish optical black depth.
+
+Co-Authored-By: GPT-6.1 Sol (Codex)
+---
+ drivers/gpu/drm/a9_eink/a9_eink.h         |  1 +
+ drivers/gpu/drm/a9_eink/a9_eink_drv.c     | 66 ++++++++++++++++++++++++++++---
+ drivers/gpu/drm/a9_eink/a9_eink_pattern.h | 40 +++++++++++++++++++
+ 3 files changed, 101 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink.h b/drivers/gpu/drm/a9_eink/a9_eink.h
+index 7a011da70c0763eb1a094a6241bd3152f48a576b..f3f46a6102c4684bca3a07e1be143b91ac7aa548 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink.h
++++ b/drivers/gpu/drm/a9_eink/a9_eink.h
+@@ -173,6 +173,7 @@ struct a9_eink {
+ 	u32 mode;			/* stock mode word, sysfs "mode" */
+ 	int controls[3];		/* black, white, contrast */
+ 	bool controls_dirty;
++	bool test_pattern;		/* root diagnostic input override, shadow_lock */
+ 	wait_queue_head_t wq;
+ 
+ 	/* engine, owned by the worker thread; eng_lock for debugfs readers */
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_drv.c b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+index 56fbcddf44dfd8c03db54e40994150394cb1b1c6..20147e07faf6d8d6b46d4f3117eb008b109688be 100644
+--- a/drivers/gpu/drm/a9_eink/a9_eink_drv.c
++++ b/drivers/gpu/drm/a9_eink/a9_eink_drv.c
+@@ -86,6 +86,7 @@
+ #include <drm/drm_vblank_helper.h>
+ 
+ #include "a9_eink.h"
++#include "a9_eink_pattern.h"
+ 
+ static bool enable;
+ module_param(enable, bool, 0644);
+@@ -244,8 +245,11 @@ static void a9_plane_atomic_update(struct drm_plane *plane, struct drm_atomic_co
+ 	}
+ 	if (!a9e_rect_empty(&changed)) {
+ 		a9e_rect_union(&a9->dirty, &changed);
+-		a9->kick = true;
+-		wake_up(&a9->wq);
++		/* Keep the newest UI for restore without overwriting the test. */
++		if (!a9->test_pattern) {
++			a9->kick = true;
++			wake_up(&a9->wq);
++		}
+ 	}
+ 	mutex_unlock(&a9->shadow_lock);
+ 	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
+@@ -522,8 +526,16 @@ static ssize_t a9_ctl_store(struct device *kdev, int i, const char *buf, size_t
+ 	if (kstrtoint(buf, 10, &v) || v < 0 || v > 100)
+ 		return -EINVAL;
+ 	mutex_lock(&a9->shadow_lock);
+-	a9->controls[i] = v;
+-	a9->controls_dirty = true;	/* applied at the next update, no refresh by itself */
++	if (a9->controls[i] != v) {
++		a9->controls[i] = v;
++		a9->controls_dirty = true;
++		/* A new mapping affects every pixel, not just the next UI damage.
++		 * Queue a full conditioned redraw even if the UI is static.
++		 */
++		a9->clear_req = true;
++		a9->kick = true;
++		wake_up(&a9->wq);
++	}
+ 	mutex_unlock(&a9->shadow_lock);
+ 	return len;
+ }
+@@ -559,6 +571,43 @@ static ssize_t force_clear_store(struct device *kdev, struct device_attribute *a
+ }
+ static DEVICE_ATTR_WO(force_clear);
+ 
++/* Root-only diagnostic input; neither this nor "off" changes any drive gate.
++ * Full Clear jobs share normal temperature, bin, fault and timing admission.
++ */
++static ssize_t test_pattern_show(struct device *kdev, struct device_attribute *attr,
++				 char *buf)
++{
++	return sysfs_emit(buf, "%s\n", READ_ONCE(kdev_to_a9(kdev)->test_pattern) ?
++			  "contrast" : "off");
++}
++
++static ssize_t test_pattern_store(struct device *kdev, struct device_attribute *attr,
++				  const char *buf, size_t len)
++{
++	struct a9_eink *a9 = kdev_to_a9(kdev);
++	bool on;
++
++	if (sysfs_streq(buf, "contrast"))
++		on = true;
++	else if (sysfs_streq(buf, "off"))
++		on = false;
++	else
++		return -EINVAL;
++	if (!a9->thread)
++		return -ENODEV;
++	mutex_lock(&a9->shadow_lock);
++	a9->test_pattern = on;
++	/* Repeating "contrast" deliberately reconditions the same references.
++	 * "off" redraws the newest UI shadow, which KMS has kept current.
++	 */
++	a9->clear_req = true;
++	a9->kick = true;
++	mutex_unlock(&a9->shadow_lock);
++	wake_up(&a9->wq);
++	return len;
++}
++static DEVICE_ATTR(test_pattern, 0600, test_pattern_show, test_pattern_store);
++
+ /* read-only status (not part of the contract) */
+ static ssize_t status_show(struct device *kdev, struct device_attribute *attr, char *buf)
+ {
+@@ -623,6 +672,7 @@ static struct attribute *a9_eink_attrs[] = {
+ 	&dev_attr_white_threshold.attr,
+ 	&dev_attr_contrast.attr,
+ 	&dev_attr_force_clear.attr,
++	&dev_attr_test_pattern.attr,
+ 	&dev_attr_status.attr,
+ 	NULL
+ };
+@@ -1348,7 +1398,8 @@ static bool a9_take_job(struct a9_eink *a9, struct a9_job *job)
+ 			mutex_unlock(&a9->eng_lock);
+ 			a9->controls_dirty = false;
+ 		}
+-		if (a9->clear_req || (job->dry ? a9->dry_force_clear : a9->force_clear)) {
++		if (a9->test_pattern || a9->clear_req ||
++		    (job->dry ? a9->dry_force_clear : a9->force_clear)) {
+ 			/* full GC16 of the newest image; the steady mode stays as set */
+ 			job->mode = A9_MODE_CLEAR;
+ 			job->clear = 1;
+@@ -1362,7 +1413,10 @@ static bool a9_take_job(struct a9_eink *a9, struct a9_job *job)
+ 			job->rect = a9->dirty;
+ 		}
+ 		a9->dirty = (struct a9e_rect){ 0, 0, 0, 0 };
+-		memcpy(a9->e.grey, a9->shadow, A9T_N);
++		if (a9->test_pattern)
++			a9e_pattern_contrast(a9->e.grey);
++		else
++			memcpy(a9->e.grey, a9->shadow, A9T_N);
+ 		have = job->clear || !a9e_rect_empty(&job->rect);
+ 	}
+ 	mutex_unlock(&a9->shadow_lock);
+diff --git a/drivers/gpu/drm/a9_eink/a9_eink_pattern.h b/drivers/gpu/drm/a9_eink/a9_eink_pattern.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..00b66be8adff856951307376c906715c5831e98b
+--- /dev/null
++++ b/drivers/gpu/drm/a9_eink/a9_eink_pattern.h
+@@ -0,0 +1,40 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Diagnostic input only: the caller uses the normal engine/transport path. */
++#ifndef A9_EINK_PATTERN_H
++#define A9_EINK_PATTERN_H
++
++#include "a9_eink_engine.h"
++
++/*
++ * Portrait coordinates (824 columns x 1648 rows), half-open ranges:
++ * rows    0..824: columns 0..412 = grey 0, 412..824 = grey 255.
++ * rows  824..1236: sixteen bands, grey 17 * floor(column * 16 / 824).
++ * rows 1236..1648: columns 0..275 = 0, 275..549 = 27, 549..824 = 255.
++ *
++ * With Clear's stock contrast-0 grey >> 4 quantisation, the references target levels
++ * 0 and 15; the final middle patch targets level 1. The ramp targets every
++ * level 0..15 exactly. Physical black depth remains a waveform/HV question.
++ * The buffer is the engine's LANDSCAPE grey array, not a portrait framebuffer.
++ */
++static inline void a9e_pattern_contrast(uint8_t *grey)
++{
++	unsigned int x, y;
++
++	for (y = 0; y < A9T_H; y++) {
++		unsigned int col = A9E_FB_W - 1 - y;
++
++		for (x = 0; x < A9T_W; x++) {
++			uint8_t value;
++
++			if (x < 824)
++				value = col < 412 ? 0 : 255;
++			else if (x < 1236)
++				value = (col * 16 / A9E_FB_W) * 17;
++			else
++				value = col < 275 ? 0 : col < 549 ? 27 : 255;
++			grey[y * A9T_W + x] = value;
++		}
++	}
++}
++
++#endif /* A9_EINK_PATTERN_H */
+-- 
+2.51.0

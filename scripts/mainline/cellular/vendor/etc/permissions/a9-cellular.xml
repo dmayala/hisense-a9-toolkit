@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<permissions>
+    <feature name="android.hardware.telephony" />
+    <feature name="android.hardware.telephony.gsm" />
+    <feature name="android.hardware.telephony.radio.access" />
+    <feature name="android.hardware.telephony.subscription" />
+    <feature name="android.hardware.telephony.messaging" />
+    <feature name="android.hardware.telephony.data" />
+</permissions>

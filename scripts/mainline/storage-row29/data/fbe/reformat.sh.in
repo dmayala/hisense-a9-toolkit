@@ -1,0 +1,37 @@
+#!/system/bin/sh
+# Manual destructive maintenance: erases ONLY the approved ROW29 test extent.
+# Run from RAM-data slot B via a9ml_rootsh; never invoked by init.
+set -eu
+umask 077
+PATH=/system/bin:/vendor/bin:/sbin
+export PATH
+case "${1-}" in --help) echo 'Usage: row29-fbe-reformat.sh --write-approved (RAM-data B root only; loses row29 test data)';exit 0;; esac
+[ "$#" = 1 ] && [ "$1" = --write-approved ] || { echo 'ROW29 FBE REFORMAT REFUSED: --write-approved required' >&2;exit 1; }
+[ "$(id -u)" = 0 ] && [ "$(getprop ro.boot.slot_suffix)" = _b ]
+awk '$5=="/data" {all++;if($3=="1:0" && $4=="/" && $0 ~ / - ext4 /)ok++} END {exit !(all==1 && ok==1)}' /proc/self/mountinfo || { echo 'ROW29 FBE REFORMAT REFUSED: exact RAM ext4 /data required' >&2;exit 1; }
+T=$(mktemp -d /data/.row29-fbe-tools-XXXXXX)
+PROBE=
+finish() {
+    status=$?
+    trap - EXIT HUP INT TERM
+    if [ -n "$PROBE" ];then kill -TERM "$PROBE" 2>/dev/null || :;wait "$PROBE" 2>/dev/null || :;fi
+    rm -f "$T/helper" || status=2
+    rmdir "$T" || status=2
+    printf '\nROW29_FBE_REFORMAT_RC=%03d\n' "$status"
+    exit "$status"
+}
+trap finish EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+base64 -d > "$T/helper" <<'ROW29_FBE_REFORMAT_HELPER'
+@HELPER_BASE64@
+ROW29_FBE_REFORMAT_HELPER
+actual=$(sha256sum "$T/helper");actual=${actual%% *}
+[ "$actual" = '@HELPER_SHA256@' ]
+chmod 700 "$T/helper"
+"$T/helper" --selftest
+"$T/helper" reformat-existing --write-approved &
+PROBE=$!
+if wait "$PROBE";then PROBE=;else status=$?;PROBE=;exit "$status";fi
+echo 'ROW29 FBE REFORMAT RUN PASS (fresh f2fs encrypt feature; vold creates policies at next FBE boot)'

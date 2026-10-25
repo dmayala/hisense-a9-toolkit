@@ -1,0 +1,6 @@
+/* Saved R3 GPT CRC pins only; no GUIDs or raw capture bytes. */
+#define PIN_PRIMARY_CRC 0x78d3ab72U
+#define PIN_BACKUP_CRC 0xa8711524U
+#define PIN_ARRAY_CRC 0x58f20393U
+#define ORIGINAL_SHA "0bddacda8f247de7491529b08d9100f5cb13b8856c67ce74454c9c4a6e25ed8f"
+#define ZERO_MIB_SHA "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58"

@@ -1,0 +1,5 @@
+# V4L2DevicePoller and libchrome message pump (A6L reference).
+epoll_create1: 1
+epoll_ctl: 1
+epoll_pwait: 1
+eventfd2: 1

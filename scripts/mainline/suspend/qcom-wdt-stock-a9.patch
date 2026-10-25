@@ -1,0 +1,82 @@
+--- a/drivers/watchdog/qcom-wdt.c
++++ b/drivers/watchdog/qcom-wdt.c
+@@ -53,6 +53,7 @@
+ };
+ 
+ struct qcom_wdt {
++	bool a9_user;
+ 	struct watchdog_device	wdd;
+ 	unsigned long		rate;
+ 	void __iomem		*base;
+@@ -331,14 +332,36 @@
+ 	wdt->wdd.timeout = min(wdt->wdd.max_timeout, 30U);
+ 	watchdog_init_timeout(&wdt->wdd, 0, dev);
+ 
++	/* User build: stock A9 bark11s/bite14s, normal watchdog-core service.
++	 * OPEN_TIMEOUT=0 means no first-open lease. There is no host ACK path.
++	 * min_hw_heartbeat_ms makes the core defer early pets to stock's9360ms.
++	 * watchdogd9+5 requests the same14-second timeout after ownership handoff.
++	 */
++	wdt->a9_user = of_machine_is_compatible("hisense,hlte556n") &&
++		IS_ENABLED(CONFIG_WATCHDOG_HANDLE_BOOT_ENABLED);
++	if (wdt->a9_user) {
++		if (!wdt->wdd.pretimeout)
++			return -ENODEV;
++		wdt->wdd.timeout = 14;
++		wdt->wdd.pretimeout = 3;
++		wdt->wdd.min_timeout = 14;
++		wdt->wdd.max_timeout = 14;
++		wdt->wdd.min_hw_heartbeat_ms = 9360;
++		watchdog_set_nowayout(&wdt->wdd, true);
++	}
++
+ 	/*
+ 	 * If WDT is already running, call WDT start which
+ 	 * will stop the WDT, set timeouts as bootloader
+ 	 * might use different ones and set running bit
+ 	 * to inform the WDT subsystem to ping the WDT
+ 	 */
+-	if (qcom_wdt_is_running(&wdt->wdd)) {
+-		qcom_wdt_start(&wdt->wdd);
++	if (wdt->a9_user || qcom_wdt_is_running(&wdt->wdd)) {
++		ret = qcom_wdt_start(&wdt->wdd);
++		if (ret)
++			return ret;
++		if (!qcom_wdt_is_running(&wdt->wdd))
++			return -EIO;
+ 		set_bit(WDOG_HW_RUNNING, &wdt->wdd.status);
+ 	}
+ 
+@@ -347,6 +370,8 @@
+ 		return ret;
+ 
+ 	platform_set_drvdata(pdev, wdt);
++	if (wdt->a9_user)
++		dev_notice(dev, "A9_USER_WDT armed bark=11 bite=14 pet_ms=9360 ack=none lease=none nowayout=1\n");
+ 	return 0;
+ }
+ 
+@@ -403,7 +428,22 @@
+ 		.pm		= &qcom_wdt_pm_ops,
+ 	},
+ };
+-module_platform_driver(qcom_watchdog_driver);
++/* Keep stock-equivalent early registration; no bootstrap acknowledgement. */
++static int __init qcom_wdt_init(void)
++{
++	return platform_driver_register(&qcom_watchdog_driver);
++}
++#ifdef MODULE
++module_init(qcom_wdt_init);
++#else
++pure_initcall(qcom_wdt_init);
++#endif
++
++static void __exit qcom_wdt_exit(void)
++{
++	platform_driver_unregister(&qcom_watchdog_driver);
++}
++module_exit(qcom_wdt_exit);
+ 
+ MODULE_DESCRIPTION("QCOM KPSS Watchdog Driver");
+ MODULE_LICENSE("GPL v2");

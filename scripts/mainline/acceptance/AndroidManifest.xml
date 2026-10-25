@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.a9.acceptance" android:versionCode="1" android:versionName="1">
+  <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="36" />
+  <uses-permission android:name="android.permission.CAMERA" />
+  <uses-permission android:name="android.permission.RECORD_AUDIO" />
+  <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+  <application android:label="A9 acceptance" android:debuggable="true" android:allowBackup="false" android:extractNativeLibs="true" android:theme="@android:style/Theme.Material.Light.NoActionBar">
+    <activity android:name=".Probe" android:exported="true" android:turnScreenOn="true" android:showWhenLocked="true" />
+  </application>
+</manifest>

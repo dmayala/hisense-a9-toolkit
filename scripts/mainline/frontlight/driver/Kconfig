@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config LEDS_A9_FRONTLIGHT
+	tristate "Hisense A9 AW99703/KTD3137 frontlight LEDs"
+	depends on I2C && OF && GPIOLIB
+	depends on LEDS_CLASS
+	help
+	  Four raw 11-bit frontlight LEDs using the Hisense A9 stock electrical
+	  profiles. Per-chip brightness gains belong in userspace, not here.
+	  If built as a module it is named a9-frontlight.

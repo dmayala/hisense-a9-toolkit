@@ -1,0 +1,9 @@
+# Reference integration snippet: the Android vendor owns its shipped ueventd.rc.
+# Match actual connector paths without pinning DRM registration order.
+/sys/devices/platform/eink-display/drm/card*/card*-*/eink mode 0644 root root
+/sys/devices/platform/eink-display/drm/card*/card*-*/eink black_threshold 0644 root root
+/sys/devices/platform/eink-display/drm/card*/card*-*/eink white_threshold 0644 root root
+/sys/devices/platform/eink-display/drm/card*/card*-*/eink contrast 0644 root root
+/sys/devices/platform/eink-display/drm/card*/card*-*/eink force_clear 0200 root root
+# User refresh is separate from the conservative GC16 recovery request.
+/sys/devices/platform/eink-display/drm/card*/card*-*/eink manual_clear 0200 root root

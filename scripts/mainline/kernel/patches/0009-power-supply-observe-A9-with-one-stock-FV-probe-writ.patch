@@ -1,0 +1,503 @@
+From 17b95d01dee5e6fe4a7d4949f42b510fff4f1a25 Mon Sep 17 00:00:00 2001
+From: PMI632 proposal <pmic@example.invalid>
+Date: Thu, 15 Oct 2026 00:00:00 +0000
+Subject: [PATCH 9/9] power: supply: observe A9 with one stock FV probe write
+
+Apply after the existing kernel patch 0008. fv_stock permits one probe-only
+stock FV write and readback; no retries. ADC uses the upstream path, unless
+observe_adc=0 is selected to omit ADC requests too.
+---
+ drivers/power/supply/Kconfig         |  29 +++++
+ drivers/power/supply/pmi632-a9.c     | 163 +++++++++++++++++++++------
+ drivers/power/supply/pmi632-fv.h     |  47 ++++++++
+ drivers/power/supply/pmi632-policy.h |  23 ++++
+ 4 files changed, 230 insertions(+), 32 deletions(-)
+ create mode 100644 drivers/power/supply/pmi632-fv.h
+
+diff --git a/drivers/power/supply/Kconfig b/drivers/power/supply/Kconfig
+index 2bd835836..c2b3ca11f 100644
+--- a/drivers/power/supply/Kconfig
++++ b/drivers/power/supply/Kconfig
+@@ -1197,4 +1197,33 @@ config CHARGER_PMI632_A9
+ 	  Battery capacity is an uncalibrated voltage estimate. See the A9
+ 	  project's docs/mainline-pmic.md before binding this driver.
+ 
++config CHARGER_PMI632_A9_TELEMETRY_ONLY
++	bool "Permanently disable A9 charging enable path"
++	depends on CHARGER_PMI632_A9
++	help
++	  Compile out control-mode configuration and enable paths even when the
++	  module parameter and DT validation flag request charging. Observe
++	  mode is the default; the optional probe-only stock FV write is allowed.
++
++config CHARGER_PMI632_A9_OBSERVE
++	bool "Observe firmware charging with optional probe-only stock FV"
++	depends on CHARGER_PMI632_A9
++	default y if CHARGER_PMI632_A9_TELEMETRY_ONLY
++	help
++	  Exclude charger/QG control writes except optional fv_stock at probe.
++	  With fv_stock=0 firmware charger configuration stays untouched.
++	  Temperature uses only normal upstream ADC5 conversions (which write
++	  ADC registers); observe_adc=0 omits these and makes TEMP unavailable.
++
++config CHARGER_PMI632_A9_FV_STOCK
++	bool "Default fv_stock=1: one probe-only stock 4.450 V float write"
++	depends on CHARGER_PMI632_A9_OBSERVE
++	help
++	  Default the read-only load-time fv_stock parameter to 1. The telemetry
++	  image explicitly selects this option; pure observe defaults to 0.
++	  After all probe dependencies, allow one write of 0x55 to 0x1070 and
++	  verify readback. Unexpected handoff/readback or I/O errors latch health
++	  failure without retry, further writes, or charging-disable operations.
++	  fv_stock=0 still selects pure observe, even with this option enabled.
++
+ endif # POWER_SUPPLY
+diff --git a/drivers/power/supply/pmi632-a9.c b/drivers/power/supply/pmi632-a9.c
+index 474c412ea..c6def0e05 100644
+--- a/drivers/power/supply/pmi632-a9.c
++++ b/drivers/power/supply/pmi632-a9.c
+@@ -21,13 +21,14 @@
+ #include <soc/qcom/qcom-spmi-pmic.h>
+ 
+ #include "pmi632-policy.h"
++#include "pmi632-fv.h"
+ 
+ #define CHG_STATUS1	0x1006
+ #define CHG_STATUS2	0x1007
+ #define CHG_STATUS7	0x100d
+ #define CHG_ENABLE	0x1042
+ #define CHG_FCC		0x1061
+-#define CHG_FV		0x1070
++#define CHG_FV		A9_STOCK_FV_REG
+ #define JEITA_HARD	0x1098
+ #define BATIF_RT	0x1210
+ #define USB_RT		0x1310
+@@ -52,6 +53,29 @@ static bool allow_charging;
+ module_param(allow_charging, bool, 0400);
+ MODULE_PARM_DESC(allow_charging, "EXPERIMENTAL charging after coordinator validation; default false");
+ 
++/* Observe excludes all control writes except the opt-in probe-only stock FV.
++ * CONFIG forces observe; fv_stock=0 preserves pure observation.
++ */
++static bool observe = IS_ENABLED(CONFIG_CHARGER_PMI632_A9_OBSERVE);
++module_param(observe, bool, 0400);
++MODULE_PARM_DESC(observe, "Observe firmware charger; CONFIG_OBSERVE forces true; see fv_stock");
++
++static bool fv_stock = IS_ENABLED(CONFIG_CHARGER_PMI632_A9_FV_STOCK);
++module_param(fv_stock, bool, 0400);
++MODULE_PARM_DESC(fv_stock, "Observe only: one probe write of stock 4.450V FV, with readback; no retries");
++
++/* Optional exception: only the existing upstream ADC5 conversion path writes.
++ * fv_stock=0 observe_adc=0 gives zero consumer writes, with TEMP unavailable.
++ */
++static bool observe_adc = true;
++module_param(observe_adc, bool, 0400);
++MODULE_PARM_DESC(observe_adc, "Use normal upstream ADC5 conversions in observe (default true)");
++
++static bool a9_is_observe(void)
++{
++	return IS_ENABLED(CONFIG_CHARGER_PMI632_A9_OBSERVE) || observe;
++}
++
+ struct a9_pmic {
+ 	struct device *dev;
+ 	struct regmap *map;
+@@ -62,7 +86,7 @@ struct a9_pmic {
+ 	struct a9_sample sample;
+ 	unsigned long last_change, sampled_at;
+ 	u32 last_raw;
+-	int current_scale, error;
++	int current_scale, error, fv_error;
+ 	bool permitted, charging, latched, suspended, have_raw;
+ };
+ 
+@@ -92,12 +116,26 @@ static const struct a9_setting a9_settings[] = {
+ 	{ WD_CFG, BIT(7) | BIT(6) | BIT(1) | BIT(0), BIT(1) | BIT(0) },
+ };
+ 
++static int a9_fv_read(void *context, unsigned int reg, unsigned int *value)
++{
++	return regmap_read(context, reg, value);
++}
++
++static int a9_fv_write(void *context, unsigned int reg, unsigned int value)
++{
++	if (!a9_is_observe() || reg != A9_STOCK_FV_REG || value != A9_STOCK_FV_RAW)
++		return -EPERM;
++	return regmap_write(context, reg, value);
++}
++
+ static int a9_update_check(struct a9_pmic *p, unsigned int reg,
+ 			   unsigned int mask, unsigned int val)
+ {
+ 	unsigned int readback;
+ 	int ret;
+ 
++	if (a9_is_observe())
++		return -EPERM;
+ 	ret = regmap_update_bits(p->map, reg, mask, val);
+ 	if (ret)
+ 		return ret;
+@@ -107,11 +145,13 @@ static int a9_update_check(struct a9_pmic *p, unsigned int reg,
+ 	return (readback & mask) == val ? 0 : -EIO;
+ }
+ 
+-/* Attempt BOTH stops even if one bus transaction fails. Never restore ON. */
++/* Control mode attempts BOTH stops; observe returns before any bus access. */
+ static int a9_off(struct a9_pmic *p)
+ {
+ 	int ret, other;
+ 
++	if (a9_is_observe())
++		return 0;
+ 	p->charging = false;
+ 	ret = a9_update_check(p, CHG_ENABLE, BIT(0), 0);
+ 	other = a9_update_check(p, USB_SUSPEND, BIT(0), BIT(0));
+@@ -130,6 +170,8 @@ static int a9_settings_check(struct a9_pmic *p, bool program)
+ 	int ret;
+ 
+ 	if (program) {
++		if (a9_is_observe())
++			return -EPERM;
+ 		ret = regmap_bulk_write(p->map, JEITA_HARD, hard, sizeof(hard));
+ 		if (ret)
+ 			return ret;
+@@ -170,6 +212,9 @@ static int a9_read_sample(struct a9_pmic *p, struct a9_sample *s)
+ 		{ DIE_STATUS, &s->die }, { CONN_STATUS, &s->conn },
+ 		{ OTG_CMD, &s->otg }, { 0x1307, &s->apsd }, { 0x1308, &s->source },
+ 		{ 0x4843, &s->qgmode },
++		{ CHG_ENABLE, &s->enabled }, { USB_SUSPEND, &s->suspend },
++		{ 0x110b, &s->powerpath }, { CHG_FV, &s->fv_raw },
++		{ CHG_FCC, &s->fcc_raw }, { USB_ICL, &s->icl_raw },
+ 	};
+ 	unsigned int i;
+ 
+@@ -204,11 +249,16 @@ static int a9_read_sample(struct a9_pmic *p, struct a9_sample *s)
+ 	/* QG is negative on charge. power_supply battery current is positive in. */
+ 	s->ua = -div_s64((s64)(s16)get_unaligned_le16(raw + 2) *
+ 			 p->current_scale, 1000);
++	if (s->uv < 2500000 || s->uv > 4500000 || abs(s->ua) > 5000000)
++		return -ERANGE;
++	if (a9_is_observe() && !observe_adc)
++		return 0;
+ 	ret = iio_read_channel_processed(p->therm, &therm_uv);
+ 	if (ret < 0)
+ 		return ret;
+ 	if (a9_temp_dc(therm_uv, &s->temp_dc))
+ 		return -ERANGE;
++	s->temp_valid = 1;
+ 	ret = iio_read_channel_processed(p->vbus, &s->vbus_uv);
+ 	if (ret < 0)
+ 		return ret;
+@@ -216,9 +266,8 @@ static int a9_read_sample(struct a9_pmic *p, struct a9_sample *s)
+ 	if (ret < 0)
+ 		return ret;
+ 	/* Stock charger threshold is 80 C; choose 70 C for bring-up. */
+-	if (die_mc < -40000 || die_mc >= 70000)
+-		return -ERANGE;
+-	if (s->uv < 2500000 || s->uv > 4500000 || abs(s->ua) > 5000000)
++	if (die_mc < -40000 || die_mc > 150000 ||
++	    (!a9_is_observe() && die_mc >= 70000))
+ 		return -ERANGE;
+ 	return 0;
+ }
+@@ -227,15 +276,22 @@ static int a9_health(const struct a9_pmic *p)
+ {
+ 	const struct a9_sample *s = &p->sample;
+ 
+-	if (p->error || p->latched || time_after(jiffies, p->sampled_at + 5 * HZ))
++	if (p->error || p->fv_error || p->latched ||
++	    time_after(jiffies, p->sampled_at + 5 * HZ))
+ 		return POWER_SUPPLY_HEALTH_UNSPEC_FAILURE;
+ 	if (s->status2 & BIT(1))
+ 		return POWER_SUPPLY_HEALTH_OVERVOLTAGE;
+-	if (s->temp_dc <= A9_COLD_DC || (s->status7 & (BIT(2) | BIT(0))))
++	if (a9_is_observe() && !a9_observed_limits_ok(s))
++		return POWER_SUPPLY_HEALTH_UNSPEC_FAILURE;
++	if ((!a9_is_observe() && s->temp_dc <= A9_COLD_DC) ||
++	    (s->status7 & (BIT(2) | BIT(0))))
+ 		return POWER_SUPPLY_HEALTH_COLD;
+-	if (s->temp_dc >= A9_HOT_DC || (s->status7 & (BIT(3) | BIT(1))) ||
++	if ((!a9_is_observe() && s->temp_dc >= A9_HOT_DC) ||
++	    (s->status7 & (BIT(3) | BIT(1))) ||
+ 	    s->die || s->conn)
+ 		return POWER_SUPPLY_HEALTH_OVERHEAT;
++	if (!s->temp_valid)
++		return POWER_SUPPLY_HEALTH_UNKNOWN;
+ 	return POWER_SUPPLY_HEALTH_GOOD;
+ }
+ 
+@@ -250,15 +306,25 @@ static void a9_poll(struct work_struct *work)
+ 	mutex_lock(&p->lock);
+ 	ret = a9_read_sample(p, &s);
+ 	p->error = ret;
+-	if (ret)
++	if (ret) {
++		if (a9_is_observe())
++			goto done;
+ 		goto fault;
++	}
+ 	p->sample = s;
+ 	p->sampled_at = jiffies;
++	if (a9_is_observe() && fv_stock && !p->fv_error && s.fv_raw != A9_STOCK_FV_RAW) {
++		p->fv_error = -EIO;
++		dev_err(p->dev, "stock FV changed after probe; health failure, no retry\n");
++	}
++	if (a9_is_observe())
++		goto done;
+ 	if (p->permitted && s.ua > A9_FCC_UA + 100000) {
+ 		ret = -EOVERFLOW;
+ 		goto fault;
+ 	}
+-	safe = p->permitted && !p->latched && !p->suspended &&
++	safe = !IS_ENABLED(CONFIG_CHARGER_PMI632_A9_TELEMETRY_ONLY) &&
++		p->permitted && !p->latched && !p->suspended &&
+ 		a9_hardware_safe(&s);
+ 	if (!safe) {
+ 		ret = a9_off(p);
+@@ -288,7 +354,7 @@ static void a9_poll(struct work_struct *work)
+ 		goto done;
+ 	}
+ 	/* Pet only after every guard passed; a stuck worker must stop charging. */
+-	ret = regmap_write(p->map, WD_PET, BIT(0));
++	ret = a9_is_observe() ? -EPERM : regmap_write(p->map, WD_PET, BIT(0));
+ 	if (ret)
+ 		goto fault;
+ 	ret = a9_update_check(p, USB_SUSPEND, BIT(0), 0);
+@@ -317,6 +383,8 @@ static enum power_supply_property a9_battery_props[] = {
+ 	POWER_SUPPLY_PROP_VOLTAGE_NOW, POWER_SUPPLY_PROP_CURRENT_NOW,
+ 	POWER_SUPPLY_PROP_TEMP, POWER_SUPPLY_PROP_CAPACITY,
+ 	POWER_SUPPLY_PROP_MODEL_NAME, POWER_SUPPLY_PROP_SCOPE,
++	POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE_MAX,
++	POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
+ };
+ 
+ static int a9_battery_get(struct power_supply *psy,
+@@ -345,7 +413,8 @@ static int a9_battery_get(struct power_supply *psy,
+ 		v->intval = POWER_SUPPLY_STATUS_NOT_CHARGING;
+ 		if (!(s->usb & USB_PRESENT) || s->ua < -50000)
+ 			v->intval = POWER_SUPPLY_STATUS_DISCHARGING;
+-		else if (p->charging && state >= 1 && state <= 4 && s->ua > 0)
++		else if ((a9_is_observe() && a9_observed_charging(s)) ||
++			 (!a9_is_observe() && p->charging && state >= 1 && state <= 4 && s->ua > 0))
+ 			v->intval = POWER_SUPPLY_STATUS_CHARGING;
+ 		break;
+ 	case POWER_SUPPLY_PROP_PRESENT:
+@@ -364,8 +433,18 @@ static int a9_battery_get(struct power_supply *psy,
+ 		v->intval = s->ua;
+ 		break;
+ 	case POWER_SUPPLY_PROP_TEMP:
++		if (!s->temp_valid) {
++			ret = -ENODATA;
++			break;
++		}
+ 		v->intval = s->temp_dc;
+ 		break;
++	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE_MAX:
++		v->intval = 3600000 + s->fv_raw * 10000;
++		break;
++	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX:
++		v->intval = s->fcc_raw * 50000;
++		break;
+ 	case POWER_SUPPLY_PROP_CAPACITY:
+ 		v->intval = a9_voltage_capacity(s->uv);
+ 		break;
+@@ -399,10 +478,11 @@ static int a9_usb_get(struct power_supply *psy,
+ 		v->intval = !!(p->sample.usb & USB_PRESENT);
+ 		break;
+ 	case POWER_SUPPLY_PROP_ONLINE:
+-		v->intval = p->charging;
++		v->intval = a9_is_observe() ? a9_observed_online(&p->sample) : p->charging;
+ 		break;
+ 	case POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT:
+-		v->intval = p->permitted ? A9_ICL_UA : 0;
++		v->intval = a9_is_observe() ? p->sample.icl_raw * 50000 :
++			(p->permitted ? A9_ICL_UA : 0);
+ 		break;
+ 	default:
+ 		ret = -EINVAL;
+@@ -436,6 +516,7 @@ static int a9_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+ 	struct power_supply_config cfg = {};
++	struct a9_fv_io fv_io;
+ 	const struct qcom_spmi_pmic *pmic;
+ 	struct a9_pmic *p;
+ 	unsigned int base, type, subtype;
+@@ -462,13 +543,15 @@ static int a9_probe(struct platform_device *pdev)
+ 	INIT_DELAYED_WORK(&p->work, a9_poll);
+ 	platform_set_drvdata(pdev, p);
+ 
+-	/* Stop inherited firmware charging BEFORE dependencies can defer probe. */
++	/* Control mode stops before dependency deferral; observe leaves it alone. */
+ 	ret = a9_off(p);
+ 	if (ret)
+ 		return ret;
+-	ret = a9_update_check(p, SMB_ENABLE, 0x1f, BIT(3));
+-	if (ret)
+-		return ret;
++	if (!a9_is_observe()) {
++		ret = a9_update_check(p, SMB_ENABLE, 0x1f, BIT(3));
++		if (ret)
++			return ret;
++	}
+ 	ret = regmap_read(p->map, QG_TYPE, &type);
+ 	if (ret)
+ 		return ret;
+@@ -478,15 +561,17 @@ static int a9_probe(struct platform_device *pdev)
+ 	if (type != 0x0d || (subtype != 3 && subtype != 4))
+ 		return dev_err_probe(dev, -ENODEV, "unsupported QG %x/%x\n", type, subtype);
+ 	p->current_scale = subtype == 3 ? 152588 : 305176;
+-	p->therm = devm_iio_channel_get(dev, "batt-therm-voltage");
+-	if (IS_ERR(p->therm))
+-		return dev_err_probe(dev, PTR_ERR(p->therm), "battery NTC ADC\n");
+-	p->vbus = devm_iio_channel_get(dev, "usb-voltage");
+-	if (IS_ERR(p->vbus))
+-		return dev_err_probe(dev, PTR_ERR(p->vbus), "USB ADC\n");
+-	p->die = devm_iio_channel_get(dev, "die-temp");
+-	if (IS_ERR(p->die))
+-		return dev_err_probe(dev, PTR_ERR(p->die), "PMIC die ADC\n");
++	if (!a9_is_observe() || observe_adc) {
++		p->therm = devm_iio_channel_get(dev, "batt-therm-voltage");
++		if (IS_ERR(p->therm))
++			return dev_err_probe(dev, PTR_ERR(p->therm), "battery NTC ADC\n");
++		p->vbus = devm_iio_channel_get(dev, "usb-voltage");
++		if (IS_ERR(p->vbus))
++			return dev_err_probe(dev, PTR_ERR(p->vbus), "USB ADC\n");
++		p->die = devm_iio_channel_get(dev, "die-temp");
++		if (IS_ERR(p->die))
++			return dev_err_probe(dev, PTR_ERR(p->die), "PMIC die ADC\n");
++	}
+ 
+ 	/* Register cleanup AFTER supplies so it cancels work before unregister. */
+ 	cfg.drv_data = p;
+@@ -500,7 +585,8 @@ static int a9_probe(struct platform_device *pdev)
+ 	ret = devm_add_action_or_reset(dev, a9_cleanup, p);
+ 	if (ret)
+ 		return ret;
+-	if (allow_charging) {
++	if (!a9_is_observe() && allow_charging &&
++	    !IS_ENABLED(CONFIG_CHARGER_PMI632_A9_TELEMETRY_ONLY)) {
+ 		if (!device_property_read_bool(dev, "hisense,charging-validated"))
+ 			return dev_err_probe(dev, -EPERM, "missing coordinator validation gate\n");
+ 		ret = a9_settings_check(p, true);
+@@ -508,8 +594,21 @@ static int a9_probe(struct platform_device *pdev)
+ 			return dev_err_probe(dev, ret, "charging configuration\n");
+ 		p->permitted = true;
+ 	}
+-	dev_warn(dev, "EXPERIMENTAL: charging %s, SOC is a voltage estimate\n",
+-		 p->permitted ? "permitted at 4.10V/500mA/500mA" : "OFF");
++	/* No deferral/failure return after this one-shot: keep health observable. */
++	fv_io.context = p->map;
++	fv_io.read = a9_fv_read;
++	fv_io.write = a9_fv_write;
++	mutex_lock(&p->lock);
++	p->fv_error = a9_fv_stock_once(&fv_io, a9_is_observe() && fv_stock);
++	mutex_unlock(&p->lock);
++	if (p->fv_error)
++		dev_err(dev, "stock FV probe failed: %d; health failure, no retry\n", p->fv_error);
++	else if (a9_is_observe() && fv_stock)
++		dev_info(dev, "stock FV 0x1070=0x55 verified; no further charger writes\n");
++	dev_warn(dev, "mode=%s, SOC is a voltage estimate\n",
++		 a9_is_observe() ? (fv_stock ? "observe (probe-only stock FV)" :
++				  "observe (firmware charger unchanged)") :
++		 (p->permitted ? "control (4.10V/500mA/500mA)" : "control (OFF)"));
+ 	schedule_delayed_work(&p->work, 0);
+ 	return 0;
+ }
+@@ -568,5 +667,5 @@ static struct platform_driver a9_driver = {
+ 	},
+ };
+ module_platform_driver(a9_driver);
+-MODULE_DESCRIPTION("Hisense A9 PMI632 guarded charging and QG telemetry proposal");
++MODULE_DESCRIPTION("Hisense A9 PMI632 observation and guarded charger proposal");
+ MODULE_LICENSE("GPL");
+diff --git a/drivers/power/supply/pmi632-fv.h b/drivers/power/supply/pmi632-fv.h
+new file mode 100644
+index 000000000..19a806719
+--- /dev/null
++++ b/drivers/power/supply/pmi632-fv.h
+@@ -0,0 +1,47 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef PMI632_A9_FV_H
++#define PMI632_A9_FV_H
++
++#ifdef __KERNEL__
++#include <linux/errno.h>
++#else
++#include <errno.h>
++#endif
++
++#define A9_STOCK_FV_REG 0x1070
++#define A9_STOCK_FV_RAW 0x55 /* 3.6 V + 85 * 10 mV = 4.450 V */
++#define A9_BOOT_FV_RAW 0x5a /* Observed UEFI / initial stock Linux value */
++
++struct a9_fv_io {
++	void *context;
++	int (*read)(void *context, unsigned int reg, unsigned int *value);
++	int (*write)(void *context, unsigned int reg, unsigned int value);
++};
++
++/* Called once, after all probe dependencies; never from work or cleanup.
++ * Exactly one write on the expected path, no retries or compensating writes.
++ * Callers must latch errors instead of failing/retrying probe after this call.
++ */
++static inline int a9_fv_stock_once(const struct a9_fv_io *io, int enabled)
++{
++	unsigned int value;
++	int ret;
++
++	if (!enabled)
++		return 0;
++	ret = io->read(io->context, A9_STOCK_FV_REG, &value);
++	if (ret)
++		return ret;
++	/* Never raise a lower target or reinterpret an unknown handoff setting. */
++	if (value != A9_BOOT_FV_RAW && value != A9_STOCK_FV_RAW)
++		return -ERANGE;
++	ret = io->write(io->context, A9_STOCK_FV_REG, A9_STOCK_FV_RAW);
++	if (ret)
++		return ret;
++	ret = io->read(io->context, A9_STOCK_FV_REG, &value);
++	if (ret)
++		return ret;
++	return value == A9_STOCK_FV_RAW ? 0 : -EIO;
++}
++
++#endif
+diff --git a/drivers/power/supply/pmi632-policy.h b/drivers/power/supply/pmi632-policy.h
+index a04e8eabc..75fca6907 100644
+--- a/drivers/power/supply/pmi632-policy.h
++++ b/drivers/power/supply/pmi632-policy.h
+@@ -49,8 +49,31 @@ struct a9_sample {
+ 	int uv, ua, temp_dc, vbus_uv;
+ 	unsigned int usb, batif, qg, status1, status2, status7, die, conn, otg;
+ 	unsigned int apsd, source, qgmode;
++	unsigned int enabled, suspend, powerpath, fv_raw, fcc_raw, icl_raw;
++	int temp_valid;
+ };
+ 
++static inline int a9_observed_limits_ok(const struct a9_sample *s)
++{
++	/* Read-only warning against the A9 normal-temperature stock profile. */
++	return s->fv_raw <= 85 && s->fcc_raw <= 60;
++}
++
++static inline int a9_observed_online(const struct a9_sample *s)
++{
++	return (s->usb & 0x10) && !(s->suspend & 1) &&
++		(s->powerpath & 0x01) && (s->powerpath & 0x10) &&
++		!(s->powerpath & 0x40);
++}
++
++static inline int a9_observed_charging(const struct a9_sample *s)
++{
++	unsigned int state = s->status1 & 7;
++
++	return (s->usb & 0x10) && (s->enabled & 1) && !(s->suspend & 1) &&
++		state >= 1 && state <= 4 && s->ua > 0;
++}
++
+ static inline int a9_charge_window(int uv, int dc, int vbus_uv)
+ {
+ 	/* No recovery/precharge of an exhausted cell in this prototype. */

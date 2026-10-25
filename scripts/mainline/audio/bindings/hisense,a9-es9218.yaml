@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/sound/hisense,a9-es9218.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+title: Hisense A9 ESS HiFi DAC control interface
+# Local experimental binding; maintainer metadata is required for upstream submission.
+description: |
+  Board-specific GPIO and I2C programming recovered from the Hisense A9 shipped
+  audio_es9218 driver. The stock product string says ESS9318; register 0x40 is
+  accepted when its upper six bits equal 0xc0. This binding does not identify
+  other ES9218, ES9218P, ES9018 or ES9038 variants as register-compatible.
+  The local oscillator is enabled through a GPIO. Its frequency is unverified;
+  do not fabricate a fixed-clock node. The control driver supports a conservative
+  initial 48 kHz stereo path, using I2S in codec clock-consumer mode.
+allOf:
+  - $ref: dai-common.yaml#
+properties:
+  compatible:
+    const: hisense,a9-es9218
+  reg:
+    const: 0x48
+  '#sound-dai-cells':
+    const: 0
+  reset-gpios:
+    maxItems: 1
+    description: Active-low DAC reset, TLMM65 on A9
+  select-gpios:
+    maxItems: 1
+    description: Active-high stock selector control, TLMM69; its electrical routing role is unresolved
+  oscillator-enable-gpios:
+    maxItems: 1
+    description: Active-high local oscillator enable, TLMM66
+  pa-enable-gpios:
+    maxItems: 1
+    description: Active-high headphone output power enable, TLMM68
+required:
+  - compatible
+  - reg
+  - '#sound-dai-cells'
+  - reset-gpios
+  - select-gpios
+  - oscillator-enable-gpios
+  - pa-enable-gpios
+unevaluatedProperties: false
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+    i2c {
+      #address-cells = <1>;
+      #size-cells = <0>;
+      audio-codec@48 {
+        compatible = "hisense,a9-es9218";
+        reg = <0x48>;
+        #sound-dai-cells = <0>;
+        reset-gpios = <&tlmm 65 GPIO_ACTIVE_LOW>;
+        select-gpios = <&tlmm 69 GPIO_ACTIVE_HIGH>;
+        oscillator-enable-gpios = <&tlmm 66 GPIO_ACTIVE_HIGH>;
+        pa-enable-gpios = <&tlmm 68 GPIO_ACTIVE_HIGH>;
+      };
+    };
+...

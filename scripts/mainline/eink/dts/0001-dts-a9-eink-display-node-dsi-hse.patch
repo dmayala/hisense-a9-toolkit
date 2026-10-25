@@ -1,0 +1,45 @@
+--- a/docs/mainline/sm6115-hisense-hlte556n.dts	2026-10-14 21:19:16.932331067 -0700
++++ b/docs/mainline/sm6115-hisense-hlte556n.dts	2026-10-14 21:19:17.015333132 -0700
+@@ -163,6 +163,24 @@
+ 				 &bimc SLAVE_EBI_CH0 RPM_ALWAYS_TAG>;
+ 	};
+ 
++	/*
++	 * NO UPSTREAM BINDING (proposed, scripts/mainline/eink patch 0007): the
++	 * E Ink display as userspace sees it, 824x1648, with the software TCON
++	 * in the kernel (a9_eink). It scans its drive frames out through the
++	 * transport panel above (msm DSI0 -> TC358767) and reads the FP9929A
++	 * state and the PMI632 E Ink thermistor. epd-supply is only used to
++	 * force the rails down if a pipeline power-down fails. Sends nothing
++	 * unless a9_eink.enable=1.
++	 */
++	eink-display {
++		compatible = "hisense,hlte556n-eink-display";
++		hisense,transport-panel = <&eink_panel>;
++		hisense,epd-pmic = <&epd_pmic>;
++		epd-supply = <&epd_pmic>;
++		io-channels = <&pmi632_adc ADC5_GPIO3_100K_PU>;
++		io-channel-names = "epd-therm";
++	};
++
+ 	/* NO UPSTREAM BINDING: Sunwave SW9261 fingerprint (GPIO/IRQ shim; matching is a TEE TA). */
+ 
+ 	reserved-memory {
+@@ -417,7 +435,7 @@
+ };
+ 
+ &mdss_dsi0 {
+-	vdda-supply = <&pm6125_l18>;	/* TODO: stock vdda not mapped (stock lists vddio L9 only) */
++	vdda-supply = <&pm6125_l18>;	/* stock qcom,vdda-1p2-supply = pm6125_l18 (1.232 V) */
+ 	status = "okay";
+ };
+ 
+@@ -453,6 +471,8 @@
+ 		vddc-supply = <&bridge_vddc>;
+ 		toshiba,dsi-video-mode = "non-burst-sync-event";
+ 		toshiba,dsi-continuous-clock;
++		/* stock qcom,mdss-dsi-h-sync-pulse = <1> (pulse_mode_hsa_he): send HSE (patch 0008) */
++		toshiba,dsi-hse;
+ 		toshiba,init-sequence =
+ 			<0x448 0x00000086 0>,	/* POCTRL: S2P, VS_POL, HS_POL */
+ 			<0x6a0 0x00003080 0>,	/* DP0_SRCCTRL */
