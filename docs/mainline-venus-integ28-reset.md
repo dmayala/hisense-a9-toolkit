@@ -1,5 +1,9 @@
 # integ28 manual Surface encoder reset
 
+Follow-up: [integ29 linear-input reset](mainline-venus-integ29-linear-reset.md)
+reproduces the first-ETB reset without EGL/gralloc and resolves stock's larger
+linear NV12 padding convention. It proposes one userspace-only padding comparison.
+
 2026-10-25, host-only. The decoder tests passed. Encoder setup also passed;
 the retained log ends after the first Surface submission. **No encoded output
 or reset cause is established.** The next isolated candidate is the stock-style

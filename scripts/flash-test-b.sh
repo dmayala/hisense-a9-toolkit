@@ -62,19 +62,25 @@ if [ -n "$IMG" ]; then
   ok "sha256 matches .sha256"
   [ "$(od -A n -t x1 -j 1080 -N 2 "$IMG" | tr -d ' ')" = 53ef ] || fail "not a raw ext4 image (sparse or other)"
   ok "raw ext4"
-  "$HERE/a9-compat.sh" "$IMG" | sed 's/^/       /' ; [ "${PIPESTATUS[0]}" = 0 ] || fail "a9-compat refused this image (see above). No /data wipes: the phone is in daily use."
-  ok "compatible with the running /data"
-  # super space: everything allocated except system_b, plus the new image, must fit
-  SZ=$(stat -c %s "$IMG")
-  # sizes summed on the host: the phone's mksh arithmetic is 32-bit and overflows on 3.5 GB
-  L=$(a9_su 'echo super $(blockdev --getsize64 /dev/block/by-name/super); for p in /dev/block/mapper/*_[ab]; do echo ${p##*/} $(blockdev --getsize64 $p); done')
-  SUPER=$(printf '%s\n' "$L" | awk '$1=="super"{print $2}')
-  USED=$(printf '%s\n' "$L" | awk '$1!="super"{s+=$2} END{printf "%d", s}')
-  SYSB=$(printf '%s\n' "$L" | awk '$1=="system_b"{print $2}')
-  [ -n "$SUPER" ] && [ -n "$SYSB" ] || fail "could not read super layout (su?)"
-  FREE=$(( SUPER - 1048576 - USED )); ROOM=$(( SYSB + FREE ))
-  [ "$SZ" -le $(( ROOM - 4194304 )) ] || fail "image $SZ B does not fit: system_b $SYSB + free $FREE (4 MiB margin). See slots-and-promotion.md 'super space'."
-  ok "fits super (image $SZ, room $ROOM)"
+  if [ "${A9_BTRY_FORMAT:-0}" = 1 ] && [ "$WRITE" = 0 ]; then
+    # Disposable formatted B does not reuse A's /data. Stock A may have no su;
+    # validate the actual write in recovery instead of requiring root on A.
+    echo "  ..   FORMAT=1: shared-data compatibility and rooted Android super-layout checks skipped; recovery write/readback required"
+  else
+    "$HERE/a9-compat.sh" "$IMG" | sed 's/^/       /' ; [ "${PIPESTATUS[0]}" = 0 ] || fail "a9-compat refused this image (see above). No /data wipes: the phone is in daily use."
+    ok "compatible with the running /data"
+    # super space: everything allocated except system_b, plus the new image, must fit
+    SZ=$(stat -c %s "$IMG")
+    # sizes summed on the host: the phone's mksh arithmetic is 32-bit and overflows on 3.5 GB
+    L=$(a9_su 'echo super $(blockdev --getsize64 /dev/block/by-name/super); for p in /dev/block/mapper/*_[ab]; do echo ${p##*/} $(blockdev --getsize64 $p); done')
+    SUPER=$(printf '%s\n' "$L" | awk '$1=="super"{print $2}')
+    USED=$(printf '%s\n' "$L" | awk '$1!="super"{s+=$2} END{printf "%d", s}')
+    SYSB=$(printf '%s\n' "$L" | awk '$1=="system_b"{print $2}')
+    [ -n "$SUPER" ] && [ -n "$SYSB" ] || fail "could not read super layout (su?)"
+    FREE=$(( SUPER - 1048576 - USED )); ROOM=$(( SYSB + FREE ))
+    [ "$SZ" -le $(( ROOM - 4194304 )) ] || fail "image $SZ B does not fit: system_b $SYSB + free $FREE (4 MiB margin). See slots-and-promotion.md 'super space'."
+    ok "fits super (image $SZ, room $ROOM)"
+  fi
 fi
 if [ -n "$BOOT" ]; then
   [ -f "$BOOT" ] || fail "no such boot image: $BOOT"

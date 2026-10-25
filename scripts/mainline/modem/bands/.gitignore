@@ -1,0 +1,6 @@
+__pycache__/
+*.bin
+*.elf
+*.qcn
+rfc-runtime/rfc-query-aarch64
+rfc-runtime/rfc-query-aarch64.sha256

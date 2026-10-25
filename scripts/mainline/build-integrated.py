@@ -46,6 +46,23 @@ def bundle_system_delivery(runtime):
     return sources
 
 
+def bundle_acceptance_sources(runtime, assets):
+    """Stage every pinned source, including files absent from the base runtime."""
+    manifest = json.loads((assets / 'assets.json').read_text())
+    for name, digest in manifest['sources'].items():
+        relative = Path(name)
+        if relative.is_absolute() or '..' in relative.parts:
+            raise ValueError('invalid acceptance source: ' + name)
+        source = HERE / relative
+        if sha(source) != digest:
+            raise ValueError('acceptance source hash mismatch: ' + name)
+        target = runtime / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        if sha(target) != digest:
+            raise ValueError('staged acceptance source hash mismatch: ' + name)
+
+
 def apply_release(out, args, run):
     if not args.release:
         return None

@@ -334,7 +334,8 @@ class Sweep:
         self.out = Path(os.environ.get('A9_BTRY_LOGS', '/nonexistent'))
         self.assets = Path(os.environ.get('A9_SWEEP_ASSETS', str(ASSETS)))
         self.end = time.monotonic() + int(os.environ.get('A9_SWEEP_SECONDS', str(int(os.environ.get('A9_BTRY_HOLD', '3600'))-30)))
-        self.hvenc_qualify = os.environ.get('A9_SWEEP_HVENC_QUALIFY','0') == '1'
+        self.skip_encoder = os.environ.get('A9_SWEEP_SKIP_ENCODER','0') == '1'
+        self.hvenc_qualify = not self.skip_encoder and os.environ.get('A9_SWEEP_HVENC_QUALIFY','0') == '1'
         self.hvenc_variants = self.hvenc_qualify and os.environ.get('A9_SWEEP_HVENC_VARIANTS','0') == '1'
         self.hvenc_extra_reserve = 480 if self.hvenc_variants else 0
         self.drain_requested = os.environ.get('A9_SWEEP_DRAIN','0') == '1'
@@ -1049,6 +1050,9 @@ class Sweep:
         return diagnostic
 
     def hardware_encoder(self):
+        if self.skip_encoder:
+            self.not_run('18_hardware_encoder', attempted=0, skipped_known_reset=1)
+            return
         # Exact-name synthetic probes use the ordinary framework shell. Stage
         # into shell-owned data; vendor_file execution is deliberately denied.
         evidence = dict(qualification=0, bundle_verified=0, staged=0, cleanup=0,
@@ -1584,6 +1588,8 @@ def main():
         print('CONTEXT FAIL {"hvenc_variants_option":0}'); return 2
     if os.environ.get('A9_SWEEP_DRAIN','0') not in ('0','1'):
         print('CONTEXT FAIL {"drain_option":0}'); return 2
+    if os.environ.get('A9_SWEEP_SKIP_ENCODER','0') not in ('0','1'):
+        print('CONTEXT FAIL {"skip_encoder_option":0}'); return 2
     s = Sweep()
     def stopped(signum, frame): raise InterruptedError()
     signal.signal(signal.SIGTERM, stopped); signal.signal(signal.SIGINT, stopped)

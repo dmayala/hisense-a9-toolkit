@@ -1,0 +1,79 @@
+RFC_READ root_slot_a qrtr_get_only sanitized_output deadline_seconds=225
+PREFLIGHT_OK_ROOT_SLOT_A
+SOURCE qmi
+QRTR_LOOKUP endpoints=2 [source=qmi]
+QMI_ENDPOINT index=0 service=2 instance=0 [source=qmi]
+QMI_RESULT service=2 message=0x0045 result=0 error=0 [source=qmi]
+CAPABILITY LEGACY_MASK=0x0002000004680183 [source=qmi]
+CAPABILITY GSM_MHz=1800,900_extended,850,1900 [source=qmi]
+CAPABILITY WCDMA=1,5,8 [source=qmi]
+CAPABILITY LTE_1_64=1,3,5,8,34,38,39,40,41 [source=qmi]
+CAPABILITY LTE_EXT=1,3,5,8,34,38,39,40,41 [source=qmi]
+QMI_RESULT service=2 message=0x002c result=0 error=0 [source=qmi]
+HARDWARE_REVISION status=present_value_suppressed [source=qmi]
+QMI_ENDPOINT index=1 service=3 instance=0 [source=qmi]
+QMI_RESULT service=3 message=0x0031 result=1 error=74 [source=qmi]
+QMI_RESULT service=3 message=0x0034 result=0 error=0 [source=qmi]
+PREFERENCE LEGACY_MASK=0x0002000004680183 [source=qmi]
+PREFERENCE GSM_MHz=1800,900_extended,850,1900 [source=qmi]
+PREFERENCE WCDMA=1,5,8 [source=qmi]
+PREFERENCE LTE_1_64=1,3,5,8,34,38,39,40,41 [source=qmi]
+PREFERENCE LTE_EXT=1,3,5,8,34,38,39,40,41,66,71,250,252,255 [source=qmi]
+SOURCE_END qmi rc=0
+SOURCE prop0
+SOURCE_END prop0 rc=0
+SOURCE prop1
+SOURCE_END prop1 rc=0
+SOURCE prop2
+SOURCE_END prop2 rc=0
+SOURCE prop3
+SOURCE_END prop3 rc=0
+SOURCE prop4
+SOURCE_END prop4 rc=0
+SOURCE prop5
+SOURCE_END prop5 rc=0
+SOURCE prop6
+SOURCE_END prop6 rc=0
+SOURCE prop7
+SOURCE_END prop7 rc=0
+SOURCE sys0
+READ_UNAVAILABLE [source=sys0]
+SOURCE_END sys0 rc=0
+SOURCE sys1
+READ_UNAVAILABLE [source=sys1]
+SOURCE_END sys1 rc=0
+SOURCE sys2
+READ_UNAVAILABLE [source=sys2]
+SOURCE_END sys2 rc=0
+SOURCE sys3
+READ_UNAVAILABLE [source=sys3]
+SOURCE_END sys3 rc=0
+SOURCE sys4
+READ_UNAVAILABLE [source=sys4]
+SOURCE_END sys4 rc=0
+SOURCE sys5
+READ_UNAVAILABLE [source=sys5]
+SOURCE_END sys5 rc=0
+SOURCE sys6
+READ_UNAVAILABLE [source=sys6]
+SOURCE_END sys6 rc=0
+SOURCE sys7
+READ_UNAVAILABLE [source=sys7]
+SOURCE_END sys7 rc=0
+SOURCE radio
+SOURCE_END radio rc=0
+SOURCE boot
+SOURCE_PERMISSION_DENIED [source=boot]
+SOURCE_END boot rc=0
+SOURCE kernel
+SOURCE_PERMISSION_DENIED [source=kernel]
+SOURCE_END kernel rc=0
+SOURCE phone
+SOURCE_END phone rc=0
+SOURCE registry
+SOURCE_END registry rc=0
+COLLECTOR_DONE
+CLEANUP_OK
+RFC_SELECTOR_UNRESOLVED no_allowlisted_runtime_hint
+RFC_HINTS_REQUIRE_ATTRIBUTION; QMI_CAPABILITY_IS_NOT_PA_FILTER_OR_CALIBRATION_PROOF
+RFC_READ_COMPLETE

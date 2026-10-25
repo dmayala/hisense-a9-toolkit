@@ -258,6 +258,14 @@ else:
                 output=sp.check_output([shell],input="cmd() { printf '%s\\n' '"+status+"'; }\n"+predicate,
                                        text=True,timeout=5)
                 self.assertEqual(m.fields(output)['wifi'],str(expected))
+            # Host GNU grep accepts BRE \\|; Android Toybox grep does not.
+            # Exercise the production predicate with the actual Android tool.
+            predicate=next(line for line in capture.call_args[0][0].splitlines() if line.startswith('dumpsys power'))
+            env=dict(os.environ,PATH=str(Path(shell).parent)+':'+os.environ['PATH'])
+            for state,expected in (('Asleep',1),('Dozing',1),('Awake',0)):
+                output=sp.check_output([shell],input="dumpsys() { echo mWakefulness="+state+"; }\n"+predicate,
+                                       env=env,text=True,timeout=5)
+                self.assertEqual(m.fields(output)['screen_off'],str(expected))
 
     def test_6_framework_commands_use_shell_and_keep_watchdog_tracking(self):
         with patch.dict(os.environ, A9_BTRY_IN_HOOK='1', ADB='INERT'):
@@ -273,7 +281,8 @@ else:
                 routed.append(argv[-1])
                 stubs="settings() { echo 0; }; dumpsys() { echo mWakefulness=Asleep; }; svc() { :; }; input() { :; }; cmd() { echo 'Wifi is connected to fixture'; };\n"
                 shell='/home/user/A9-build/mainline/sol-wifi/target-audit/bin/sh'
-                return sp.check_output([shell],input=stubs+argv[-1],text=True,timeout=5)
+                env=dict(os.environ,PATH=str(Path(shell).parent)+':'+os.environ['PATH'])
+                return sp.check_output([shell],input=stubs+argv[-1],env=env,text=True,timeout=5)
             with patch.object(n,'root',side_effect=native), patch.object(m,'command',side_effect=framework):
                 context,reason=n.inspect();self.assertEqual(reason,{})
                 n.mode(True);n.prepare_screen();self.assertEqual(n.snapshot()['screen_off'],1);n.restore()

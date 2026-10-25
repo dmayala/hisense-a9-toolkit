@@ -227,7 +227,7 @@ for supply in a9-usb usb; do
 done
 '''+suspended+' && echo input_paused 1 || echo input_paused 0\n'+
             '[ "$(cat /sys/class/power_supply/battery/status)" = Charging ] && echo charging 1 || echo charging 0\n'))
-        d.update(fields(self.framework("cmd wifi status | grep -Eiq '^wi-?fi is connected([[:space:]]|$)' && echo wifi 1 || echo wifi 0\ndumpsys power | grep -q 'mWakefulness=Asleep\\|mWakefulness=Dozing' && echo screen_off 1 || echo screen_off 0\n")))
+        d.update(fields(self.framework("cmd wifi status | grep -Eiq '^wi-?fi is connected([[:space:]]|$)' && echo wifi 1 || echo wifi 0\ndumpsys power | grep -Eq 'mWakefulness=(Asleep|Dozing)' && echo screen_off 1 || echo screen_off 0\n")))
         required = ('boot_ns', 'mono_ns', 'uncertainty_ns', 'capacity', 'charge_counter', 'charge_full_design', 'usb_present', 'wifi', 'screen_off', 'input_paused', 'charging')
         if self.context.get('counter_kind') == 1:
             required += ('counter_sample_ms', 'counter_elapsed_ms', 'counter_wakeups')

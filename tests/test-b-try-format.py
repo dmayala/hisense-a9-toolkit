@@ -86,9 +86,12 @@ if a == ['get-state']:
     done(text='device' if s['mode'] == 'b' else s['mode'])
 if a[:1] == ['reboot']:
     s['mode'] = 'fastboot' if a[1:] == ['bootloader'] else 'recovery'
+    if s.get('system_case')=='recovery-slot' and s['mode']=='recovery': s['slot']='b'
     done()
 if a[:1] == ['push']:
-    s['vendor_hash'] = hashlib.sha256(pathlib.Path(a[1]).read_bytes()).hexdigest()
+    kind='system' if a[2]=='/tmp/b-try-system.img' else 'vendor'
+    if kind=='system' and s.get('system_case')=='push-failed': done(1)
+    s[kind+'_hash'] = hashlib.sha256(pathlib.Path(a[1]).read_bytes()).hexdigest()
     done()
 if a[:1] == ['pull']:
     shutil.copyfile(r/'phone-files'/pathlib.Path(a[1]).name,a[2]);done()
@@ -114,6 +117,7 @@ if a[:1] == ['exec-out']:
     sys.stdout.buffer.write(b.getvalue()); done()
 assert a[:1] == ['shell'], a
 c = ' '.join(a[2:] if a[1:2] == ['-T'] else a[1:])
+if c.startswith('su -c ') and s.get('system_case')=='unrooted': done(1)
 if c.startswith('su -c '): c = shlex.split(c)[2]
 if 'echo "slot=' in c:
     done(text='slot=_'+s['slot']+'\nboot_completed=1\nlineage=fake\nwakefulness=Awake')
@@ -134,6 +138,10 @@ if c == 'twrp format data':
     assert s['mode'] == 'recovery'
     s['formatted'] = True; done(text='Done processing script file')
 if c.startswith('blockdev --setrw'):
+    assert s['mode']=='recovery' and s['slot']=='a'
+    if '/dev/block/mapper/system_b' in c:
+        if s.get('system_case')=='flash-failed': done(1)
+        s.setdefault('written',[]).append('system_b');done()
     s.setdefault('written',[]).append('vendor_b')
     s['vendor'] = True; done(text=s['vendor_hash']+'  /dev/block/mapper/vendor_b')
 if c == 'sh /system/bin/rebootsystem.sh': done()
@@ -160,7 +168,7 @@ if c.startswith('printf "A9_BTRY_BOOT_STATUS '):
             done(text=record+'extra')
     done(text=record+'\r\n')
 if c.startswith('su -c '): c = shlex.split(c)[2]
-if c == 'id -u': done(text='0')
+if c == 'id -u': done(text='2000' if s.get('system_case')=='unrooted' and s['mode']=='device' else '0')
 if c.startswith('ls -1 '):
     done(text='boot-0000000002' if (s['scenario']=='crash-loop' or s['scenario'].startswith('hvenc-')) and 'tail -2' not in c else 'boot-0000000001')
 if c.startswith(('mkdir -p ', 'tar -C ', 'rm -f ')): done()
@@ -169,7 +177,7 @@ raise AssertionError(('unexpected fake command', a))
 
 
 class FormatPath(unittest.TestCase):
-    def run_phone(self, scenario='boot', linger=4, system_case=None):
+    def run_phone(self, scenario='boot', linger=4, system_case=None, format_override=None):
         with tempfile.TemporaryDirectory(prefix='b-try-format-') as tmp:
             r = Path(tmp)
             scripts = r/'scripts'
@@ -256,7 +264,7 @@ sleep() {
                 (image/'system.img.sha256').write_text(('0'*64 if system_case=='sha-mismatch' else digest)+'  system.img\n')
             (r/'state.json').write_text(json.dumps(dict(
                 mode='device', slot='b' if system_case=='initial-b' else 'a', scenario=scenario, linger=linger, system_case=system_case,
-                boot_after=108)))
+                boot_after=108 if system_case is None else 16)))
             # No inherited A9 configuration or hook can reach a real phone.
             env = {k: v for k, v in os.environ.items()
                    if not k.startswith(('A9_', 'ANDROID_', 'BASH_', 'BASH_FUNC_'))}
@@ -270,6 +278,7 @@ sleep() {
             if system_case is not None:
                 env['A9_BTRY_SYSTEM']='/stale/other-system.img'  # launcher must bind the manifest
                 if system_case=='ram':env['A9_BTRY_FORMAT']='0'
+                if format_override is not None:env['A9_BTRY_FORMAT']=format_override
             p = subprocess.run(['bash', str(acceptance/'run.sh'), str(image)],
                                env=env, capture_output=True, text=True, timeout=180)
             calls = [json.loads(x) for x in (r/'calls.jsonl').read_text().splitlines()]
@@ -277,7 +286,7 @@ sleep() {
             if system_case is not None:
                 state['system_check']=(r/'logs/system-check.log').read_text()
                 state['system_verified']=(r/'logs/system-delivery.log').exists()
-                if system_case not in ('pass','ram'):
+                if system_case not in ('pass','ram') or format_override is not None:
                     return p,state,calls
             self.assertEqual(bool(state.get('formatted')),system_case!='ram',p.stdout+p.stderr)
             self.assertEqual((state['slot'], state['mode']), ('a', 'device'))

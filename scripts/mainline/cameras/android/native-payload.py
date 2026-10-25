@@ -1,4 +1,4 @@
-"""Host-built camera core for incremental images; never builds or accesses a phone."""
+"""Matching camera core/IPA/worker for incremental images; host files only."""
 import hashlib
 from pathlib import Path
 
@@ -12,6 +12,10 @@ def verify(built):
     assert (built/'.patched').read_text().strip()==patchset, 'rebuild the camera HAL from the current patchset'
     library=built/'overlay/lib64/a9-camera/libcamera.so'
     assert library.is_file() and b'android_fdsan_set_error_level' in library.read_bytes()
-    # STAB4 changes only Process's pre-exec child implementation, with no
-    # CameraDevice/IPA ABI or transport changes. Preserve other vendor members.
-    return {'lib64/a9-camera/libcamera.so':library}
+    # The lens-map fix changes configure's IPA wire data. Ship core, module
+    # and worker together so an incremental image cannot inherit an old peer.
+    names = ('lib64/a9-camera/libcamera.so', 'lib64/libcamera/ipa/ipa_soft_simple.so',
+             'libexec/libcamera/soft_ipa_proxy')
+    payload = {name:built/'overlay'/name for name in names}
+    assert all(path.is_file() for path in payload.values())
+    return payload

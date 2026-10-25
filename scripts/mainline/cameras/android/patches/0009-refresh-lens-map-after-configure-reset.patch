@@ -1,0 +1,18 @@
+--- a/include/libcamera/ipa/soft.mojom
++++ b/include/libcamera/ipa/soft.mojom
+@@ -13,0 +14,2 @@
++	/* configure resets the IPC serializer: renew every borrowed ID map. */
++	libcamera.ControlInfoMap lensControls;
+--- a/src/ipa/simple/soft_simple.cpp
++++ b/src/ipa/simple/soft_simple.cpp
+@@ -118 +118 @@
+-	lensInfoMap_ = lensControls;
++	/* Lens ranges are read here; retain the map only after configure. */
+@@ -220,0 +221,2 @@
++	/* init IDs were freed by the isolated worker configure reset. */
++	lensInfoMap_ = configInfo.lensControls;
+--- a/src/libcamera/pipeline/simple/simple.cpp
++++ b/src/libcamera/pipeline/simple/simple.cpp
+@@ -1812,0 +1813,2 @@
++		CameraLens *lens = data->sensor_->focusLens();
++		configInfo.lensControls = lens ? lens->controls() : ControlInfoMap();

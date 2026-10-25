@@ -160,7 +160,7 @@ def main(generation=14, extra_required=()):
     ap.add_argument('--pg-stage', type=Path, default=ROOT/'agent-pg-stock-20261024/stage4')
     ap.add_argument('--encoder-stage', type=Path, default=ROOT/'agent-hvenc-realpath-20261025/encoder-stage')
     ap.add_argument('--camera-android-build',type=Path,default=ROOT/'agent-stab4-20261024/android',
-                    help='current host-built libcamera core; refreshes the inherited camera child cleanup')
+                    help='current matching libcamera core, IPA module and worker overlay')
     ap.add_argument('--system-root',type=Path,default=ROOT/'adsp/d2-v8-20261017/system-image/system')
     ap.add_argument('--assets', type=Path, help='freshly rebuilt acceptance assets, if changed')
     args = ap.parse_args()
@@ -325,7 +325,7 @@ def main(generation=14, extra_required=()):
     for dest in runtime.rglob('*'):
         source = MAIN/dest.relative_to(runtime)
         if dest.is_file() and source.is_file(): shutil.copyfile(source, dest)
-    for name in ('reboot/fbe-public-auth.py', 'reboot/rpmb-evidence.py', 'acceptance/crash-evidence.py',
+    for name in ('boot-deadline/hold-lease.py', 'reboot/fbe-public-auth.py', 'reboot/rpmb-evidence.py', 'acceptance/crash-evidence.py',
                  'acceptance/drain.py', 'acceptance/drain-clock.c', 'acceptance/fp-no-dumps.sh',
                  'fingerprint/with-display.py'):
         shutil.copyfile(MAIN/name, runtime/name)
@@ -336,9 +336,10 @@ def main(generation=14, extra_required=()):
     compiler = runtime/'tools/bin/secilc'
     shutil.copyfile(ROOT/'android/dl/cf_arm64_x/otatools/bin/secilc', compiler); compiler.chmod(0o755)
     assets = json.loads((out/'acceptance-assets/assets.json').read_text())
+    release_config.bundle_acceptance_sources(runtime, out/'acceptance-assets')
     assert 'drain-clock' in assets['assets'] and 'acceptance/drain-clock.c' in assets['sources'], 'rebuild acceptance assets for the standby-drain clock probe'
     for name, digest in assets['assets'].items(): assert sha(out/'acceptance-assets'/name) == digest, name
-    for name, digest in assets['sources'].items(): assert sha(MAIN/name) == digest, name
+    for name, digest in assets['sources'].items(): assert sha(runtime/name) == digest, name
     hook = out/f'onb-integ{generation}.py'
     hook.write_text('#!/usr/bin/env python3\nimport os\nfrom pathlib import Path\nimport subprocess as sp\nimport sys\n'
                     'p=Path(__file__).resolve().parent\n'

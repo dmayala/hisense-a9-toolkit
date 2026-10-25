@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import subprocess as sp
 import tempfile
@@ -23,25 +24,33 @@ class Tests(unittest.TestCase):
     def phone(self,case):return base.FormatPath().run_phone(system_case=case)
 
     def test_1_fresh_and_ram_data_write_only_b_and_verify_before_format(self):
-        for case in ('pass','ram'):
+        for case in ('pass','ram','unrooted','key-mismatch'):
             with self.subTest(case=case):
                 p,state,calls=self.phone(case)
                 self.assertEqual(p.returncode,0,p.stdout+p.stderr)
                 self.assertEqual(state['written'],['system_b','vendor_b','boot_b'])
                 self.assertTrue(state['system_verified'])
                 self.assertEqual((state['slot'],state['mode']),('a','device'))
-                self.assertIn('RESULT: COMPATIBLE',state['system_check'])
+                self.assertIn('RESULT: COMPATIBLE' if case=='ram' else 'FORMAT=1:',state['system_check'])
                 commands=[c[1:] for c in calls]
-                flash=next(i for i,c in enumerate(commands) if c[:3]==['fastboot','flash','system_b'])
+                push=next(i for i,c in enumerate(commands) if c[:2]==['adb','push'] and c[-1]=='/tmp/b-try-system.img')
+                flash=next(i for i,c in enumerate(commands) if c[:2]==['adb','shell'] and c[-1].startswith('blockdev --setrw /dev/block/mapper/system_b'))
+                self.assertIn('conv=fsync', commands[flash][-1])
+                self.assertLess(push,flash)
                 readback=next(i for i,c in enumerate(commands) if c[:2]==['adb','shell'] and 'head -c ' in c[-1] and 'mapper/system_b' in c[-1])
-                vendor=next(i for i,c in enumerate(commands) if c[:2]==['adb','shell'] and c[-1].startswith('blockdev --setrw'))
+                vendor=next(i for i,c in enumerate(commands) if c[:2]==['adb','shell'] and c[-1].startswith('blockdev --setrw /dev/block/mapper/vendor_b'))
                 self.assertLess(flash,readback);self.assertLess(readback,vendor)
+                self.assertFalse(any(c[:2]==['fastboot','flash'] and c[2]=='system_b' or c[:3]==['fastboot','reboot','fastboot'] for c in commands))
+                if case!='ram':
+                    before=commands[:next(i for i,c in enumerate(commands) if c[:2]==['adb','reboot'])]
+                    self.assertFalse(any('plat_mac_permissions' in c[-1]
+                                         or 'blockdev' in c[-1] and 'by-name/super' in c[-1] for c in before))
                 self.assertFalse(any(c[0]=='fastboot' and c[1:2]==['flash'] and c[2].endswith('_a') for c in commands))
 
     def test_2_hash_key_space_and_initial_slot_refuse_before_mutation(self):
         for case in ('sha-mismatch','key-mismatch','super-full','initial-b'):
             with self.subTest(case=case):
-                p,state,calls=self.phone(case)
+                p,state,calls=base.FormatPath().run_phone(system_case=case,format_override='0' if case in ('key-mismatch','super-full') else '1')
                 self.assertEqual(p.returncode,2,p.stdout+p.stderr)
                 self.assertIn('detail=system_check_failed',p.stdout)
                 self.assertFalse(state.get('written'))
@@ -49,7 +58,7 @@ class Tests(unittest.TestCase):
                 self.assertFalse(any(c[1]=='adb' and c[2:3]==['reboot'] or c[1]=='fastboot' and c[2:3] in (['flash'],['set_active'],['reboot']) for c in calls))
 
     def test_3_flash_slot_and_readback_failure_return_a_without_booting_b(self):
-        for case,detail in (('flash-failed','system_flash_failed'),('fastbootd-slot','system_fastbootd_slot'),
+        for case,detail in (('flash-failed','system_flash_failed'),('recovery-slot','system_recovery_slot'),('push-failed','system_push_failed'),
                             ('readback-failed','system_readback_failed'),('mismatch','system_mismatch')):
             with self.subTest(case=case):
                 p,state,calls=self.phone(case)
@@ -130,5 +139,22 @@ class Tests(unittest.TestCase):
             expected=hashlib.sha256(b'system.img').hexdigest()+'  system.img\n'
             self.assertEqual((root/'system.img.sha256').read_text(),expected)
             self.assertIn(expected,(root/'SHA256SUMS').read_text())
+
+    def test_6_recovery_write_under_android_mksh(self):
+        # Exercise the exact phone-side command with inert shell functions;
+        # no block device or real transport is opened by this rehearsal.
+        source=(ROOT/'scripts/mainline/boot-deadline/b-try.sh').read_text()
+        command=re.search(r'\$ADB" shell \'(blockdev --setrw /dev/block/mapper/system_b[^\']+)\'',source).group(1)
+        android=Path('/home/user/A9-build/mainline/sol-wifi/target-audit')
+        qemu='/nix/store/abpmwxx8hzfv201mjri0bxmg4jsf4gw9-qemu-10.1.0/bin/qemu-aarch64'
+        stubs='''blockdev() { [ "$*" = '--setrw /dev/block/mapper/system_b' ]; }
+dd() { [ "$*" = 'if=/tmp/b-try-system.img of=/dev/block/mapper/system_b bs=4M conv=fsync' ]; }
+'''
+        for fail in (False,True):
+            prefix=stubs if not fail else stubs+'blockdev() { return 1; }\n'
+            p=sp.run([qemu,android/'linker64',android/'system/bin/sh','-c',prefix+command],
+                     env=dict(os.environ,LD_LIBRARY_PATH=str(android/'lib64')),
+                     capture_output=True,text=True,timeout=5)
+            self.assertEqual(p.returncode,1 if fail else 0,p.stderr)
 
 if __name__=='__main__':unittest.main(verbosity=2)

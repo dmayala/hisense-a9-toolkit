@@ -56,7 +56,7 @@ print(n)
 PY
 )
 a9_usb_lock_inherit
-result=NOUSB detail=setup_failed attempted=0 restored=0 collecting=0 b_completed=0 hook_pid= edl_seen=0 edl_reset_attempted=0
+result=NOUSB detail=setup_failed attempted=0 restored=0 collecting=0 b_completed=0 hook_pid= lease_pid= edl_seen=0 edl_reset_attempted=0
 formatted=0 a_repair_attempted=0 a_return_recovery=0
 saved_system_server_loop=0
 saved_crash_extract_failed=0
@@ -362,13 +362,18 @@ pull_pstore() {
 hold_b() {
   local until=$((SECONDS+hold)) last= m s hook_rc=0
   echo "B boot_completed=1; holding ${hold}s to verify deadline disarm" >&2
+  export A9_BTRY_OWNER_END
+  A9_BTRY_OWNER_END=$(python3 -c 'import sys,time;print(time.monotonic()+int(sys.argv[1]))' "$hold")
+  # Same owner end before/after the hook's intentional reboot. Its volatile
+  # lease disappears at reboot and is recreated when ordinary B shell returns.
+  python3 -B "$(dirname -- "${BASH_SOURCE[0]}")/hold-lease.py" --deadline "$A9_BTRY_OWNER_END" >"$out/hold-lease.log" 2>&1 &
+  lease_pid=$!
   if [[ -n $onb ]]; then
     echo "B hook: $onb; output: $out/onb.log; limit: ${hold}s" >&2
     # Propagate the original owner's absolute monotonic deadline through any
     # prerequisite hook. A late qualification cannot reset the hold budget.
-    export A9_BTRY_OWNER_END
-    A9_BTRY_OWNER_END=$(python3 -c 'import sys,time;print(time.monotonic()+int(sys.argv[1]))' "$hold")
-    # No runner USB polling during the hook: idle tests need a quiet window.
+    # No runner mode polling during the hook. Only the bounded lease keeper
+    # sends its existing once-per-minute hold heartbeat.
     # timeout owns the child group, including adb and Python descendants.
     timeout --signal=TERM --kill-after=10 "$hold" "$onb" >"$out/onb.log" 2>&1 &
     hook_pid=$!
@@ -402,6 +407,11 @@ finish() {
   local rc=2
   trap - EXIT INT TERM
   set +e
+  if [[ -n $lease_pid ]]; then
+    kill -TERM "$lease_pid" 2>/dev/null
+    wait "$lease_pid" 2>/dev/null
+    lease_pid=
+  fi
   if [[ -n $hook_pid ]]; then
     kill -TERM "$hook_pid" 2>/dev/null
     wait "$hook_pid" 2>/dev/null
@@ -430,8 +440,8 @@ finish() {
   exit "$rc"
 }
 # Run the exact flash-test-b check-only path before installing the EXIT trap:
-# refusal must not reboot a phone or start a partition write. Keep compatibility
-# checks even with disposable B /data: A's shared-data return still matters.
+# refusal must not reboot a phone or start a partition write. FORMAT=1 skips
+# checks requiring root on Android A; recovery writes and readback stay strict.
 if [[ -n $SYSTEM ]]; then
   detail=system_prepare
   check="$(dirname -- "${BASH_SOURCE[0]}")/../system-delivery/flash-test-b.sh"
@@ -446,24 +456,23 @@ fi
 trap finish EXIT
 trap 'detail=interrupted; exit 2' INT TERM
 if [[ -n $SYSTEM ]]; then
-  # Use slot A's stock recovery/fastbootd, before changing vendor or formatting
-  # data. Only the explicit inactive system_b target can be resized/written.
-  # This avoids needing mainline vendor B to run stock fastbootd.
+  # Stock fastbootd cannot open system_b for writing. Use the same TWRP RAM
+  # delivery as vendor, before changing vendor or formatting shared data.
   recovery
-  adb_cmd reboot bootloader >&2
-  bootloader 180 || { detail=system_bootloader_unavailable; exit 2; }
-  [[ $(a9_fbvar is-userspace) == no && $(a9_fbvar current-slot) == a ]] || { detail=system_bootloader_state; exit 2; }
-  fb_cmd reboot fastboot >&2
-  a9_wait_fastboot yes 180 || { detail=system_fastbootd_unavailable; exit 2; }
-  [[ $(a9_fbvar current-slot) == a ]] || { detail=system_fastbootd_slot; exit 2; }
-  timeout --kill-after=5 240 "$FB" flash system_b "$SYSTEM" >&2 || { detail=system_flash_failed; exit 2; }
-  fb_cmd reboot recovery >&2
-  wait_mode recovery 180 || { detail=system_recovery_unavailable; exit 2; }
   [[ $(adb_cmd shell getprop ro.boot.slot_suffix | tr -d '\r\n') == _a ]] || { detail=system_recovery_slot; exit 2; }
+  system_pushed=0
+  for t in 1 2 3; do
+    if timeout --kill-after=5 900 "$ADB" push "$SYSTEM" /tmp/b-try-system.img >&2; then system_pushed=1; break; fi
+    adb_cmd shell rm -f /tmp/b-try-system.img >/dev/null 2>&1 || true
+    sleep 10
+  done
+  ((system_pushed)) || { detail=system_push_failed; exit 2; }
+  timeout --kill-after=5 300 "$ADB" shell 'blockdev --setrw /dev/block/mapper/system_b && dd if=/tmp/b-try-system.img of=/dev/block/mapper/system_b bs=4M conv=fsync' >&2 || { detail=system_flash_failed; exit 2; }
   if ! got=$(timeout --kill-after=5 180 "$ADB" shell "head -c $system_size /dev/block/mapper/system_b | sha256sum" | tr -d '\r' | awk '{print $1}'); then
     detail=system_readback_failed; exit 2
   fi
   [[ $got == "$system_want" ]] || { detail=system_mismatch; exit 2; }
+  adb_cmd shell rm -f /tmp/b-try-system.img >/dev/null || true
   printf 'SYSTEM_DELIVERY verified=1 bytes=%s sha256=%s\n' "$system_size" "$system_want" >"$out/system-delivery.log"
 fi
 if [[ -n "$VENDOR" ]]; then
